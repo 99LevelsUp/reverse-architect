@@ -32,18 +32,27 @@
 //! The engine canonicalizes NaNs and disables relaxed SIMD, the two ways the
 //! same component could compute different bits on different CPUs.
 //!
-//! ## Two contract versions
+//! ## Three contract versions
 //!
-//! `wit/` holds `ra:plugin@0.1.0`, frozen; `wit-v2/` holds `ra:plugin@0.2.0`,
-//! which adds usage-site context (plan A, KTD3). Each has its own bindings
-//! module below. A component is tried against 0.2 first and 0.1 second, and
-//! runs under the first whose `extractor` it exports — so a plugin built
-//! against 0.1 keeps working, and one built against 0.2 is never mistaken for
-//! it. The rest of the host speaks 0.2 only: a 0.1 plugin's output is lifted
-//! at this boundary ([`lift`]), where it gains the parts 0.2 adds as absent
-//! (no column, no context), which is all 0.1 could say.
+//! `wit/` holds `ra:plugin@0.1.0` and `wit-v2/` holds `ra:plugin@0.2.0`, both
+//! frozen; `wit-v3/` holds `ra:plugin@0.3.0`, which adds the `bodies` pass,
+//! declared node kinds for symbols and references by name. Each has its own
+//! bindings module below. A component is tried against 0.3, then 0.2, then
+//! 0.1, and runs under the first whose `extractor` it exports — so a plugin
+//! built against an older contract keeps working, and one built against a
+//! newer one is never mistaken for it.
+//!
+//! The rest of the host speaks 0.2. A 0.1 plugin's output is lifted at this
+//! boundary ([`lift`]), where it gains the parts 0.2 adds as absent (no
+//! column, no context), which is all 0.1 could say. A 0.3 plugin's output is
+//! lowered ([`lower`]): what 0.2 can say passes as 0.2, and what it cannot —
+//! a symbol's node kind and block, the references by name, the lookup blocks —
+//! travels beside it in [`FileDeclarations`]. The one 0.3 shape that leaves
+//! this module as it is is the output of `bodies` ([`FileBodies`] and the
+//! records under it), which only the second layer reads.
 
-use super::manifest::{ManifestError, PluginLanguage, PluginManifest};
+use super::manifest::{ManifestError, Pass, PluginLanguage, PluginManifest};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
@@ -72,6 +81,15 @@ mod v2 {
     });
 }
 
+/// Bindings of `ra:plugin@0.3.0`. Only the output of `bodies` leaves this
+/// module in these types; everything else is lowered to 0.2 ([`lower`]).
+mod v3 {
+    wasmtime::component::bindgen!({
+        path: "wit-v3",
+        world: "language-plugin",
+    });
+}
+
 pub use v2::ra::plugin::types::{
     Cardinality as WireCardinality, LinkRole as WireLinkRole, StructuralRole as WireStructuralRole,
 };
@@ -82,6 +100,83 @@ pub use v2::ra::plugin::types::{
     Vocabulary as WireVocabulary,
 };
 
+/// What `bodies` returns for one file (contract 0.3), under the names the
+/// second layer reads it by. Unredacted: the host redacts the texts where it
+/// stores them.
+pub use v3::ra::plugin::types::{
+    AccessMode, AccessPath, Argument as CallArgument, Attribute as BodyAttribute, BaseType,
+    BodyKind, BodyNode, CallKind, CompareOp, Condition as BodyCondition, Constant as BodyConstant,
+    DeclarationKind, DeclarationMeta, Expr as BodyExpr, FileBodies, FlowTarget, Handler,
+    Invocation, Lambda, LiteralContext, MemberAccess, MemberBody, NameOf, NodeKind as BodyNodeKind,
+    PathRoot, Position as BodyPosition, Range as BodyRange, StringLiteral, Subscription,
+    SubscriptionMode, Tag as BodyTag, TypeShape, TypedName, ValueRef,
+};
+
+/// What `declarations` returns for one file, in the host's shape.
+///
+/// `ops` is everything 0.2 can say. The rest is what only 0.3 can say, and is
+/// empty for a 0.1 or 0.2 plugin.
+#[derive(Debug, Clone, Default)]
+pub struct FileDeclarations {
+    pub ops: Vec<Op>,
+    /// What a 0.3 symbol says beyond a 0.2 one, for the symbols that say
+    /// anything: by the symbol's index in `ops`, in `ops` order.
+    pub symbols: Vec<SymbolExtra>,
+    /// References by name, for the host to resolve once every file is read.
+    pub name_refs: Vec<NameRef>,
+    /// The nested blocks names are looked up in; `NameRef::block`,
+    /// `SymbolExtra::block` and `LookupBlock::parent` index this list.
+    pub blocks: Vec<LookupBlock>,
+}
+
+/// What a 0.3 symbol (`ops[op]`, an [`Op::Symbol`]) says that a 0.2 one
+/// cannot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SymbolExtra {
+    /// The symbol's index in [`FileDeclarations::ops`].
+    pub op: usize,
+    /// A node kind from the plugin's own vocabulary, `namespace:name`; `None`
+    /// for an ordinary symbol.
+    pub node_kind: Option<String>,
+    /// The innermost lookup block the declaration is written in.
+    pub block: Option<u32>,
+}
+
+/// A reference to a declaration by its name alone (contract 0.3, `name-ref`),
+/// as the host keeps it until the whole repository has been read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NameRef {
+    /// The key of the node that refers: a symbol the file declares, or the
+    /// file itself.
+    pub source: String,
+    /// The name as the reference spells it.
+    pub name: String,
+    /// The node kind it can resolve to, `namespace:name`.
+    pub target_kind: String,
+    /// The edge kind the resolved reference becomes; `None` for a plain
+    /// reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relation: Option<String>,
+    /// The innermost lookup block the reference is written in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<u32>,
+    /// The lines it was read from.
+    pub span: crate::graph::Span,
+    /// Where the name is written, `(line, column)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_at: Option<(u32, u32)>,
+}
+
+/// A nested block names are looked up in (contract 0.3, `lookup-block`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LookupBlock {
+    /// The lines it spans, inclusive.
+    pub lines: (u32, u32),
+    /// The enclosing block; `None` for an outermost one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<u32>,
+}
+
 /// The contract version a plugin runs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Contract {
@@ -89,11 +184,14 @@ pub enum Contract {
     V0_1,
     /// `ra:plugin@0.2.0`: usage sites may carry a column and context.
     V0_2,
+    /// `ra:plugin@0.3.0`: the `bodies` pass, declared node kinds for symbols,
+    /// references by name.
+    V0_3,
 }
 
 impl Contract {
     /// Every version this host loads, the one it tries first first.
-    pub const SUPPORTED: [Contract; 2] = [Contract::V0_2, Contract::V0_1];
+    pub const SUPPORTED: [Contract; 3] = [Contract::V0_3, Contract::V0_2, Contract::V0_1];
 
     /// The short word artifacts record (`0.1`, `0.2`): the minor version is
     /// the whole of what a consumer can act on, since only a patch release is
@@ -102,6 +200,7 @@ impl Contract {
         match self {
             Contract::V0_1 => "0.1",
             Contract::V0_2 => "0.2",
+            Contract::V0_3 => "0.3",
         }
     }
 
@@ -110,6 +209,7 @@ impl Contract {
         match self {
             Contract::V0_1 => "ra:plugin@0.1.0",
             Contract::V0_2 => "ra:plugin@0.2.0",
+            Contract::V0_3 => "ra:plugin@0.3.0",
         }
     }
 }
@@ -155,6 +255,15 @@ pub enum PluginError {
         what: String,
         #[source]
         source: ManifestError,
+    },
+    /// The host asked for a pass the plugin does not list in its manifest.
+    /// The run routes every (extension, pass) pair to a plugin that serves
+    /// it, so this is a host defect, never a plugin's.
+    #[error("plugin `{plugin}` does not serve the `{pass}` pass, asked for `{file}`")]
+    PassNotServed {
+        plugin: String,
+        pass: &'static str,
+        file: String,
     },
     #[error("plugin `{plugin}` ran out of fuel on `{file}`")]
     Fuel { plugin: String, file: String },
@@ -256,6 +365,14 @@ impl v2::ra::plugin::host::Host for State {
 
 impl v2::ra::plugin::types::Host for State {}
 
+impl v3::ra::plugin::host::Host for State {
+    fn path_exists(&mut self, key: String) -> bool {
+        self.paths.contains(&key)
+    }
+}
+
+impl v3::ra::plugin::types::Host for State {}
+
 /// The process-wide engine. One per process: compiled code is tied to it, and
 /// its configuration is part of what makes a plugin's output deterministic.
 fn engine() -> &'static Engine {
@@ -275,6 +392,7 @@ fn engine() -> &'static Engine {
 enum Pre {
     V1(v1::LanguagePluginPre<State>),
     V2(v2::LanguagePluginPre<State>),
+    V3(v3::LanguagePluginPre<State>),
 }
 
 impl Pre {
@@ -282,6 +400,7 @@ impl Pre {
         match self {
             Pre::V1(_) => Contract::V0_1,
             Pre::V2(_) => Contract::V0_2,
+            Pre::V3(_) => Contract::V0_3,
         }
     }
 }
@@ -290,6 +409,7 @@ impl Pre {
 enum Instance {
     V1(v1::LanguagePlugin),
     V2(v2::LanguagePlugin),
+    V3(v3::LanguagePlugin),
 }
 
 /// A loaded, checked plugin, ready to hand out sessions.
@@ -317,64 +437,60 @@ impl Plugin {
             what: what.into(),
             reason: first_line(&e),
         };
-        // Both contracts' host interfaces are offered to every component:
+        // Every contract's host interfaces are offered to every component:
         // they are distinct versioned names, and a component imports the ones
         // of the contract it was built against.
         let mut linker: Linker<State> = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(link)?;
         v1::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
         v2::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
+        v3::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
         // Failing here IS a missing import: every import is checked against
         // the linker, and nothing about exports is.
         let instance_pre = linker.instantiate_pre(&component).map_err(link)?;
         // Failing here is not: the imports were all satisfied, so what is
-        // missing is the export the host would call. 0.2 first — a component
-        // exporting both is newer than either alone could say.
-        let pre = match v2::LanguagePluginPre::new(instance_pre.clone()) {
-            Ok(pre) => Pre::V2(pre),
-            Err(_) => match v1::LanguagePluginPre::new(instance_pre) {
-                Ok(pre) => Pre::V1(pre),
-                Err(_) => {
-                    return Err(PluginError::VersionMismatch {
-                        what: what.into(),
-                        wanted: Contract::SUPPORTED
-                            .iter()
-                            .map(|c| c.package())
-                            .collect::<Vec<_>>()
-                            .join(" or "),
-                        found: exported_contracts(&component),
-                    })
-                }
-            },
+        // missing is the export the host would call. Newest first — a
+        // component exporting two is newer than either alone could say.
+        let pre = if let Ok(pre) = v3::LanguagePluginPre::new(instance_pre.clone()) {
+            Pre::V3(pre)
+        } else if let Ok(pre) = v2::LanguagePluginPre::new(instance_pre.clone()) {
+            Pre::V2(pre)
+        } else if let Ok(pre) = v1::LanguagePluginPre::new(instance_pre) {
+            Pre::V1(pre)
+        } else {
+            return Err(PluginError::VersionMismatch {
+                what: what.into(),
+                wanted: Contract::SUPPORTED
+                    .iter()
+                    .map(|c| c.package())
+                    .collect::<Vec<_>>()
+                    .join(" or "),
+                found: exported_contracts(&component),
+            });
         };
 
-        let mut probe = Session::open(&pre, "(manifest)", Arc::new(HashSet::new()))
+        // The manifest is not known yet, so the probe session allows every
+        // pass; it calls none.
+        let mut probe = Session::open(&pre, "(manifest)", Arc::new(HashSet::new()), &Pass::ALL)
             .map_err(|e| e.named(what))?;
-        let described = probe
+        let manifest = probe
             .call(FUEL_FLOOR, "(describe)", |i, s| match i {
-                Instance::V1(i) => i.ra_plugin_extractor().call_describe(s).map(lift::manifest),
-                Instance::V2(i) => i.ra_plugin_extractor().call_describe(s),
+                Instance::V1(i) => i
+                    .ra_plugin_extractor()
+                    .call_describe(s)
+                    .map(|m| manifest_of(lift::manifest(m))),
+                Instance::V2(i) => i.ra_plugin_extractor().call_describe(s).map(manifest_of),
+                Instance::V3(i) => i
+                    .ra_plugin_extractor()
+                    .call_describe(s)
+                    .map(lower::manifest),
             })
-            .map_err(|e| e.named(what))?;
-        let manifest = PluginManifest {
-            id: described.id,
-            version: described.version,
-            languages: described
-                .languages
-                .into_iter()
-                .map(|l| PluginLanguage {
-                    name: l.name,
-                    extensions: l.extensions,
-                })
-                .collect(),
-            trust_rank: described.trust_rank,
-            depends_on: described.depends_on,
-        }
-        .check()
-        .map_err(|source| PluginError::Manifest {
-            what: what.into(),
-            source,
-        })?;
+            .map_err(|e| e.named(what))?
+            .check()
+            .map_err(|source| PluginError::Manifest {
+                what: what.into(),
+                source,
+            })?;
         let vocabulary = probe
             .call(FUEL_FLOOR, "(declare)", |i, s| match i {
                 Instance::V1(i) => i
@@ -382,6 +498,10 @@ impl Plugin {
                     .call_declare(s)
                     .map(|v| v.map(lift::vocabulary)),
                 Instance::V2(i) => i.ra_plugin_extractor().call_declare(s),
+                Instance::V3(i) => i
+                    .ra_plugin_extractor()
+                    .call_declare(s)
+                    .map(|v| v.map(lower::vocabulary)),
             })
             .map_err(|e| e.named(what))?;
         drop(probe);
@@ -418,7 +538,29 @@ impl Plugin {
     /// A session for one worker. `paths` is the frozen set `path-exists`
     /// answers from.
     pub fn session(&self, paths: Arc<HashSet<String>>) -> Result<Session<'_>, PluginError> {
-        Session::open(&self.pre, &self.manifest.id, paths)
+        Session::open(&self.pre, &self.manifest.id, paths, &self.manifest.passes)
+    }
+}
+
+/// An unchecked manifest from what a 0.1 or 0.2 component describes (in
+/// 0.2's shape): it serves the first layer's two passes, all those contracts
+/// have, and emits nothing.
+fn manifest_of(m: v2::ra::plugin::types::Manifest) -> PluginManifest {
+    PluginManifest {
+        id: m.id,
+        version: m.version,
+        languages: m
+            .languages
+            .into_iter()
+            .map(|l| PluginLanguage {
+                name: l.name,
+                extensions: l.extensions,
+            })
+            .collect(),
+        trust_rank: m.trust_rank,
+        depends_on: m.depends_on,
+        passes: Pass::LAYER_ONE.to_vec(),
+        emits: Vec::new(),
     }
 }
 
@@ -446,6 +588,9 @@ fn exported_contracts(component: &Component) -> String {
 pub struct Session<'p> {
     pre: &'p Pre,
     plugin: String,
+    /// The passes the plugin serves; asking for another is refused before
+    /// the instance is touched.
+    passes: &'p [Pass],
     paths: Arc<HashSet<String>>,
     live: Option<(Store<State>, Instance)>,
 }
@@ -455,10 +600,12 @@ impl<'p> Session<'p> {
         pre: &'p Pre,
         plugin: &str,
         paths: Arc<HashSet<String>>,
+        passes: &'p [Pass],
     ) -> Result<Session<'p>, PluginError> {
         let mut session = Session {
             pre,
             plugin: plugin.into(),
+            passes,
             paths,
             live: None,
         };
@@ -478,6 +625,7 @@ impl<'p> Session<'p> {
         let instance = match self.pre {
             Pre::V1(pre) => pre.instantiate(&mut store).map(Instance::V1),
             Pre::V2(pre) => pre.instantiate(&mut store).map(Instance::V2),
+            Pre::V3(pre) => pre.instantiate(&mut store).map(Instance::V3),
         }
         .map_err(|e| PluginError::Trap {
             plugin: self.plugin.clone(),
@@ -527,13 +675,30 @@ impl<'p> Session<'p> {
         FUEL_FLOOR.saturating_add(FUEL_PER_BYTE.saturating_mul(len as u64))
     }
 
+    /// Refuse a pass the plugin does not serve, before the instance is
+    /// touched — a refusal is not a trap, so the live instance stays.
+    /// `bodies` exists only under 0.3, whatever a manifest says.
+    fn serving(&self, pass: Pass, file: &str) -> Result<(), PluginError> {
+        let exists = pass != Pass::Bodies || matches!(self.pre, Pre::V3(_));
+        if exists && self.passes.contains(&pass) {
+            Ok(())
+        } else {
+            Err(PluginError::PassNotServed {
+                plugin: self.plugin.clone(),
+                pass: pass.word(),
+                file: file.into(),
+            })
+        }
+    }
+
     /// Pass 1 over one file.
     pub fn declarations(
         &mut self,
         path: &str,
         source: &[u8],
         config: &WireConfig,
-    ) -> Result<Vec<Op>, PluginError> {
+    ) -> Result<FileDeclarations, PluginError> {
+        self.serving(Pass::Declarations, path)?;
         self.call(Self::budget(source.len()), path, |i, s| match i {
             Instance::V1(i) => {
                 let config = v1::ra::plugin::types::Config {
@@ -541,23 +706,57 @@ impl<'p> Session<'p> {
                 };
                 i.ra_plugin_extractor()
                     .call_declarations(s, path, source, &config)
-                    .map(|ops| ops.into_iter().map(lift::op).collect())
+                    .map(|ops| FileDeclarations {
+                        ops: ops.into_iter().map(lift::op).collect(),
+                        ..FileDeclarations::default()
+                    })
             }
             Instance::V2(i) => i
                 .ra_plugin_extractor()
-                .call_declarations(s, path, source, config),
+                .call_declarations(s, path, source, config)
+                .map(|ops| FileDeclarations {
+                    ops,
+                    ..FileDeclarations::default()
+                }),
+            Instance::V3(i) => {
+                let config = v3::ra::plugin::types::Config {
+                    secret_prefixes: config.secret_prefixes.clone(),
+                };
+                i.ra_plugin_extractor()
+                    .call_declarations(s, path, source, &config)
+                    .map(lower::declarations)
+            }
         })
     }
 
     /// Pass 2 over one file: its scopes and its usage sites. One call, one
     /// budget — the plugin parses the file once for both.
     pub fn usages(&mut self, path: &str, source: &[u8]) -> Result<FileUsages, PluginError> {
+        self.serving(Pass::Usages, path)?;
         self.call(Self::budget(source.len()), path, |i, s| match i {
             Instance::V1(i) => i
                 .ra_plugin_extractor()
                 .call_usages(s, path, source)
                 .map(lift::usages),
             Instance::V2(i) => i.ra_plugin_extractor().call_usages(s, path, source),
+            Instance::V3(i) => i
+                .ra_plugin_extractor()
+                .call_usages(s, path, source)
+                .map(lower::usages),
+        })
+    }
+
+    /// The bodies of one file's members (contract 0.3), for the second layer.
+    /// Its own budget, computed as every other pass's; a trap, exhausted fuel
+    /// or memory fails this file and this pass only, and the session recovers
+    /// as it does after any failed call. The texts come back unredacted.
+    pub fn bodies(&mut self, path: &str, source: &[u8]) -> Result<FileBodies, PluginError> {
+        self.serving(Pass::Bodies, path)?;
+        self.call(Self::budget(source.len()), path, |i, s| match i {
+            Instance::V3(i) => i.ra_plugin_extractor().call_bodies(s, path, source),
+            Instance::V1(_) | Instance::V2(_) => {
+                unreachable!("`serving` refuses `bodies` below contract 0.3")
+            }
         })
     }
 }
@@ -715,6 +914,276 @@ mod lift {
     }
 }
 
+/// A 0.3 plugin's output in the shape the rest of the host speaks.
+///
+/// Everything 0.2 can say passes as 0.2, unchanged in meaning (the records
+/// 0.3 kept are 0.2's). What 0.2 cannot say — a symbol's node kind and block,
+/// the references by name, the lookup blocks — is taken out of the 0.2 shape
+/// and handed beside it in [`FileDeclarations`], so no 0.3 type leaves this
+/// module on the declaration and usage path.
+mod lower {
+    use super::{
+        v2::ra::plugin::types as old, v3::ra::plugin::types as new, FileDeclarations, LookupBlock,
+        NameRef, SymbolExtra,
+    };
+    use crate::plugin::manifest::{Pass, PluginLanguage, PluginManifest};
+
+    fn span(s: new::Span) -> old::Span {
+        match s {
+            new::Span::Whole => old::Span::Whole,
+            new::Span::Line(line) => old::Span::Line(line),
+            new::Span::Range(range) => old::Span::Range(range),
+        }
+    }
+
+    fn place(p: new::Place) -> old::Place {
+        old::Place {
+            span: span(p.span),
+            name: p.name.map(|n| old::Position {
+                line: n.line,
+                column: n.column,
+            }),
+        }
+    }
+
+    fn fact(f: new::Fact) -> old::Fact {
+        old::Fact {
+            kind: f.kind,
+            value: match f.value {
+                new::Value::Text(t) => old::Value::Text(t),
+                new::Value::Int(i) => old::Value::Int(i),
+                new::Value::Flag(b) => old::Value::Flag(b),
+            },
+            place: place(f.place),
+        }
+    }
+
+    fn edge(e: new::Edge) -> old::Edge {
+        old::Edge {
+            source: e.source,
+            target: e.target,
+            kind: e.kind,
+            place: place(e.place),
+        }
+    }
+
+    /// One op — the `index`-th of its file — in 0.2's shape, and what its
+    /// symbol says beyond 0.2, if anything.
+    fn op(index: usize, op: new::Op) -> (old::Op, Option<SymbolExtra>) {
+        match op {
+            new::Op::Fact(kf) => (
+                old::Op::Fact(old::KeyedFact {
+                    node: kf.node,
+                    fact: fact(kf.fact),
+                }),
+                None,
+            ),
+            new::Op::Symbol(sym) => {
+                let extra =
+                    (sym.node_kind.is_some() || sym.block.is_some()).then_some(SymbolExtra {
+                        op: index,
+                        node_kind: sym.node_kind,
+                        block: sym.block,
+                    });
+                (
+                    old::Op::Symbol(old::Symbol {
+                        key: sym.key,
+                        facts: sym.facts.into_iter().map(fact).collect(),
+                        edges: sym.edges.into_iter().map(edge).collect(),
+                    }),
+                    extra,
+                )
+            }
+            new::Op::Edge(e) => (old::Op::Edge(edge(e)), None),
+            new::Op::Relation(r) => (
+                old::Op::Relation(old::Relation {
+                    sources: r.sources,
+                    targets: r.targets,
+                    kind: match r.kind {
+                        new::RelationKind::Extends => old::RelationKind::Extends,
+                        new::RelationKind::Implements => old::RelationKind::Implements,
+                        new::RelationKind::ByTargetKind => old::RelationKind::ByTargetKind,
+                    },
+                    place: place(r.place),
+                }),
+                None,
+            ),
+        }
+    }
+
+    pub(super) fn declarations(file: new::FileDeclarations) -> FileDeclarations {
+        let mut out = FileDeclarations::default();
+        for (index, o) in file.ops.into_iter().enumerate() {
+            let (o, extra) = op(index, o);
+            out.ops.push(o);
+            out.symbols.extend(extra);
+        }
+        out.name_refs = file
+            .name_refs
+            .into_iter()
+            .map(|r| {
+                let place = place(r.place);
+                NameRef {
+                    source: r.source,
+                    name: r.name,
+                    target_kind: r.target_kind,
+                    relation: r.relation,
+                    block: r.block,
+                    span: match place.span {
+                        old::Span::Whole => crate::graph::Span::Whole,
+                        old::Span::Line(line) => crate::graph::Span::at(Some(line)),
+                        old::Span::Range((start, end)) => crate::graph::Span::range(start, end),
+                    },
+                    name_at: place.name.map(|n| (n.line, n.column)),
+                }
+            })
+            .collect();
+        out.blocks = file
+            .blocks
+            .into_iter()
+            .map(|b| LookupBlock {
+                lines: b.lines,
+                parent: b.parent,
+            })
+            .collect();
+        out
+    }
+
+    pub(super) fn usages(file: new::FileUsages) -> old::FileUsages {
+        old::FileUsages {
+            scopes: file
+                .scopes
+                .into_iter()
+                .map(|s| old::Scope {
+                    namespace: s.namespace,
+                    lines: s.lines,
+                    parent: s.parent,
+                    usings: s
+                        .usings
+                        .into_iter()
+                        .map(|u| old::UsingDirective {
+                            target: u.target,
+                            alias: u.alias,
+                            is_static: u.is_static,
+                            is_global: u.is_global,
+                        })
+                        .collect(),
+                })
+                .collect(),
+            usages: file
+                .usages
+                .into_iter()
+                .map(|u| old::Usage {
+                    name: u.name,
+                    kind: match u.kind {
+                        new::UsageKind::Call => old::UsageKind::Call,
+                        new::UsageKind::CallOrConstruct => old::UsageKind::CallOrConstruct,
+                        new::UsageKind::Construct => old::UsageKind::Construct,
+                        new::UsageKind::Reference => old::UsageKind::Reference,
+                    },
+                    line: u.line,
+                    column: u.column,
+                    context: u.context.map(|c| old::SiteContext {
+                        scope: c.scope,
+                        receiver: match c.receiver {
+                            new::Receiver::None => old::Receiver::None,
+                            new::Receiver::Name(n) => old::Receiver::Name(n),
+                            new::Receiver::Value(v) => old::Receiver::Value(v),
+                            new::Receiver::Keyword(k) => old::Receiver::Keyword(k),
+                            new::Receiver::Expression => old::Receiver::Expression,
+                        },
+                        declared_type: c.declared_type.map(|t| old::DeclaredType {
+                            name: t.name,
+                            keyword: t.keyword,
+                        }),
+                        argument_count: c.argument_count,
+                        qualifier: c.qualifier,
+                    }),
+                })
+                .collect(),
+        }
+    }
+
+    /// The manifest, unchecked. The passes keep their first mention; a pass
+    /// listed twice is served once.
+    pub(super) fn manifest(m: new::Manifest) -> PluginManifest {
+        let mut passes: Vec<Pass> = Vec::new();
+        for pass in m.passes {
+            let pass = match pass {
+                new::Pass::Declarations => Pass::Declarations,
+                new::Pass::Usages => Pass::Usages,
+                new::Pass::Bodies => Pass::Bodies,
+            };
+            if !passes.contains(&pass) {
+                passes.push(pass);
+            }
+        }
+        PluginManifest {
+            id: m.id,
+            version: m.version,
+            languages: m
+                .languages
+                .into_iter()
+                .map(|l| PluginLanguage {
+                    name: l.name,
+                    extensions: l.extensions,
+                })
+                .collect(),
+            trust_rank: m.trust_rank,
+            depends_on: m.depends_on,
+            passes,
+            emits: m.emits,
+        }
+    }
+
+    pub(super) fn vocabulary(v: new::Vocabulary) -> old::Vocabulary {
+        old::Vocabulary {
+            namespace: v.namespace,
+            card_kinds: v.card_kinds,
+            node_kinds: v
+                .node_kinds
+                .into_iter()
+                .map(|n| old::NodeKindDecl {
+                    name: n.name,
+                    role: match n.role {
+                        new::StructuralRole::Container => old::StructuralRole::Container,
+                        new::StructuralRole::Leaf => old::StructuralRole::Leaf,
+                        new::StructuralRole::Definition => old::StructuralRole::Definition,
+                        new::StructuralRole::Package => old::StructuralRole::Package,
+                        new::StructuralRole::External => old::StructuralRole::External,
+                        new::StructuralRole::Opaque => old::StructuralRole::Opaque,
+                    },
+                    card: n.card,
+                })
+                .collect(),
+            edge_kinds: v
+                .edge_kinds
+                .into_iter()
+                .map(|e| old::EdgeKindDecl {
+                    name: e.name,
+                    role: match e.role {
+                        new::LinkRole::Containment => old::LinkRole::Containment,
+                        new::LinkRole::Declaration => old::LinkRole::Declaration,
+                        new::LinkRole::Dependency => old::LinkRole::Dependency,
+                        new::LinkRole::Opaque => old::LinkRole::Opaque,
+                    },
+                })
+                .collect(),
+            fact_kinds: v
+                .fact_kinds
+                .into_iter()
+                .map(|f| old::FactKindDecl {
+                    name: f.name,
+                    cardinality: match f.cardinality {
+                        new::Cardinality::Additive => old::Cardinality::Additive,
+                        new::Cardinality::Scalar => old::Cardinality::Scalar,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
 impl PluginError {
     /// Re-attribute an error raised while loading to the artifact being loaded.
     fn named(self, what: &str) -> PluginError {
@@ -851,7 +1320,7 @@ mod tests {
             secret_prefixes: vec!["acme_".into()],
         };
         s.declarations(path, b"", &config)
-            .map(|ops| signature_of(&ops))
+            .map(|declared| signature_of(&declared.ops))
     }
 
     #[test]
@@ -942,8 +1411,8 @@ mod tests {
         let err = s.declarations("trap.probe", b"", &config).unwrap_err();
         assert!(matches!(err, PluginError::Trap { .. }), "{err}");
         // The same session serves the next file from a fresh instance.
-        let ops = s.declarations("plain.probe", b"", &config).unwrap();
-        assert_eq!(signature_of(&ops), "prefixes:0");
+        let declared = s.declarations("plain.probe", b"", &config).unwrap();
+        assert_eq!(signature_of(&declared.ops), "prefixes:0");
     }
 
     #[test]
@@ -1000,8 +1469,138 @@ mod tests {
             "{err}"
         );
         let message = err.to_string();
+        assert!(message.contains("ra:plugin@0.3.0"), "{message}");
         assert!(message.contains("ra:plugin@0.2.0"), "{message}");
         assert!(message.contains("ra:plugin@0.1.0"), "{message}");
         assert!(!message.contains("import"), "{message}");
+    }
+
+    // ---- Contract 0.3 ----
+
+    const PROBE3: &[u8] = include_bytes!("../../plugins/prebuilt/probe3.wasm");
+
+    fn probe3() -> Plugin {
+        Plugin::load("probe3", PROBE3).expect("the probe3 component loads")
+    }
+
+    /// A 0.3 component runs under 0.3 and says which passes it serves and
+    /// what it emits; a 0.1 and a 0.2 component run under their own contract
+    /// as before, serving the first layer's two passes and emitting nothing.
+    #[test]
+    fn each_component_runs_under_the_newest_contract_it_exports() {
+        let p = probe3();
+        assert_eq!(p.contract(), Contract::V0_3);
+        assert_eq!(p.manifest().passes, Pass::ALL);
+        assert_eq!(p.manifest().emits, ["probe3-tag"]);
+        assert_eq!(p.manifest().language_for("probe3"), Some("probe3"));
+        let vocabulary = p.vocabulary().expect("probe3 declares a vocabulary");
+        assert_eq!(vocabulary.node_kinds[0].card.as_deref(), Some("widget"));
+
+        let old = probe();
+        assert_eq!(old.contract(), Contract::V0_1);
+        assert_eq!(old.manifest().passes, Pass::LAYER_ONE);
+        assert!(old.manifest().emits.is_empty());
+
+        let csharp = super::super::bundled::load_one("csharp").unwrap();
+        assert_eq!(csharp.contract(), Contract::V0_2);
+        assert_eq!(csharp.manifest().passes, Pass::LAYER_ONE);
+        assert!(csharp.manifest().emits.is_empty());
+    }
+
+    #[test]
+    fn bodies_of_an_empty_file_are_an_empty_model() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let bodies = s.bodies("empty.probe3", b"").unwrap();
+        assert!(bodies.types.is_empty());
+        assert!(bodies.members.is_empty());
+        assert!(bodies.typed_members.is_empty());
+        assert!(bodies.metas.is_empty());
+        let bodies = s.bodies("a.probe3", b"x").unwrap();
+        assert_eq!(bodies.members.len(), 1);
+        assert!(matches!(
+            bodies.members[0].nodes[0].kind,
+            BodyNodeKind::Body
+        ));
+        assert_eq!(bodies.members[0].nodes[0].tags[0].name, "probe3-tag");
+    }
+
+    /// A runaway `bodies` costs that file and that pass: the next file's
+    /// bodies and the first layer's passes run in the same session.
+    #[test]
+    fn exhausted_fuel_in_bodies_fails_one_file_and_the_session_recovers() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let err = s.bodies("loop.probe3", b"x").unwrap_err();
+        assert!(matches!(err, PluginError::Fuel { .. }), "{err}");
+        assert_eq!(s.bodies("next.probe3", b"x").unwrap().members.len(), 1);
+        let config = WireConfig {
+            secret_prefixes: Vec::new(),
+        };
+        let declared = s.declarations("next.probe3", b"x", &config).unwrap();
+        assert_eq!(signature_of(&declared.ops), "prefixes:0");
+        assert_eq!(
+            s.usages("next.probe3", b"x").unwrap().usages[0].name,
+            "Thing"
+        );
+    }
+
+    /// A pass the plugin does not serve is refused before the instance is
+    /// touched; it is not a trap, and the session goes on.
+    #[test]
+    fn a_pass_the_plugin_does_not_serve_is_refused() {
+        let p = probe();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let err = s.bodies("a.probe", b"x").unwrap_err();
+        assert!(
+            matches!(&err, PluginError::PassNotServed { pass: "bodies", .. }),
+            "{err}"
+        );
+        assert_eq!(s.usages("a.probe", b"").unwrap().usages.len(), 1);
+    }
+
+    /// What 0.2 cannot say arrives beside the ops: the symbol's node kind and
+    /// block by its index in the ops, the references by name, the blocks.
+    #[test]
+    fn a_0_3_declaration_is_lowered_with_what_0_2_cannot_say_beside_it() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let config = WireConfig {
+            secret_prefixes: Vec::new(),
+        };
+        let file = s.declarations("widget.probe3", b"", &config).unwrap();
+        assert!(
+            matches!(&file.ops[0], Op::Symbol(sym) if sym.key == "sym:probe3:widget.probe3#Main")
+        );
+        assert_eq!(
+            file.symbols,
+            [SymbolExtra {
+                op: 0,
+                node_kind: Some("probe3:widget".into()),
+                block: Some(0),
+            }]
+        );
+        assert_eq!(
+            file.name_refs,
+            [NameRef {
+                source: "sym:probe3:widget.probe3#Main".into(),
+                name: "Other".into(),
+                target_kind: "probe3:widget".into(),
+                relation: None,
+                block: Some(0),
+                span: crate::graph::Span::at(Some(2)),
+                name_at: Some((2, 5)),
+            }]
+        );
+        assert_eq!(
+            file.blocks,
+            [LookupBlock {
+                lines: (1, 3),
+                parent: None,
+            }]
+        );
+        // An ordinary symbol says nothing beyond 0.2.
+        let plain = s.declarations("plain.probe3", b"", &config).unwrap();
+        assert!(plain.symbols.is_empty() && plain.name_refs.is_empty() && plain.blocks.is_empty());
     }
 }

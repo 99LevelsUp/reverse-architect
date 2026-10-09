@@ -313,3 +313,99 @@ fn sql_objects_are_cards_linked_to_the_tables_they_touch() {
         "no card for the table"
     );
 }
+
+fn probe3() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/prebuilt/probe3.wasm")
+}
+
+/// Contract 0.3: a component declares a node kind with a card policy and
+/// emits a symbol of that kind. The graph holds it as a node of the declared
+/// kind, not as a core `Symbol`, and it gets the card its policy names. A
+/// symbol of a kind the component's vocabulary does not declare — or of
+/// another namespace's — is dropped whole; an ordinary symbol beside it is
+/// not. The second run is served from the cache, which must carry the kind.
+#[test]
+fn a_symbol_of_a_declared_node_kind_gets_its_own_card_on_a_cold_and_a_warm_run() {
+    use reverse_architect::card::{build_cards, CardKind};
+    use reverse_architect::graph::{NodeKey, NodeKind};
+
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[("widget.probe3", "w\n"), ("stray.probe3", "s\n")],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let mut config = config_for(repo.path(), out.path());
+    config.plugins = vec![PluginSpec {
+        path: probe3(),
+        sha256: None,
+    }];
+
+    for run in ["cold", "warm"] {
+        let generated = reverse_architect::generate(&config).unwrap();
+        if run == "cold" {
+            // The warm run proves something only if the kind was written to
+            // the declaration records it is served from.
+            assert!(
+                cache_holds(&out.path().join(".ra-cache"), "\"node_kinds\""),
+                "the cold run wrote no declaration record carrying the node kind"
+            );
+        }
+        let graph = &generated.graph;
+        let key = NodeKey::new("sym:probe3:widget.probe3#Main");
+        let node = graph
+            .node(&key)
+            .unwrap_or_else(|| panic!("{run}: the widget must reach the graph"));
+        let NodeKind::Declared(id) = node.kind else {
+            panic!(
+                "{run}: the widget is a {:?}, not its declared kind",
+                node.kind
+            );
+        };
+        assert_eq!(
+            graph.vocabulary().node_name(id).as_deref(),
+            Some("probe3:widget"),
+            "{run}"
+        );
+
+        let cards = build_cards(graph);
+        let card = cards
+            .iter()
+            .find(|c| c.identity == key.as_str())
+            .unwrap_or_else(|| panic!("{run}: the widget has no card"));
+        assert!(matches!(card.kind, CardKind::Declared(_)), "{run}");
+        assert_eq!(card.kind_word, "probe3:widget", "{run}");
+
+        for dropped in ["Stray", "Foreign"] {
+            assert!(
+                graph
+                    .node(&NodeKey::new(format!("sym:probe3:stray.probe3#{dropped}")))
+                    .is_none(),
+                "{run}: a symbol of an undeclared kind must be dropped whole"
+            );
+        }
+        let plain = graph
+            .node(&NodeKey::new("sym:probe3:stray.probe3#Plain"))
+            .unwrap_or_else(|| panic!("{run}: the ordinary symbol must survive"));
+        assert_eq!(plain.kind, NodeKind::Symbol, "{run}");
+    }
+}
+
+/// Whether any file under `dir` contains `needle`.
+fn cache_holds(dir: &Path, needle: &str) -> bool {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                cache_holds(&path, needle)
+            } else {
+                std::fs::read(&path)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).contains(needle))
+                    .unwrap_or(false)
+            }
+        })
+}

@@ -16,6 +16,35 @@ pub struct PluginLanguage {
     pub extensions: Vec<String>,
 }
 
+/// A pass the host makes over a file (contract 0.3, `pass`).
+///
+/// Declarations and usages are the first layer of a run, the graph; bodies
+/// are the second, read only for `--detail-level`. A plugin built against 0.1
+/// or 0.2 serves exactly the first two, which is all those contracts have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Pass {
+    Declarations,
+    Usages,
+    Bodies,
+}
+
+impl Pass {
+    /// Every pass, in the order the host makes them.
+    pub const ALL: [Pass; 3] = [Pass::Declarations, Pass::Usages, Pass::Bodies];
+
+    /// The passes of the first layer — every pass a 0.1 or 0.2 plugin serves.
+    pub const LAYER_ONE: [Pass; 2] = [Pass::Declarations, Pass::Usages];
+
+    /// The word the contract spells the pass with.
+    pub fn word(self) -> &'static str {
+        match self {
+            Pass::Declarations => "declarations",
+            Pass::Usages => "usages",
+            Pass::Bodies => "bodies",
+        }
+    }
+}
+
 /// A checked manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginManifest {
@@ -24,6 +53,12 @@ pub struct PluginManifest {
     pub languages: Vec<PluginLanguage>,
     pub trust_rank: u8,
     pub depends_on: Vec<String>,
+    /// The passes the plugin serves, for every language it claims (contract
+    /// 0.3). [`Pass::LAYER_ONE`] for a 0.1 or 0.2 plugin.
+    pub passes: Vec<Pass>,
+    /// The record kinds and tag names the plugin can report in `bodies`
+    /// (contract 0.3); empty for a 0.1 or 0.2 plugin.
+    pub emits: Vec<String>,
 }
 
 /// Why a manifest was refused.
@@ -43,6 +78,8 @@ pub enum ManifestError {
     DuplicateExtension { id: String, ext: String },
     #[error("plugin `{id}` depends on itself")]
     SelfDependency { id: String },
+    #[error("plugin `{id}` serves no pass")]
+    NoPass { id: String },
 }
 
 const RESERVED: [&str; 22] = [
@@ -104,7 +141,32 @@ impl PluginManifest {
                 id: self.id.clone(),
             });
         }
+        if self.passes.is_empty() {
+            return Err(ManifestError::NoPass {
+                id: self.id.clone(),
+            });
+        }
         Ok(self)
+    }
+
+    /// Whether the plugin serves `pass`.
+    pub fn serves(&self, pass: Pass) -> bool {
+        self.passes.contains(&pass)
+    }
+
+    /// Whether the plugin serves `pass` over files with extension `ext` — the
+    /// pair the run routes by (contract 0.3).
+    pub fn serves_on(&self, ext: &str, pass: Pass) -> bool {
+        self.serves(pass)
+            && self
+                .languages
+                .iter()
+                .any(|l| l.extensions.iter().any(|e| e == ext))
+    }
+
+    /// Whether the plugin serves a pass of the first layer, the graph.
+    pub fn serves_layer_one(&self) -> bool {
+        Pass::LAYER_ONE.iter().any(|p| self.serves(*p))
     }
 
     /// Every extension this plugin claims, sorted.
@@ -138,6 +200,8 @@ mod tests {
             }],
             trust_rank: 30,
             depends_on: Vec::new(),
+            passes: Pass::LAYER_ONE.to_vec(),
+            emits: Vec::new(),
         }
     }
 
@@ -185,5 +249,21 @@ mod tests {
         let mut m = manifest("k", &["ktd"]);
         m.languages.clear();
         assert!(matches!(m.check(), Err(ManifestError::NoLanguage { .. })));
+    }
+
+    #[test]
+    fn a_plugin_must_serve_a_pass_and_is_routed_by_extension_and_pass() {
+        let mut m = manifest("k", &["ktd"]);
+        m.passes.clear();
+        assert!(matches!(m.check(), Err(ManifestError::NoPass { .. })));
+
+        let mut bodies_only = manifest("k", &["ktd"]);
+        bodies_only.passes = vec![Pass::Bodies];
+        let bodies_only = bodies_only.check().unwrap();
+        assert!(bodies_only.serves_on("ktd", Pass::Bodies));
+        assert!(!bodies_only.serves_on("ktd", Pass::Declarations));
+        assert!(!bodies_only.serves_on("other", Pass::Bodies));
+        assert!(!bodies_only.serves_layer_one());
+        assert!(manifest("k", &["ktd"]).serves_layer_one());
     }
 }

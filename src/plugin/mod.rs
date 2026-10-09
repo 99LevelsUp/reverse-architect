@@ -1,9 +1,9 @@
 //! Language plugins: WebAssembly components loaded at run time (U5, U7).
 //!
-//! A plugin implements the `language-plugin` world of `wit-v2/extractor.wit`
-//! (`ra:plugin@0.2.0`) or of the frozen `wit/extractor.wit` (`0.1.0`); the
-//! host loads either. This module owns everything on the host side of that
-//! boundary:
+//! A plugin implements the `language-plugin` world of `wit-v3/extractor.wit`
+//! (`ra:plugin@0.3.0`), or of the frozen `wit-v2/extractor.wit` (`0.2.0`) or
+//! `wit/extractor.wit` (`0.1.0`); the host loads any of them. This module owns
+//! everything on the host side of that boundary:
 //!
 //! - [`host`] — the sandbox: a WASI context that grants nothing (no files, no
 //!   network, no environment, a frozen clock, deterministic randomness), fuel
@@ -20,6 +20,6 @@ pub mod host;
 pub mod manifest;
 pub mod set;
 
-pub use host::{Plugin, PluginError, Session};
-pub use manifest::PluginManifest;
+pub use host::{FileDeclarations, LookupBlock, NameRef, Plugin, PluginError, Session};
+pub use manifest::{Pass, PluginManifest};
 pub use set::{Origin, PluginSet, PluginSetError, PluginSpec};

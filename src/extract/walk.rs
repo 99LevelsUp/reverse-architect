@@ -30,6 +30,7 @@ use super::{ExtractError, Repo, TrackedFile};
 use crate::graph::{Edge, Fact, Graph, NodeKey, NodeKind, Provenance, Vocabulary};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashMap;
 // The test fixtures below are their own wire form, so they derive both.
 #[cfg(test)]
 use serde::Deserialize;
@@ -287,17 +288,27 @@ impl GraphOps {
     /// directly. That is what makes byte identity a consequence of the design
     /// rather than a hope about it.
     pub(crate) fn apply(self, graph: &mut Graph) {
+        self.apply_with_kinds(graph, &HashMap::new());
+    }
+
+    /// [`GraphOps::apply`], creating a symbol whose key `declared` names as a
+    /// node of that kind rather than as a [`NodeKind::Symbol`] — a symbol of a
+    /// node kind from a plugin's own vocabulary (contract 0.3). Nothing else
+    /// about the group changes: the same guard, the same facts and edges, in
+    /// the same order. An empty map is exactly `apply`.
+    pub(crate) fn apply_with_kinds(self, graph: &mut Graph, declared: &HashMap<NodeKey, NodeKind>) {
         for op in self.0 {
             match op {
                 GraphOp::Fact { key, fact } => {
                     graph.add_fact(&key, fact);
                 }
                 GraphOp::Symbol { key, facts, edges } => {
+                    let kind = declared.get(&key).copied().unwrap_or(NodeKind::Symbol);
                     // The `sym:` prefix keeps this disjoint from file/module
                     // keys, so a collision is unreachable in practice; if the
                     // invariant ever broke, skip this symbol rather than attach
                     // its facts to a wrong-kind node (E4 idiom).
-                    if let Err(e) = graph.ensure_node(key.clone(), NodeKind::Symbol) {
+                    if let Err(e) = graph.ensure_node(key.clone(), kind) {
                         eprintln!("treesitter: {e}");
                         continue;
                     }

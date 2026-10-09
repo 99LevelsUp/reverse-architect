@@ -56,14 +56,14 @@ use super::walk::{walk_files, GraphOp, GraphOps};
 use super::{ExtractError, Extractor, Repo, TrackedFile};
 use crate::graph::{
     CandidateOutcome, CandidateRecord, Confidence, Edge, EdgeKind, ExtractorId, Fact, FactKind,
-    FactValue, Graph, NodeKey, NodeKind, Provenance, Rule, RuleVerdict, SiteCounts, SiteId,
-    SiteKind, SiteRecord, Span, Tier, Vocabulary,
+    FactValue, Graph, NodeKey, NodeKind, NodeKindId, Provenance, Rule, RuleVerdict, SiteCounts,
+    SiteId, SiteKind, SiteRecord, Span, Tier, Vocabulary,
 };
 use crate::plugin::host::{
     FileUsages, Op, Place, Receiver, RelationKind as WireRelationKind, SiteContext,
     UsageKind as WireUsageKind, Value, WireConfig, WireScope, WireSpan,
 };
-use crate::plugin::{Plugin, Session};
+use crate::plugin::{FileDeclarations, LookupBlock, NameRef, Pass, Plugin, Session};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -114,9 +114,11 @@ pub const PHASE_DECL: &str = "languages-decl";
 pub const PHASE_USAGES: &str = "languages-usages";
 
 impl Languages {
-    fn plugin_for(&self, path: &str) -> Option<&'static Plugin> {
+    /// The plugin that makes `pass` over `path` — the first, in precedence
+    /// order, that claims its extension and serves the pass.
+    fn plugin_for(&self, path: &str, pass: Pass) -> Option<&'static Plugin> {
         let ext = path.rsplit_once('.').map(|(_, e)| e)?;
-        self.plugins.for_extension(ext)
+        self.plugins.for_pass(ext, pass)
     }
 
     fn config(&self) -> WireConfig {
@@ -157,7 +159,7 @@ impl Languages {
             // A source file only when this run reads it; a project file
             // always — no plugin claims it.
             let is_source = tf.key.to_ascii_lowercase().ends_with(".cs");
-            if is_source && self.plugin_for(&tf.key).is_none() {
+            if is_source && self.plugin_for(&tf.key, Pass::Usages).is_none() {
                 continue;
             }
             if let Ok(bytes) = repo.blob_bytes(tf) {
@@ -317,6 +319,9 @@ impl Extractor for Languages {
         // ---- Pass 1: declarations ----
         let mut relations: Vec<TypeRelation> = Vec::new();
         let mut names: NamePositions = HashMap::new();
+        // The references by name each file reported (contract 0.3), in file
+        // order, banked until every file has been read.
+        let mut name_refs: Vec<FileNameRefs> = Vec::new();
         progress.total(tracked.len());
         walk_files(
             repo,
@@ -324,14 +329,14 @@ impl Extractor for Languages {
             progress,
             PHASE_DECL,
             self.cache.as_ref(),
-            |key| self.plugin_for(key).is_some(),
+            |key| self.plugin_for(key, Pass::Declarations).is_some(),
             |batch| {
                 batch
                     .par_iter()
                     .map_init(
                         || pool.lease(),
                         |sessions, (key, src)| {
-                            let Some(plugin) = self.plugin_for(key) else {
+                            let Some(plugin) = self.plugin_for(key, Pass::Declarations) else {
                                 return FileOutput::default();
                             };
                             let Some(session) = sessions.get(plugin) else {
@@ -344,10 +349,10 @@ impl Extractor for Languages {
                                 );
                             };
                             match session.declarations(key, src, &config) {
-                                Ok(ops) => output_from_ops(
+                                Ok(declarations) => output_from_ops(
                                     key,
                                     &ids[plugin.id()],
-                                    ops,
+                                    declarations,
                                     &vocabulary,
                                     &self.secret_prefixes,
                                 ),
@@ -372,10 +377,17 @@ impl Extractor for Languages {
                         .into_iter()
                         .map(|(file, key, at)| ((file, key), at)),
                 );
+                if let Some(refs) = out.take_name_refs() {
+                    name_refs.push(refs);
+                }
                 apply_file_output(graph, out, &mut relations)
             },
         )?;
         flush_type_relations(graph, relations);
+        // Received, stored in the declaration records and carried this far;
+        // resolving them against the whole repository is a later unit's
+        // (plan 2c, U5). Nothing in the graph depends on them yet.
+        drop(name_refs);
 
         // ---- Pass 2: usages ----
         let table = SymbolTable::build(graph, &names);
@@ -405,7 +417,7 @@ impl Extractor for Languages {
             progress,
             PHASE_USAGES,
             usage_cache,
-            |key| self.plugin_for(key).is_some(),
+            |key| self.plugin_for(key, Pass::Usages).is_some(),
             |batch| {
                 batch
                     .par_iter()
@@ -413,7 +425,7 @@ impl Extractor for Languages {
                         || pool.lease(),
                         |sessions, (key, src)| {
                             let mut out = FileOutput::default();
-                            let Some(plugin) = self.plugin_for(key) else {
+                            let Some(plugin) = self.plugin_for(key, Pass::Usages) else {
                                 return out;
                             };
                             let Some(session) = sessions.get(plugin) else {
@@ -484,20 +496,56 @@ fn provenance(file: &str, plugin: &ExtractorId, place: Place) -> Provenance {
     prov
 }
 
+/// The declared node kind `word` (`namespace:name`) names in `vocabulary`, or
+/// `None` when this corpus declares no such kind. The vocabulary is small and
+/// read once per symbol that names a kind, so a scan is enough.
+fn node_kind_named(word: &str, vocabulary: &Vocabulary) -> Option<NodeKindId> {
+    let (namespace, name) = word.split_once(':')?;
+    vocabulary
+        .node_declarations()
+        .find(|(_, d)| d.namespace == namespace && d.name == name)
+        .map(|(id, _)| *id)
+}
+
 /// A plugin's declaration ops as the graph changes and pending relations the
 /// host applies. A kind this corpus cannot name is dropped with a message
 /// rather than guessed at (R7); a text value is redacted again, whatever the
 /// plugin did (R22), and a doc comment loses every key-shaped word (KTD11
 /// rule 3), each loss recorded as an `AnchorSkipped` on the same node. A C#
 /// signature ends before an expression body.
+///
+/// What only contract 0.3 says rides beside the ops: a symbol of a node kind
+/// from the plugin's own vocabulary becomes a node of that kind — a kind the
+/// plugin did not declare drops the whole group with a message, as an
+/// undeclared fact kind drops its fact — and its block, the references by
+/// name and the lookup blocks are kept for the later resolution of those
+/// references. A name a reference spells is redacted like any text value, so
+/// it still matches the declared name it means.
 fn output_from_ops(
     file: &str,
     plugin: &ExtractorId,
-    ops: Vec<Op>,
+    declarations: FileDeclarations,
     vocabulary: &Vocabulary,
     prefixes: &SecretPrefixes,
 ) -> FileOutput {
-    let mut out = FileOutput::default();
+    let FileDeclarations {
+        ops,
+        symbols: extras,
+        name_refs,
+        blocks,
+    } = declarations;
+    let mut out = FileOutput {
+        name_refs: name_refs
+            .into_iter()
+            .map(|r| NameRef {
+                name: super::external::redact_secret_block(&r.name, prefixes).0,
+                ..r
+            })
+            .collect(),
+        blocks,
+        ..FileOutput::default()
+    };
+    let mut extras = extras.into_iter().peekable();
     // The fact, and the skips cutting a doc comment's long tokens left.
     let fact_of = |f: crate::plugin::host::WireFact| -> Option<(Fact, Vec<Fact>)> {
         let kind = crate::graph::fact_kind_from_word(&f.kind, vocabulary).or_else(|| {
@@ -542,7 +590,7 @@ fn output_from_ops(
             Edge::new(kind, provenance(file, plugin, e.place)),
         ))
     };
-    for op in ops {
+    for (index, op) in ops.into_iter().enumerate() {
         match op {
             Op::Fact(kf) => {
                 if let Some((fact, skips)) = fact_of(kf.fact) {
@@ -554,6 +602,28 @@ fn output_from_ops(
                 }
             }
             Op::Symbol(sym) => {
+                let extra = extras.next_if(|e| e.op == index);
+                if let Some(word) = extra.as_ref().and_then(|e| e.node_kind.as_deref()) {
+                    // Only the plugin's own namespace: a kind is "from its
+                    // vocabulary" or it is not declared for this plugin.
+                    let own = word
+                        .split_once(':')
+                        .is_some_and(|(namespace, _)| namespace == &**plugin);
+                    match node_kind_named(word, vocabulary).filter(|_| own) {
+                        Some(id) => out.node_kinds.push((NodeKey::new(sym.key.clone()), id)),
+                        None => {
+                            eprintln!(
+                                "plugin `{plugin}` emitted the undeclared node kind `{word}` in `{file}`; the symbol `{}` is dropped",
+                                sym.key
+                            );
+                            continue;
+                        }
+                    }
+                }
+                if let Some(block) = extra.as_ref().and_then(|e| e.block) {
+                    out.symbol_blocks
+                        .push((NodeKey::new(sym.key.clone()), block));
+                }
                 if let Some(at) = sym
                     .facts
                     .iter()
@@ -657,6 +727,27 @@ pub(crate) struct FileOutput {
     /// and is never cached, so a transient failure is retried on the next run
     /// rather than served as "no facts" forever (U10, R29).
     failed: bool,
+    /// The symbols this file declares as nodes of a kind from their plugin's
+    /// own vocabulary rather than as [`NodeKind::Symbol`] (contract 0.3).
+    /// Declaration pass only.
+    node_kinds: Vec<(NodeKey, NodeKindId)>,
+    /// The innermost lookup block each symbol is written in, by index into
+    /// `blocks` (contract 0.3). Declaration pass only.
+    symbol_blocks: Vec<(NodeKey, u32)>,
+    /// References by name, for resolution once every file has been read
+    /// (contract 0.3). Declaration pass only.
+    name_refs: Vec<NameRef>,
+    /// The nested blocks `name_refs` and `symbol_blocks` are looked up in.
+    blocks: Vec<LookupBlock>,
+}
+
+/// One file's references by name and the blocks they are looked up in,
+/// banked after its declarations are applied.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct FileNameRefs {
+    name_refs: Vec<NameRef>,
+    blocks: Vec<LookupBlock>,
+    symbol_blocks: Vec<(NodeKey, u32)>,
 }
 
 /// [`FileOutput`] as the cache writes it. `relations` needs no twin — a
@@ -675,6 +766,18 @@ pub(crate) struct FileOutputWire {
     names: Vec<(String, NodeKey, (u32, u32))>,
     #[serde(default, skip_serializing_if = "SiteCounts::is_empty")]
     site_counts: SiteCounts,
+    /// The new fields of contract 0.3, each omitted when empty — so a record
+    /// of a file without them, every record a 0.1 or 0.2 plugin produces, is
+    /// written byte for byte as before and `CACHE_VERSION` did not move. A
+    /// node kind is written by its name, as every kind on the wire is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    node_kinds: Vec<(NodeKey, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbol_blocks: Vec<(NodeKey, u32)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    name_refs: Vec<NameRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocks: Vec<LookupBlock>,
 }
 
 impl super::walk::WalkOutput for FileOutput {
@@ -704,6 +807,15 @@ impl super::walk::WalkOutput for FileOutput {
             relations: self.relations.clone(),
             names: self.names.clone(),
             site_counts: self.site_counts.clone(),
+            // Refused like any kind this vocabulary cannot name (RG2).
+            node_kinds: self
+                .node_kinds
+                .iter()
+                .map(|(key, id)| Some((key.clone(), vocabulary.node_name(*id)?)))
+                .collect::<Option<Vec<_>>>()?,
+            symbol_blocks: self.symbol_blocks.clone(),
+            name_refs: self.name_refs.clone(),
+            blocks: self.blocks.clone(),
         })
     }
 
@@ -718,6 +830,16 @@ impl super::walk::WalkOutput for FileOutput {
             sites: Vec::new(),
             site_counts: wire.site_counts,
             failed: false,
+            // A node kind this corpus no longer declares refuses the whole
+            // record, as `into_ops` refuses an unknown fact kind.
+            node_kinds: wire
+                .node_kinds
+                .into_iter()
+                .map(|(key, word)| Some((key, node_kind_named(&word, vocabulary)?)))
+                .collect::<Option<Vec<_>>>()?,
+            symbol_blocks: wire.symbol_blocks,
+            name_refs: wire.name_refs,
+            blocks: wire.blocks,
         })
     }
 
@@ -728,7 +850,8 @@ impl super::walk::WalkOutput for FileOutput {
         // Destructured, not field-accessed, so a third field cannot be added
         // without this failing to compile — see the note in `GraphOps`' impl.
         // `names`, `sites` and `site_counts` carry no provenance (see
-        // `FileOutputWire`).
+        // `FileOutputWire`), and neither do the fields of contract 0.3: a
+        // reference by name is the file's own, read back with it.
         let FileOutput {
             ops,
             relations,
@@ -736,6 +859,10 @@ impl super::walk::WalkOutput for FileOutput {
             sites: _,
             site_counts: _,
             failed: _,
+            node_kinds: _,
+            symbol_blocks: _,
+            name_refs: _,
+            blocks: _,
         } = self;
         let mut out = ops.provenances_mut();
         out.extend(relations.iter_mut().map(|r| &mut r.prov));
@@ -780,12 +907,29 @@ impl FileOutput {
     fn symbol(&mut self, key: NodeKey) -> &mut GraphOp {
         self.ops.symbol(key)
     }
+
+    /// The references by name, their blocks and the symbols' blocks, taken
+    /// out of the output — `None` when the file has none of them.
+    fn take_name_refs(&mut self) -> Option<FileNameRefs> {
+        let refs = FileNameRefs {
+            name_refs: std::mem::take(&mut self.name_refs),
+            blocks: std::mem::take(&mut self.blocks),
+            symbol_blocks: std::mem::take(&mut self.symbol_blocks),
+        };
+        (refs != FileNameRefs::default()).then_some(refs)
+    }
 }
 
 /// Apply one file's declaration output, and bank its type relations for the
-/// single flush that resolves them all (KTD4).
+/// single flush that resolves them all (KTD4). A symbol of a declared node
+/// kind (contract 0.3) becomes a node of that kind.
 fn apply_file_output(graph: &mut Graph, out: FileOutput, relations: &mut Vec<TypeRelation>) {
-    out.ops.apply(graph);
+    let declared: HashMap<NodeKey, NodeKind> = out
+        .node_kinds
+        .into_iter()
+        .map(|(key, id)| (key, NodeKind::Declared(id)))
+        .collect();
+    out.ops.apply_with_kinds(graph, &declared);
     relations.extend(out.relations);
 }
 
@@ -1512,11 +1656,11 @@ mod tests {
         let config = WireConfig {
             secret_prefixes: prefixes.extra().to_vec(),
         };
-        let ops = session
+        let declarations = session
             .declarations(file, src, &config)
             .expect("a bundled plugin reads a test fixture");
         let id = ExtractorId::from(plugin.id());
-        let produced = output_from_ops(file, &id, ops, &Vocabulary::default(), prefixes);
+        let produced = output_from_ops(file, &id, declarations, &Vocabulary::default(), prefixes);
         out.ops.0.extend(produced.ops.0);
         out.relations.extend(produced.relations);
         out.names.extend(produced.names);
@@ -1685,6 +1829,102 @@ mod tests {
             "the TypeRelation's own provenance was not reached, so a cached \
              record's relation ids are never canonicalized or vetted: {reached:?}"
         );
+    }
+
+    /// A `languages-decl` record of a file without name references, blocks or
+    /// declared node kinds — everything a 0.1 or 0.2 plugin can say — is
+    /// written byte for byte as before contract 0.3 existed, so every warm
+    /// cache stays valid and `CACHE_VERSION` did not have to move. The
+    /// literal was captured from the binary before 0.3 was added.
+    #[test]
+    fn a_declaration_record_without_name_refs_keeps_its_bytes() {
+        use crate::extract::walk::WalkOutput;
+        use crate::graph::{FactKind, Provenance, Tier};
+
+        let prov = || Provenance::new("a.cs", Some(3), "csharp".into(), Tier::Measured);
+        let mut out = FileOutput::default();
+        out.fact(
+            NodeKey::new("a.cs"),
+            Fact::new(FactKind::Loc, FactValue::Int(7), prov()),
+        );
+        out.symbol(NodeKey::new("sym:csharp:N#A"))
+            .push_fact(Fact::new(
+                FactKind::SymbolName,
+                FactValue::Text("A".into()),
+                prov(),
+            ));
+        out.relations.push(TypeRelation {
+            from: vec![NodeKey::new("sym:csharp:N#A")],
+            to: vec![NodeKey::new("sym:csharp:N#B")],
+            kind: RelationKind::ByTargetKind,
+            prov: prov(),
+        });
+        out.names
+            .push(("a.cs".to_string(), NodeKey::new("sym:csharp:N#A"), (3, 14)));
+        let wire = out.to_wire(&Vocabulary::default()).unwrap();
+        assert_eq!(
+            serde_json::to_string(&wire).unwrap(),
+            concat!(
+                r#"{"ops":[{"Fact":{"key":"a.cs","fact":{"kind":"loc","value":{"int":7},"#,
+                r#""provenance":{"file":"a.cs","span":{"line":3},"extractor":"csharp","#,
+                r#""tier":"measured","resolution":"heuristic","ambiguous_candidates":null},"#,
+                r#""dissent":[]}}},{"Symbol":{"key":"sym:csharp:N#A","facts":[{"kind":"symbol_name","#,
+                r#""value":{"text":"A"},"provenance":{"file":"a.cs","span":{"line":3},"#,
+                r#""extractor":"csharp","tier":"measured","resolution":"heuristic","#,
+                r#""ambiguous_candidates":null},"dissent":[]}],"edges":[]}}],"#,
+                r#""relations":[{"from":["sym:csharp:N#A"],"to":["sym:csharp:N#B"],"#,
+                r#""kind":"ByTargetKind","prov":{"file":"a.cs","span":{"line":3},"#,
+                r#""extractor":"csharp","tier":"measured","resolution":"heuristic","#,
+                r#""ambiguous_candidates":null}}],"names":[["a.cs","sym:csharp:N#A",[3,14]]]}"#,
+            )
+        );
+    }
+
+    /// The fields of contract 0.3 go through the cache and come back: a node
+    /// kind by its name, the references and blocks as written. A record whose
+    /// node kind this corpus no longer declares is refused whole, like one
+    /// naming an unknown fact kind.
+    #[test]
+    fn a_declaration_record_with_name_refs_round_trips_through_the_cache_form() {
+        use crate::extract::walk::WalkOutput;
+        use crate::graph::{CardPolicy, NodeDeclaration, StructuralRole};
+
+        let mut vocabulary = Vocabulary::default();
+        let widget = vocabulary
+            .declare_node(NodeDeclaration {
+                namespace: "probe3".into(),
+                name: "widget".into(),
+                role: StructuralRole::Definition,
+                card: CardPolicy::None,
+            })
+            .unwrap();
+        let key = NodeKey::new("sym:probe3:w.probe3#Main");
+        let mut out = FileOutput::default();
+        out.symbol(key.clone());
+        out.node_kinds.push((key.clone(), widget));
+        out.symbol_blocks.push((key.clone(), 0));
+        out.name_refs.push(NameRef {
+            source: key.as_str().into(),
+            name: "Other".into(),
+            target_kind: "probe3:widget".into(),
+            relation: Some("extends".into()),
+            block: Some(0),
+            span: Span::at(Some(2)),
+            name_at: Some((2, 5)),
+        });
+        out.blocks.push(LookupBlock {
+            lines: (1, 3),
+            parent: None,
+        });
+
+        let json = serde_json::to_string(&out.to_wire(&vocabulary).unwrap()).unwrap();
+        assert!(
+            json.contains(r#""node_kinds":[["sym:probe3:w.probe3#Main","probe3:widget"]]"#),
+            "{json}"
+        );
+        let wire: FileOutputWire = serde_json::from_str(&json).unwrap();
+        assert_eq!(FileOutput::from_wire(wire.clone(), &vocabulary), Some(out));
+        assert_eq!(FileOutput::from_wire(wire, &Vocabulary::default()), None);
     }
 
     /// Sorted keys of all Symbol nodes in the graph.

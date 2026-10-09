@@ -83,8 +83,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    /// At most one bundled plugin per (extension, pass) pair (contract 0.3):
+    /// two bundled components may share an extension only by serving
+    /// different passes of it, so the order of [`BUNDLED`] never decides who
+    /// reads a file.
     #[test]
-    fn every_bundled_plugin_loads_under_its_own_id_and_the_extensions_do_not_overlap() {
+    fn every_bundled_plugin_loads_under_its_own_id_and_no_extension_and_pass_overlap() {
+        use crate::plugin::manifest::Pass;
         let t = std::time::Instant::now();
         let plugins = bundled();
         eprintln!(
@@ -92,10 +97,18 @@ mod tests {
             plugins.len(),
             t.elapsed()
         );
+        let mut served: BTreeSet<(&str, Pass)> = BTreeSet::new();
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for p in plugins {
             for ext in p.manifest().extensions() {
-                assert!(seen.insert(ext), "`.{ext}` is claimed twice");
+                for pass in &p.manifest().passes {
+                    assert!(
+                        served.insert((ext, *pass)),
+                        "`.{ext}` is served for `{}` twice",
+                        pass.word()
+                    );
+                }
+                seen.insert(ext);
             }
         }
         let expected: BTreeSet<&str> = [

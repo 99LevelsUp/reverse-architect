@@ -18,6 +18,8 @@ out=target/wasm32-wasip2/release
 
 cargo build --release --target wasm32-wasip2 -p probe
 cp "$out/probe.wasm" prebuilt/probe.wasm
+cargo build --release --target wasm32-wasip2 -p probe3
+cp "$out/probe3.wasm" prebuilt/probe3.wasm
 for lang in rust ecmascript python csharp go java; do
   cargo build --release --target wasm32-wasip2 -p treesitter --features "$lang"
   cp "$out/treesitter.wasm" "prebuilt/$lang.wasm"
