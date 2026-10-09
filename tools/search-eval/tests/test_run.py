@@ -581,5 +581,28 @@ class VariantConfigTest(unittest.TestCase):
         self.assertEqual(variants[1].card_format, "v2")
 
 
+class ManifestSchemaVersionTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+
+    def test_single_file_manifest(self):
+        (self.dir / "manifest.json").write_text('{"schema_version": 10}', encoding="utf-8")
+        self.assertEqual(run.manifest_schema_version(self.dir), 10)
+
+    def test_manifest_by_lines_reads_the_header_document(self):
+        (self.dir / "manifest-strings.json").write_text(
+            '{"schema_version": 11, "strings": []}', encoding="utf-8")
+        (self.dir / "manifest-nodes.jsonl").write_text("not json at all\n", encoding="utf-8")
+        self.assertEqual(run.manifest_schema_version(self.dir), 11)
+
+    def test_no_manifest_or_no_version(self):
+        self.assertIsNone(run.manifest_schema_version(self.dir))
+        (self.dir / "manifest.json").write_text('{"schema_version": true}', encoding="utf-8")
+        self.assertIsNone(run.manifest_schema_version(self.dir))
+
+
 if __name__ == "__main__":
     unittest.main()

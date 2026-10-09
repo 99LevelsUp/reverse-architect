@@ -673,13 +673,21 @@ def _receipt_json(receipt: prepare.CorpusReceipt) -> dict[str, Any]:
 
 
 def manifest_schema_version(corpus: Path) -> int | None:
-    """`schema_version` of the corpus's `manifest.json`, if it has one."""
-    try:
-        data = json.loads((corpus / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    version = data.get("schema_version") if isinstance(data, dict) else None
-    return version if isinstance(version, int) and not isinstance(version, bool) else None
+    """`schema_version` of the corpus's manifest, in either shape.
+
+    A manifest in one file is `manifest.json`; above RA's size threshold it is
+    written by lines and the version sits in the small header document
+    `manifest-strings.json` (the line files are never opened here).
+    """
+    for name in ("manifest.json", "manifest-strings.json"):
+        try:
+            data = json.loads((corpus / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        version = data.get("schema_version") if isinstance(data, dict) else None
+        if isinstance(version, int) and not isinstance(version, bool):
+            return version
+    return None
 
 
 # --- CLI ---------------------------------------------------------------------
