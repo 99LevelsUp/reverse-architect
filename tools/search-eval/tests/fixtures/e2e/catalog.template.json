@@ -1,0 +1,42 @@
+{
+  "format_version": 1,
+  "base_revision": "__BASE__",
+  "cases": [
+    {
+      "id": "ukazka-a",
+      "prompt": "Ukázkové zadání, nejde o skutečný případ. __CUSTOMER__ hlásí: po uložení záznamu se zobrazí chyba, která uvádí metodu SetScheduledTasksInvalid. Příloha obsahuje výpis s přístupovým tokenem __SECRET__.",
+      "acceptable_locations": [
+        {"file": "Src/Placeholder/LoadAction.cs", "member": "LoadAction.SetScheduledTasksInvalid",
+         "line": 5, "fix_commit": "__FIX__"}
+      ],
+      "bug_confirmed_at_base": true,
+      "pseudonymization_confirmed": true,
+      "used_for_card_tuning": true,
+      "prompt_names_location": true
+    },
+    {
+      "id": "ukazka-b",
+      "prompt": "Ukázkové zadání, nejde o skutečný případ. Firma X hlásí: zaokrouhlený součet v přehledu nesouhlasí se součtem položek.",
+      "acceptable_locations": [
+        {"file": "Src/Placeholder/Rounding.cs", "member": "Rounding.Apply(+1)",
+         "line": 7, "fix_commit": "__FIX__"}
+      ],
+      "bug_confirmed_at_base": true,
+      "pseudonymization_confirmed": true,
+      "used_for_card_tuning": false,
+      "prompt_names_location": false
+    },
+    {
+      "id": "ukazka-c",
+      "prompt": "Ukázkové zadání, nejde o skutečný případ. Zákazník B hlásí: naplánovaná úloha se spouští o den později, než je zadáno.",
+      "acceptable_locations": [
+        {"file": "Src/Placeholder/Scheduler.cs", "member": "Scheduler.Plan",
+         "line": 5, "fix_commit": "__FIX__"}
+      ],
+      "bug_confirmed_at_base": true,
+      "pseudonymization_confirmed": true,
+      "used_for_card_tuning": false,
+      "prompt_names_location": false
+    }
+  ]
+}

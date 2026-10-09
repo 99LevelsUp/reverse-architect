@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "base_revision": "1111111111111111111111111111111111111111",
+  "cases": [
+    {
+      "id": "ukazka-1",
+      "prompt": "Ukázkové zadání, nejde o skutečný případ. Zákazník A hlásí: po uložení záznamu se zobrazí chybová hláška, která uvádí metodu SetScheduledTasksInvalid. Záznam se přesto uloží.",
+      "acceptable_locations": [
+        {
+          "file": "Src/Placeholder/LoadAction.cs",
+          "member": "LoadAction.SetScheduledTasksInvalid",
+          "line": 120,
+          "fix_commit": "2222222222222222222222222222222222222222"
+        }
+      ],
+      "bug_confirmed_at_base": true,
+      "pseudonymization_confirmed": true,
+      "used_for_card_tuning": true,
+      "prompt_names_location": true
+    },
+    {
+      "id": "ukazka-2",
+      "prompt": "Ukázkové zadání, nejde o skutečný případ. Firma X hlásí: součet v přehledu nesouhlasí se součtem položek, rozdíl se objevuje jen u některých záznamů.",
+      "acceptable_locations": [
+        {
+          "file": "Src/Placeholder/SummaryBuilder.cs",
+          "member": "SummaryBuilder.AddItem",
+          "line": 48,
+          "fix_commit": "3333333333333333333333333333333333333333"
+        },
+        {
+          "file": "Src/Placeholder/Rounding.cs",
+          "member": "Rounding.Apply(+1)",
+          "line": 17,
+          "fix_commit": "3333333333333333333333333333333333333333"
+        }
+      ],
+      "bug_confirmed_at_base": true,
+      "pseudonymization_confirmed": true,
+      "used_for_card_tuning": false,
+      "prompt_names_location": false
+    }
+  ]
+}
