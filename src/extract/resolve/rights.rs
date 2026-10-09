@@ -78,19 +78,21 @@ pub struct RightsTable {
 /// - `role-mismatch`, C#: measured on the reference C# repository (commit <ref-revision>, 149
 ///   projects indexed by `ra index`) — 9 310 sites judged and refuted by the
 ///   index, none of them confirmed, 2.5 % unmapped
-///   (`docs/measurements/2026-10-03-csharp-reference.json`). The same report proposes no
-///   other rule: `declared-receiver` and `static-receiver` would have removed
-///   edges the index confirmed.
+///   (`docs/measurements/2026-10-03-csharp-reference.json`). Re-measured with the
+///   components rebuilt from current sources, with the same counts
+///   (`docs/measurements/2026-10-09-csharp-reference.json`). No other rule is
+///   proposed: `declared-receiver`, `static-receiver` and `nested-type-visibility`
+///   would remove edges the index confirmed.
 fn granted_records() -> Vec<DeleteRight> {
     vec![DeleteRight {
         rule: Rule::RoleMismatch,
         revision: 1,
         language: "csharp".into(),
         component: "csharp".into(),
-        component_sha256: "800518666c3fcc9992326b82e1961a0a0f1fec7bed731936fb792b25a49bda03".into(),
+        component_sha256: "1198ab3537ba5d97c9cecc2bf0598676643fab56a58a76224334ee6aa3643ae9".into(),
         contract: "0.2".into(),
-        report: "docs/measurements/2026-10-03-csharp-reference.json".into(),
-        report_sha256: "deb2dd9bb395924f577988a745f051ae408d26497ab3aceea334f858b4b93b4b".into(),
+        report: "docs/measurements/2026-10-09-csharp-reference.json".into(),
+        report_sha256: "ece880e73576555bfff508fb8081d8b3f5d8fe65bdc3c766ac41c1709790b5fb".into(),
     }]
 }
 

@@ -129,6 +129,15 @@ repository, 116 082 leading outside it, 82 411 unmapped, 22 386 in unverified do
 | namespace-visibility | 24 656 | 0 | 0 | 24 639 | 17 | 21 159 | never-deletes |
 | base-spelling | 0 | 0 | 0 | 0 | 0 | 0 | never-deletes |
 
-Granted: `role-mismatch` revision 1 for component `csharp` with SHA-256 `800518666c3f…` and contract
-0.2 (record in `granted_records()`). The thresholds decided nothing here: the proposed rule has
-thousands of evaluated sites and 2.5 % unmapped; zero removed confirmed edges decided it.
+Granted at the time: `role-mismatch` revision 1 for component `csharp` with SHA-256 `800518666c3f…`
+and contract 0.2. The thresholds decided nothing here: the proposed rule has thousands of evaluated
+sites and 2.5 % unmapped; zero removed confirmed edges decided it.
+
+`2026-10-09-csharp-reference.json` — the same repository, revision and index, re-measured after the
+bundled components were rebuilt from current sources (`csharp` SHA-256 `1198ab3537ba…`). Site counts
+and the `role-mismatch` row are identical to the first report. Rules changed since then show their
+new revision: `declared-receiver` revision 3 (124 703 evaluated, 5 816 would remove confirmed) and the
+new `nested-type-visibility` (4 236 evaluated, 13 would remove confirmed); neither is proposed.
+
+Granted now: `role-mismatch` revision 1 for component `csharp` with SHA-256 `1198ab3537ba…` and
+contract 0.2, backed by the second report (record in `granted_records()`).
