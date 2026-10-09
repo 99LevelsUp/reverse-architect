@@ -15,6 +15,7 @@ from unittest import mock
 
 import answers
 import card_check
+import review
 from agents.judge_cli import JudgeInfrastructureError
 from tests.test_card_check import (EVMN, EXT, OTHER_REV, REV, Rule, ScriptedJudge, a1_types,
                                    build_corpus, catalog_json, claim, fact, place,
@@ -138,7 +139,7 @@ class ArgumentsTest(AnswersCase):
                              0)
             self.assertEqual(self.run_main(["zprava", "--navic", "1"])[0], 2)  # common argument
         self.assertEqual(seen, [("1", "x")])
-        self.assertEqual([c.name for c in answers.SUBCOMMANDS], ["kontrola-karet"])
+        self.assertEqual([c.name for c in answers.SUBCOMMANDS], ["kontrola-karet", "kontrola"])
 
     def test_the_parser_names_the_required_arguments(self):
         parser = answers.build_parser()
@@ -245,3 +246,85 @@ class CardCheckCommandTest(AnswersCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewCommandTest(AnswersCase):
+    """`answers.py kontrola`: the file to check and loading it back."""
+
+    def setUp(self):
+        super().setUp()
+        self.measurement_file = None
+
+    def finished_measurement(self):
+        code, _, _ = self.run_main(self.args(), ScriptedJudge(RULES))
+        self.assertEqual(code, 0)
+        return card_check.measurement_path(self.state)
+
+    def review_args(self, *extra, **replace):
+        values = {"--source-repo": str(REPO), "--stav": str(self.state)}
+        values.update(replace)
+        out = ["kontrola"]
+        for key, value in values.items():
+            out += [key, value]
+        return out + list(extra)
+
+    def test_the_review_file_and_the_decisions_round_trip(self):
+        measurement = self.finished_measurement()
+        target = self.tmp / "kontrola.json"
+        code, out, err = self.run_main(self.review_args(
+            "--mereni", str(measurement), "--vystup", str(target), "--seminko", "5"))
+        self.assertEqual(code, 0, err)
+        self.assertTrue(target.with_suffix(".md").is_file())
+        data = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual(data["seminko"], 5)
+        self.assertTrue(data["radky"])
+        for row in data["radky"]:
+            row["rozhodnuti"] = "vyjadruje" if row["druh"] == "fakt" else "neobsahuje"
+        target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        code, out, err = self.run_main(self.review_args("--nacti", str(target)))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(review.load_decisions(self.state)) > 0, True)
+        state = review.review_state(measurement, self.state)
+        self.assertEqual(state.missing, ())
+        # decided units are not offered again
+        again = self.tmp / "dalsi.json"
+        code, out, err = self.run_main(self.review_args(
+            "--mereni", str(measurement), "--vystup", str(again)))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(again.read_text(encoding="utf-8"))["radky"], [])
+
+    def test_an_unfinished_measurement_is_code_2(self):
+        measurement = self.finished_measurement()
+        data = json.loads(measurement.read_text(encoding="utf-8"))
+        data["status"] = card_check.STATUS_INCOMPLETE
+        measurement.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        target = self.tmp / "kontrola.json"
+        code, _, err = self.run_main(self.review_args(
+            "--mereni", str(measurement), "--vystup", str(target)))
+        self.assertEqual(code, 2)
+        self.assertIn("není dokončené", err)
+        self.assertFalse(target.exists())
+
+    def test_a_wrong_decision_is_code_2_and_names_the_row(self):
+        measurement = self.finished_measurement()
+        target = self.tmp / "kontrola.json"
+        self.run_main(self.review_args("--mereni", str(measurement), "--vystup", str(target)))
+        data = json.loads(target.read_text(encoding="utf-8"))
+        data["radky"][0]["rozhodnuti"] = "překlep"
+        target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        code, _, err = self.run_main(self.review_args("--nacti", str(target)))
+        self.assertEqual(code, 2)
+        self.assertIn("řádek 1", err)
+
+    def test_the_modes_need_their_arguments(self):
+        self.assertEqual(self.run_main(self.review_args())[0], 2)
+        self.assertEqual(self.run_main(self.review_args("--mereni", "x.json"))[0], 2)
+        code, _, err = self.run_main(self.review_args("--nacti", "x.json", "--vystup", "y.json"))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.run_main(["kontrola", "--source-repo", str(REPO)])[0], 2)
+
+    def test_the_state_directory_inside_a_repository_is_refused(self):
+        code, _, err = self.run_main(self.review_args(
+            "--nacti", "x.json", **{"--stav": str(REPO / "tmp-stav")}))
+        self.assertEqual(code, 2)
+        self.assertIn("Stavový adresář", err)

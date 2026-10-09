@@ -36,6 +36,7 @@ from typing import Callable, Sequence
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import card_check  # noqa: E402
+import review  # noqa: E402
 from agents.base import AgentRunError  # noqa: E402
 from catalog import CatalogError, load_catalog  # noqa: E402
 from corpus import CorpusError, open_corpus  # noqa: E402
@@ -158,10 +159,57 @@ def _checked_state_dir(source_repo: Path, state: Path) -> Path:
         raise InputError(str(exc)) from None
 
 
+# --- kontrola --------------------------------------------------------------------------
+
+def configure_review(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--stav", required=True, type=Path,
+                        help="stavový adresář (rozhodnuti.json); musí ležet mimo repozitáře")
+    make = parser.add_argument_group("sestavení souboru ke kontrole")
+    make.add_argument("--mereni", action="append", type=Path, metavar="MEASUREMENT.JSON",
+                      help="hotové měření (lze opakovat)")
+    make.add_argument("--vystup", type=Path, metavar="SOUBOR.JSON",
+                      help="soubor ke kontrole (JSON; vedle něj vznikne .md ke čtení); "
+                           "existující soubor se nepřepíše")
+    make.add_argument("--seminko", type=int, metavar="CELE_CISLO",
+                      help="semínko vzorku; výchozí je odvozené z měření; zapisuje se do souboru")
+    load = parser.add_argument_group("načtení vyplněného souboru")
+    load.add_argument("--nacti", type=Path, metavar="SOUBOR.JSON",
+                      help="vyplněný soubor ke kontrole; uloží rozhodnutí do stavového adresáře")
+
+
+def command_review(args: argparse.Namespace, services: Services) -> int:
+    state = _checked_state_dir(args.source_repo, args.stav)
+    if args.nacti is not None:
+        if args.mereni or args.vystup or args.seminko is not None:
+            raise InputError("--nacti se nedá spojit s --mereni, --vystup ani --seminko.")
+        result = review.ingest_review(args.nacti, state)
+        print(f"Načteno: {result.decided} rozhodnutí ({result.new} nových nebo změněných), "
+              f"{result.empty} řádků zůstalo prázdných.")
+        if result.proposals:
+            print(f"Návrhy zakázaných tvrzení ({result.proposals}): {result.proposals_path}")
+        return EXIT_DONE
+    if not args.mereni or args.vystup is None:
+        raise InputError("Sestavení souboru ke kontrole potřebuje --mereni i --vystup "
+                         "(nebo --nacti pro načtení vyplněného souboru).")
+    loaded = [review.load_measurement(path) for path in args.mereni]
+    plan = review.build_review(loaded, review.load_decisions(state), args.seminko)
+    json_path, md_path = review.write_review(plan, args.vystup)
+    print(f"Kontrola vlastníka: {len(plan.rows)} řádků, z toho {plan.disputed_count} sporných; "
+          f"semínko {plan.seed}.")
+    for label, (total, drawn) in sorted(plan.sample_sizes.items()):
+        print(f"  {label}: {drawn} ze {total} bezsporných")
+    print(f"K vyplnění: {json_path}")
+    print(f"Ke čtení: {md_path}")
+    return EXIT_DONE
+
+
 SUBCOMMANDS: tuple[Subcommand, ...] = (
     Subcommand("kontrola-karet",
                "ověří, že karty korpusu uvádějí fakty otázek a neuvádějí zakázaná tvrzení",
                configure_card_check, command_card_check),
+    Subcommand("kontrola",
+               "soubor ke kontrole vlastníka (sporné jednotky a vzorek) a načtení jeho rozhodnutí",
+               configure_review, command_review),
 )
 
 
@@ -185,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_INPUT_ERRORS = (InputError, CatalogError, CorpusError, JudgeFileError, PrepareError)
+_INPUT_ERRORS = (InputError, review.ReviewError, CatalogError, CorpusError, JudgeFileError, PrepareError)
 _INFRASTRUCTURE_ERRORS = (JudgeUnavailableError, AgentRunError, JudgeCacheError)
 
 

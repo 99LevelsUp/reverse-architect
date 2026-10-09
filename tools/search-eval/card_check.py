@@ -148,6 +148,12 @@ class UnitResult:
     model_label: str | None = None
     final_label: str | None = None
     decided_by: str | None = DECIDED_BY_MODEL
+    # What the owner's review shows (U7): the texts and places of the unit.
+    question_text: str | None = None
+    claim_text: str | None = None
+    document_path: str | None = None
+    document_text: str | None = None  # the whole document; only when `mode` is MODE_WHOLE
+    places: tuple[dict[str, Any], ...] = ()
 
     @property
     def open_dispute(self) -> bool:
@@ -184,6 +190,11 @@ class UnitResult:
             "model_label": self.model_label,
             "final_label": self.final_label,
             "decided_by": self.decided_by,
+            "question_text": self.question_text,
+            "claim_text": self.claim_text,
+            "document_path": self.document_path,
+            "document_text": self.document_text,
+            "places": list(self.places),
         }
 
 
@@ -276,6 +287,7 @@ class ClaimResult:
     disputed_units: tuple[str, ...]
     unit_ids: tuple[str, ...]
     reasons: tuple[str, ...]
+    fact_ids: tuple[str, ...] = ()
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -286,6 +298,7 @@ class ClaimResult:
             "disputed_units": list(self.disputed_units),
             "unit_ids": list(self.unit_ids),
             "reasons": list(self.reasons),
+            "fact_ids": list(self.fact_ids),
         }
 
 
@@ -375,6 +388,7 @@ class _Planner:
         self.index = index
         self._located: dict[Place, Any] = {}
         self._parsed: dict[str, ParsedDocument] = {}
+        self._texts: dict[str, str] = {}
 
     def locate(self, place: Place):
         found = self._located.get(place)
@@ -385,7 +399,7 @@ class _Planner:
     def parsed(self, doc: CorpusDoc) -> ParsedDocument:
         found = self._parsed.get(doc.id)
         if found is None:
-            text = self.index.read_document(doc)
+            text = self._texts[doc.id] = self.index.read_document(doc)
             found = self._parsed[doc.id] = parse_document(
                 text, doc_id=doc.id, title=doc.title, level=doc.level,
                 known_files=self.index.files)
@@ -422,9 +436,17 @@ class _Planner:
             id=unit_id(question.id, claim_id, role, doc.id), question_id=question.id, kind=kind,
             claim_id=claim_id, role=role, document=doc.id, slot=doc.slot, title=doc.title,
             mode=mode, blocks=shown, block_count=count,
-            state=STATE_PENDING if blocks else STATE_NO_BOUND_BLOCK, note=note)
+            state=STATE_PENDING if blocks else STATE_NO_BOUND_BLOCK, note=note,
+            question_text=question.dotaz, claim_text=claim_text, document_path=doc.path,
+            document_text=None if preselect else self._texts.get(doc.id),
+            places=tuple(_place_json(p) for p in places))
         return PlannedUnit(record=record, claim_text=claim_text, question_text=question.dotaz,
                            blocks=blocks, places=tuple(places), parsed=parsed)
+
+
+def _place_json(place: Place) -> dict[str, Any]:
+    return {"soubor": place.soubor, "clen": place.clen, "typ": place.typ,
+            "radky": list(place.radky)}
 
 
 def _place_label(place: Place) -> str:
@@ -591,7 +613,7 @@ def _claim_result(cp: ClaimPlan, by_id: dict[str, UnitResult]) -> ClaimResult:
 
     def result(status: str, reasons: tuple[str, ...] = ()) -> ClaimResult:
         return ClaimResult(cp.question_id, cp.claim_id, status, found, disputed, cp.unit_ids,
-                           reasons)
+                           reasons, cp.fact_ids)
 
     if cp.unverified:
         return result(CLAIM_PLACE_UNKNOWN, cp.unverified)
