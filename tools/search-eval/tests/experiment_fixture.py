@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 
 from agents.base import Cap, RunRequest
 from agents.scripted import ScriptedAdapter, ScriptedRun
+from catalog import confirmation_fingerprint
 from preflight import OUTSIDE_LABEL, PREFLIGHT_TITLE
 from run import ExperimentConfig, VariantSpec
 from tests.test_prepare import commit_all, git, write
@@ -133,22 +134,51 @@ class Experiment:
 
     # -- variants ---------------------------------------------------------------
 
-    def corpus_variant(self, name: str, corpus: str,
-                       ra_options: Sequence[str] = ()) -> VariantSpec:
+    def corpus_variant(self, name: str, corpus: str, ra_options: Sequence[str] = (),
+                       ra_command: Sequence[str] | None = None) -> VariantSpec:
         """A variant with its own corpus directory under the temporary root."""
-        return VariantSpec(name, corpus_dir=self.root / corpus, ra_options=tuple(ra_options))
+        return VariantSpec(name, corpus_dir=self.root / corpus, ra_options=tuple(ra_options),
+                           ra_command=tuple(ra_command) if ra_command is not None else None)
+
+    def other_ra(self, label: str) -> tuple[str, ...]:
+        """The command of the fake RA playing another version of RA."""
+        return (*FAKE_RA, "--ra-version", label)
+
+    @property
+    def support_workdir(self) -> Path:
+        """The empty work directory of the support role (a sibling of the export)."""
+        return self.export.with_name(self.export.name + "-podpora-prazdny")
+
+    def support_variants(self) -> tuple[VariantSpec, VariantSpec]:
+        """Two corpora, the pair the support role needs."""
+        return (self.corpus_variant("korpus A", "corpus-a"),
+                self.corpus_variant("korpus B", "corpus-b", ["--marker-b"]))
+
+    def add_questions(self, bugs: bool = True) -> None:
+        """Make the catalog a format 2 one with a question (and the bugs, unless `bugs` is off)."""
+        data = json.loads(self.catalog.read_text(encoding="utf-8"))
+        kept = [dict(c, druh="chyba") for c in data["cases"]] if bugs else []
+        facts = [{"id": "f1", "text": "Ukázkový fakt.", "role": "misto",
+                  "mista": [{"soubor": CASE_A_FILE, "clen": "LoadAction.Reload", "radky": 4}]}]
+        question = {"druh": "otazka", "id": "ukazka-otazka", "dotaz": "Ukázková otázka?",
+                    "ramcova_odpoved": "Ukázková odpověď.", "commit": self.base,
+                    "fakta_potvrzena": True, "pseudonymizace_potvrzena": True,
+                    "kontrolni": False, "fakta": facts, "zakazana_tvrzeni": [],
+                    "otisk_potvrzeni": confirmation_fingerprint(facts, [])}
+        data.update(format_version=2, cases=[*kept[:1], question, *kept[1:]])
+        self.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     def default_variants(self) -> tuple[VariantSpec, VariantSpec]:
         return (VariantSpec("bez karet"), self.corpus_variant("s kartami", "corpus"))
 
     def config(self, variants: Sequence[VariantSpec] | None = None, seed: int = 7,
                cap: Cap = Cap(seconds=600, steps=50, tokens=100_000),
-               **overrides: Any) -> ExperimentConfig:
+               role: str = "vyvojar", **overrides: Any) -> ExperimentConfig:
         config = ExperimentConfig(
             catalog_path=self.catalog, source_repo=self.repo, output_root=self.output,
             export_dir=self.export, isolation_root=self.isolation, ra_command=FAKE_RA,
             model="model-test", cap=cap, seed=seed,
-            variants=tuple(variants or self.default_variants()),
+            variants=tuple(variants or self.default_variants()), role=role,
             credentials=self.credentials)
         return replace(config, **overrides)
 

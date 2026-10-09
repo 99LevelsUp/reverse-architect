@@ -64,6 +64,11 @@ METRICS = (*TOKEN_CATEGORIES, "tokens_total", "steps", "seconds")
 
 REPORT_FORMAT_VERSION = 1
 
+ROLE_SUPPORT = "podpora"      # reader without the sources: only the corpus
+ROLE_DEVELOPER = "vyvojar"    # reader with the sources
+ROLES = (ROLE_SUPPORT, ROLE_DEVELOPER)
+NOT_MEASURED_IN_SUPPORT = "v roli podpora se neměří"
+
 
 # --- inputs ------------------------------------------------------------------
 
@@ -176,6 +181,8 @@ class ExperimentInfo:
     tree_fingerprint: str
     variants: tuple[VariantInfo, VariantInfo]
     cases: tuple[CaseInfo, ...]
+    role: str
+    not_measured: tuple[str, ...] = ()
     adapter: str = ""
     agent_version: str | None = None
     status_detail: str | None = None
@@ -288,6 +295,9 @@ def _experiment_json(info: ExperimentInfo) -> dict[str, Any]:
         "adapter": info.adapter,
         "agent_version": info.agent_version,
         "cap": {"seconds": info.cap.seconds, "steps": info.cap.steps, "tokens": info.cap.tokens},
+        "role": info.role,
+        "not_measured": [{"id": case_id, "reason": NOT_MEASURED_IN_SUPPORT}
+                         for case_id in info.not_measured],
         "seed": info.seed,
         "concurrency": info.concurrency,
         "runs_per_variant": RUNS_PER_VARIANT,
@@ -379,10 +389,13 @@ def _money(info: ExperimentInfo, results: Sequence[RunResult]) -> dict[str, Any]
 
 def not_claimed(info: ExperimentInfo) -> list[str]:
     """The "co toto měření netvrdí" section (R15), as plain sentences."""
+    if info.role == ROLE_SUPPORT:
+        scope = ("v roli podpory, tedy bez zdrojáků, jen s korpusem RA čteným jako soubory")
+    else:
+        scope = "v pracovním postupu se zdrojáky a korpusem RA čteným jako soubory"
     return [
-        f"Měří agenta (model {info.model}) v pracovním postupu se zdrojáky a korpusem RA "
-        f"čteným jako soubory na těchto {len(info.cases)} případech, ne lidi (podporu, "
-        "analytiky ani dokumentaristy).",
+        f"Měří agenta (model {info.model}) {scope} na těchto {len(info.cases)} případech, "
+        "ne lidi (podporu, analytiky ani dokumentaristy).",
         "Neměří příjem případu, ověření verze ani ověření v kódu a návrh opravy: běh končí "
         "odevzdáním místa příčiny.",
         "Nepřipisuje rozdíl samotnému obsahu karet bez vlivu agentova hledání: varianta "
@@ -614,6 +627,10 @@ def _render_metadata(data: Mapping[str, Any]) -> list[str]:
     exp = data["experiment"]
     cap = exp["cap"]
     out = ["## Metadata pokusu", ""]
+    out += [f"- Role: {exp['role']}" + (" (čtenář bez zdrojáků, jen korpus)"
+                                       if exp["role"] == ROLE_SUPPORT
+                                       else " (čtenář se zdrojáky)")]
+    out += [f"- Neměřený případ {n['id']}: {n['reason']}" for n in exp["not_measured"]]
     out += [f"- Zahájení: {exp['started_at']}" + (f", konec: {exp['finished_at']}"
                                                   if exp["finished_at"] else ""),
             f"- Model: {exp['model']}; adaptér: {exp['adapter'] or '—'}; verze CLI agenta: "

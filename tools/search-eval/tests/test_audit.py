@@ -110,6 +110,26 @@ class AuditTest(unittest.TestCase):
         self.assertEqual([f.kind for f in findings], [FORBIDDEN_TOOL] * 3)
         self.assertEqual([f.tool_call_id for f in findings], ["t0", "t1", "t2"])
 
+    def test_support_role_permits_only_the_corpus(self):
+        """The work directory is empty there: a source file is outside, the corpus is not."""
+        sources = self.tmp / "export" / "Src" / "A.cs"
+        record = self.record(
+            ("Read", {"file_path": str(self.corpus / "index.md")}),
+            ("Glob", {"pattern": "**/*.md", "path": str(self.corpus)}),
+            ("Read", {"file_path": str(sources)}),
+            corpus=True)
+        findings = audit_run(record, corpus_only=True)
+        self.assertEqual([(f.kind, f.tool_call_id) for f in findings], [(PATH_OUTSIDE, "t2")])
+        # The sources are outside in the other role too (there the work tree is the export).
+        self.assertEqual([f.kind for f in audit_run(record)], [PATH_OUTSIDE])
+
+    def test_support_role_does_not_accept_the_work_directory(self):
+        record = self.record(("Read", {"file_path": str(self.work / "src" / "A.cs")}),
+                             ("Read", {"file_path": "src/A.cs"}), corpus=True)
+        self.assertEqual(audit_run(record), ())
+        self.assertEqual([f.kind for f in audit_run(record, corpus_only=True)],
+                         [PATH_OUTSIDE, PATH_OUTSIDE])
+
     @unittest.skipUnless(os.name == "nt", "case-insensitive paths are a Windows property")
     def test_work_tree_path_in_other_case_is_inside(self):
         upper = str(self.work / "src" / "A.cs").upper()

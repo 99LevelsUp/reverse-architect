@@ -74,7 +74,7 @@ def info(tariff=None, preparation=()):
     return ExperimentInfo(
         experiment_id="pokus-test", started_at="02.10.2026 10:00:00", status="completed",
         model="model-test", cap=CAP, seed=7, base_revision="b" * 40, tree_fingerprint="t" * 64,
-        variants=variants,
+        variants=variants, role="vyvojar",
         cases=(CaseInfo("A", False, False), CaseInfo("B", True, False),
                CaseInfo("C", False, True)),
         adapter="claude-code", agent_version="2.1.287", tariff=tariff,
@@ -233,6 +233,31 @@ class ReportContentTest(unittest.TestCase):
         self.assertEqual(cmp_["cost_median_all"], "unknown")
         self.assertEqual(data["money"]["total_all_runs"], "unknown")
         self.assertIn("| A | 0,0855 | neznámý | 0,0855 | neznámý |", render_markdown(data))
+
+
+class ReportRoleTest(unittest.TestCase):
+    def test_role_is_in_the_data_and_the_markdown(self):
+        for role, text in (("vyvojar", "čtenář se zdrojáky"),
+                           ("podpora", "čtenář bez zdrojáků, jen korpus")):
+            with self.subTest(role=role):
+                base = info()
+                data = build_report(ExperimentInfo(**{**base.__dict__, "role": role}), results())
+                self.assertEqual(data["experiment"]["role"], role)
+                self.assertIn(f"- Role: {role} ({text})", render_markdown(data))
+
+    def test_items_set_aside_by_the_role_are_listed_with_the_reason(self):
+        base = info()
+        support = ExperimentInfo(**{**base.__dict__, "role": "podpora", "cases": (),
+                                    "not_measured": ("A", "B")})
+        data = build_report(support, [])
+        self.assertEqual(data["experiment"]["not_measured"],
+                         [{"id": "A", "reason": "v roli podpora se neměří"},
+                          {"id": "B", "reason": "v roli podpora se neměří"}])
+        self.assertEqual(data["cases"], [])
+        markdown = render_markdown(data)
+        self.assertIn("- Neměřený případ A: v roli podpora se neměří", markdown)
+        self.assertIn("bez zdrojáků, jen s korpusem RA", markdown)
+        self.assertEqual(build_report(base, results())["experiment"]["not_measured"], [])
 
 
 class ReportFilesTest(unittest.TestCase):

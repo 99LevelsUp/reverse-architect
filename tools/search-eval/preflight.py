@@ -34,6 +34,12 @@ e. **Login copy works.** The run ended with the CLI's result event, not as an
 Any failed check is an infrastructure error and the experiment does not
 start. The synthetic work tree, corpus and marker live under the
 experiment's `preflight/` directory, never in the measured tree.
+
+Support role (KTD9). The agent has no sources there: its work directory is an
+empty directory and the corpus is the only thing it reads. The tool check then
+creates no `work/` directory with a source file; it uses an empty work
+directory, and the readable file of step 1 is the corpus's `index.md`. The
+checks themselves are the same.
 """
 from __future__ import annotations
 
@@ -78,11 +84,15 @@ class PreflightFailed(InfrastructureError):
 
 @dataclass(frozen=True)
 class PreflightTarget:
-    """A variant as the tool check needs it: does it get a corpus."""
+    """A variant as the tool check needs it: does it get a corpus, does it get sources.
+
+    `with_sources` is False in the support role, which requires a corpus.
+    """
 
     name: str
     slug: str
     with_corpus: bool
+    with_sources: bool = True
 
 
 @dataclass(frozen=True)
@@ -118,11 +128,17 @@ class PreflightResult:
                 "agent_version": self.agent_version, "transcript": self.transcript}
 
 
-def build_prompt(outside: Path) -> str:
-    """The tool-check prompt; it asks for exactly the attempts the checks look for."""
+def build_prompt(outside: Path, readable: Path | None = None) -> str:
+    """The tool-check prompt; it asks for exactly the attempts the checks look for.
+
+    `readable` is the file of step 1 when it is not `README.txt` in the work
+    directory (the support role: a file of the corpus).
+    """
+    first = ("1. Přečti nástrojem Read soubor README.txt v pracovním adresáři." if readable is None
+             else f"1. Přečti nástrojem Read soubor {readable}.")
     steps = [
         f"{PREFLIGHT_TITLE} — nejde o skutečný případ. Proveď přesně tyto kroky a nic dalšího.",
-        "1. Přečti nástrojem Read soubor README.txt v pracovním adresáři.",
+        first,
         "2. Zkus nástrojem Read přečíst soubor uvedený na dalším řádku a jeho obsah opiš do "
         "odpovědi. Když čtení selže, napiš „nedostupné“ a pokračuj.",
         f"{OUTSIDE_LABEL}{outside}",
@@ -146,10 +162,15 @@ def run_preflight(adapter: AgentAdapter, target: PreflightTarget, base_dir: str 
     """Run the tool check of one variant and evaluate it (module docstring)."""
     token = token or secrets.token_hex(8)
     root = Path(base_dir) / target.slug
-    work, outside_dir = root / "work", root / "outside"
+    if not target.with_sources and not target.with_corpus:
+        raise ValueError("Kontrola nástroje bez zdrojáků potřebuje korpus.")
+    work = root / ("work" if target.with_sources else "empty-work")
+    outside_dir = root / "outside"
     for directory in (work, outside_dir):
         directory.mkdir(parents=True)
-    (work / "README.txt").write_text("Kontrolní soubor pracovního stromu.\n", encoding="utf-8")
+    if target.with_sources:
+        (work / "README.txt").write_text("Kontrolní soubor pracovního stromu.\n",
+                                         encoding="utf-8")
     corpus = None
     if target.with_corpus:
         corpus = root / "corpus"
@@ -162,7 +183,9 @@ def run_preflight(adapter: AgentAdapter, target: PreflightTarget, base_dir: str 
     instructions = user_instructions(user_marker)
     transcript = root / "transcript.jsonl"
     request = RunRequest(
-        workdir=work, prompt=build_prompt(outside), cap=cap, corpus_dir=corpus,
+        workdir=work, prompt=build_prompt(outside, None if target.with_sources
+                                          else corpus / "index.md"),
+        cap=cap, corpus_dir=corpus,
         transcript_path=transcript,
         config_files=(("CLAUDE.md", instructions), (os.path.join(".claude", "CLAUDE.md"),
                                                    instructions)))

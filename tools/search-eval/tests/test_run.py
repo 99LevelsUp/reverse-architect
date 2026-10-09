@@ -187,6 +187,240 @@ class MixedCatalogTest(ExperimentTestCase):
         self.assertIn("chyba", str(ctx.exception))
 
 
+class SupportRoleTest(ExperimentTestCase):
+    """The role of the reader (U12, KTD9): `podpora` has no sources, only a corpus.
+
+    No item is measured in the support role yet (`chyba` items are set aside,
+    questions join the experiment in a later unit), so the tests of what a
+    *measured run* looks like force the runs with `measurable`.
+    """
+
+    cases = 1
+
+    def setUp(self):
+        super().setUp()
+        self.world.add_questions()
+
+    def support_config(self, **overrides):
+        return self.world.config(variants=self.world.support_variants(), role="podpora",
+                                 **overrides)
+
+    def measurable(self):
+        """Pretend a later unit made the bugs measurable in the support role."""
+        return mock.patch.object(run, "measured_cases", lambda catalog, role: catalog.cases)
+
+    def argv(self, *extra, role="podpora"):
+        w = self.world
+        argv = ["--catalog", str(w.catalog), "--source-repo", str(w.repo),
+                "--output-root", str(w.output), "--export-dir", str(w.export),
+                "--isolation-root", str(w.isolation), "--ra-binary", "ra", "--model", "m",
+                "--cap-seconds", "600", "--cap-steps", "50", "--cap-tokens", "100000",
+                "--seed", "7", *extra]
+        return argv if role is None else [*argv, "--role", role]
+
+    def variants_file(self, variants):
+        path = self.world.root / "variants.json"
+        path.write_text(json.dumps({"format_version": 1, "variants": variants}),
+                        encoding="utf-8")
+        return str(path)
+
+    def main(self, argv):
+        err = io.StringIO()
+        with mock.patch.object(run, "run_experiment") as started, redirect_stderr(err):
+            code = run.main(argv)
+        return code, err.getvalue(), started
+
+    # -- the work directory ------------------------------------------------------
+
+    def test_agent_works_in_an_empty_directory_and_reads_the_corpus_through_add_dir(self):
+        w = self.world
+        sources_read = []
+
+        def script(request):
+            if is_preflight(request):
+                return preflight_run(request)
+            if not sources_read:  # the first measured run strays into the sources
+                sources_read.append(str(w.export / "Src" / "Placeholder" / "LoadAction.cs"))
+                return answer_run(*correct_answer("ukazka-a"), reads=sources_read)
+            return answer_run(*correct_answer("ukazka-a"),
+                              reads=[os.path.join(os.path.realpath(request.corpus_dir),
+                                                  "index.md")])
+
+        with self.measurable():
+            adapter, outcome = self.run_scripted(script, self.support_config())
+        runs = [r for r in adapter.requests if not is_preflight(r)]
+        self.assertEqual(len(runs), 6 + 1)  # one spoiled attempt is replaced
+        workdirs = {os.path.realpath(r.workdir) for r in runs}
+        self.assertEqual(workdirs, {os.path.realpath(w.support_workdir)})
+        self.assertNotEqual(workdirs, {os.path.realpath(w.export)})
+        self.assertEqual(list(w.support_workdir.iterdir()), [])
+        self.assertTrue(any(w.export.rglob("*.cs")))  # the sources exist, elsewhere
+        self.assertEqual({r.corpus_dir.name for r in runs}, {"corpus-a", "corpus-b"})
+        results = [json.loads(p.read_text(encoding="utf-8"))
+                   for p in sorted((outcome.directory / "runs").glob("*.result.json"))]
+        spoiled = [r for r in results if r["state"] == "spoiled"]
+        self.assertEqual(len(spoiled), 1)
+        self.assertTrue(spoiled[0]["spoil_reasons"][0].startswith("path_outside"))
+        self.assertIn("LoadAction.cs", spoiled[0]["spoil_reasons"][0])
+        self.assertEqual([r["state"] for r in results if r is not spoiled[0]],
+                         ["success"] * 6)
+
+    def test_developer_role_still_works_in_the_exported_tree(self):
+        adapter, outcome = self.run_scripted(self.honest, self.world.config(role="vyvojar"))
+        runs = [r for r in adapter.requests if not is_preflight(r)]
+        self.assertEqual({os.path.realpath(r.workdir) for r in runs},
+                         {os.path.realpath(self.world.export)})
+        self.assertFalse(self.world.support_workdir.exists())
+        self.assertEqual(outcome.report["experiment"]["role"], "vyvojar")
+        self.assertEqual(outcome.report["experiment"]["not_measured"], [])
+
+    def test_tool_check_creates_no_work_directory_with_sources(self):
+        adapter, outcome = self.run_scripted(self.honest, self.support_config())
+        checks = adapter.requests
+        self.assertEqual(len(checks), 2)
+        self.assertTrue(all(is_preflight(r) for r in checks))
+        for request in checks:
+            with self.subTest(variant=request.workdir.parent.name):
+                self.assertEqual(request.workdir.name, "empty-work")
+                self.assertEqual(list(request.workdir.iterdir()), [])
+                self.assertFalse((request.workdir.parent / "work").exists())
+                self.assertIn("index.md", request.prompt)
+        self.assertTrue(json.loads((outcome.directory / "preflight.json")
+                                   .read_text(encoding="utf-8"))["ok"])
+
+    # -- what is measured ------------------------------------------------------------
+
+    def test_mixed_catalog_sets_the_bugs_aside_and_lists_them(self):
+        adapter, outcome = self.run_scripted(self.honest, self.support_config())
+        self.assertEqual(outcome.status, "completed")
+        self.assertEqual(len(adapter.requests), 2)  # the tool check only: no run
+        report = json.loads((outcome.directory / "report.json").read_text(encoding="utf-8"))
+        experiment = report["experiment"]
+        self.assertEqual(experiment["role"], "podpora")
+        self.assertEqual(experiment["not_measured"],
+                         [{"id": "ukazka-a", "reason": "v roli podpora se neměří"}])
+        self.assertEqual((report["cases"], experiment["cases"]), ([], []))
+        self.assertEqual(list((outcome.directory / "runs").iterdir()), [])
+        self.assertEqual(list((outcome.directory / "prompts").iterdir()), [])
+        schedule = json.loads((outcome.directory / "schedule.json").read_text(encoding="utf-8"))
+        self.assertEqual(schedule["planned"], [])
+        markdown = (outcome.directory / "report.md").read_text(encoding="utf-8")
+        self.assertIn("ukazka-a: v roli podpora se neměří", markdown)
+        self.assertIn("- Role: podpora", markdown)
+
+    def test_catalog_with_only_bugs_is_refused_in_the_support_role(self):
+        data = json.loads(self.world.catalog.read_text(encoding="utf-8"))
+        data.update(format_version=2, cases=[c for c in data["cases"] if c["druh"] == "chyba"])
+        self.world.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(ConfigError) as ctx:
+            run_experiment(self.support_config(),
+                           adapter_factory=lambda c, p: self.fail("agent nesmí startovat"))
+        self.assertIn("neměří", str(ctx.exception))
+        self.assertFalse(self.world.output.exists())
+        code, err, _ = self.main(self.argv(
+            "--variants", self.variants_file([{"name": "A", "corpus_dir": "corpus-a"},
+                                               {"name": "B", "corpus_dir": "corpus-b"}]),
+            "--dry-run"))
+        self.assertEqual(code, 2)
+        self.assertIn("neměří", err)
+
+    def test_variant_without_a_corpus_is_refused_in_the_support_role(self):
+        variants = (VariantSpec("bez karet"), self.world.corpus_variant("s kartami", "corpus"))
+        with self.assertRaises(ConfigError) as ctx:
+            run_experiment(self.world.config(variants=variants, role="podpora"),
+                           adapter_factory=lambda c, p: self.fail("agent nesmí startovat"))
+        self.assertIn("bez karet", str(ctx.exception))
+        self.assertIn("nemá korpus", str(ctx.exception))
+        self.assertFalse(self.world.output.exists())
+        code, err, started = self.main(self.argv(
+            "--variants", self.variants_file([{"name": "bez karet"},
+                                               {"name": "s kartami", "corpus_dir": "corpus"}])))
+        self.assertEqual(code, 2)
+        self.assertIn("nemá korpus", err)
+        started.assert_not_called()
+
+    def test_default_variants_end_with_code_2_and_the_advice(self):
+        code, err, started = self.main(self.argv("--corpus-dir", str(self.world.root / "corpus")))
+        self.assertEqual(code, 2)
+        self.assertIn("--variants", err)
+        self.assertIn("dva korpusy", err)
+        started.assert_not_called()
+        self.assertFalse(self.world.output.exists())
+
+    def test_dry_run_in_the_support_role_names_the_set_aside_bugs(self):
+        out = io.StringIO()
+        argv = self.argv("--variants", self.variants_file(
+            [{"name": "A", "corpus_dir": "corpus-a"}, {"name": "B", "corpus_dir": "corpus-b"}]),
+            "--dry-run")
+        with mock.patch.object(run, "run_experiment") as started, redirect_stdout(out):
+            code = run.main(argv)
+        self.assertEqual(code, 0)
+        started.assert_not_called()
+        self.assertIn("ukazka-a", out.getvalue())
+        self.assertIn("v roli podpora se neměří", out.getvalue())
+        self.assertIn("Běhů v rozvrhu: 0", out.getvalue())
+        self.assertFalse(self.world.output.exists())
+        self.assertFalse(self.world.support_workdir.exists())
+
+    # -- the role itself ---------------------------------------------------------------
+
+    def test_role_has_no_silent_default(self):
+        for argv in (self.argv(role=None), self.argv(role="ctenar")):
+            with self.subTest(argv=argv[-2:]), redirect_stderr(io.StringIO()) as err:
+                with self.assertRaises(SystemExit) as ctx:
+                    run.main(argv)
+                self.assertEqual(ctx.exception.code, 2)
+                self.assertIn("--role", err.getvalue())
+        with self.assertRaises(TypeError):  # nor does the configuration
+            run.ExperimentConfig(**{k: None for k in ("catalog_path", "source_repo",
+                                                      "output_root", "export_dir",
+                                                      "isolation_root", "ra_command", "model",
+                                                      "cap", "seed", "variants")})
+
+    def test_unknown_role_in_the_configuration_is_refused(self):
+        with self.assertRaises(ConfigError):
+            run_experiment(self.world.config(role="ctenar"),
+                           adapter_factory=lambda c, p: self.fail("agent nesmí startovat"))
+
+    def test_prompts_of_the_two_variants_differ_only_in_the_sources_paragraph(self):
+        _, outcome = self.run_scripted(self.honest, self.support_config())
+        meta = outcome.report["experiment"]["variants"]
+
+        def split(text):
+            head, rest = text.split("Dostupné zdroje:\n", 1)
+            sources, tail = rest.split("\n\n", 1)
+            return head, sources, tail
+
+        a, b = (split(v["prompt_template"]) for v in meta)
+        self.assertEqual((a[0], a[2]), (b[0], b[2]))
+        corpus_a, corpus_b = (os.path.realpath(self.world.root / n)
+                              for n in ("corpus-a", "corpus-b"))
+        self.assertIn(corpus_a.lower(), a[1].lower())
+        self.assertIn(corpus_b.lower(), b[1].lower())
+        for sources in (a[1], b[1]):
+            self.assertIn("Zdrojáky systému nemáš", sources)
+            self.assertNotIn("jsou v pracovním adresáři", sources)
+        self.assertEqual(a[1].replace(corpus_a, "<korpus>"), b[1].replace(corpus_b, "<korpus>"))
+        self.assertIn("relativně ke kořeni zdrojáků systému", a[2] + a[0])
+
+    # -- the location checks -------------------------------------------------------------
+
+    def test_the_support_work_directory_gets_the_same_overlap_checks_as_the_export(self):
+        w = self.world
+        for what, overrides in (
+                ("kořen izolace", {"isolation_root": w.support_workdir}),
+                ("kořen výstupu", {"output_root": w.support_workdir / "out"})):
+            with self.subTest(what=what):
+                with self.assertRaises(ConfigError) as ctx:
+                    run.resolve_paths(self.support_config(**overrides))
+                self.assertIn("pracovní adresář role podpora", str(ctx.exception))
+        w.support_workdir.mkdir()
+        (w.support_workdir / "zbytek.txt").write_text("x", encoding="utf-8")
+        with self.assertRaises(ConfigError) as ctx:
+            run.resolve_paths(self.support_config())
+        self.assertIn("už existuje", str(ctx.exception))
+
+
 class PrepareOnlyTest(ExperimentTestCase):
     cases = 1
 
@@ -409,7 +643,8 @@ class DryRunTest(ExperimentTestCase):
                 "--output-root", str(w.output), "--export-dir", str(w.export),
                 "--isolation-root", str(w.isolation), "--ra-binary", "ra", "--model", "m",
                 "--cap-seconds", "600", "--cap-steps", "50", "--cap-tokens", "100000",
-                "--seed", "7", "--corpus-dir", str(w.root / "corpus"), "--dry-run"]
+                "--seed", "7", "--role", "vyvojar", "--corpus-dir", str(w.root / "corpus"),
+                "--dry-run"]
         out = io.StringIO()
         with mock.patch.object(run, "run_experiment") as started, \
                 mock.patch.object(run, "default_adapter") as adapter, redirect_stdout(out):
@@ -430,7 +665,7 @@ class DryRunTest(ExperimentTestCase):
                 "--output-root", str(w.output), "--export-dir", str(w.export),
                 "--isolation-root", str(w.isolation), "--ra-binary", "ra", "--model", "m",
                 "--cap-seconds", "600", "--cap-steps", "50", "--cap-tokens", "100000",
-                "--seed", "7", "--corpus-dir", str(w.root / "ws" / "corpus"),
+                "--seed", "7", "--role", "vyvojar", "--corpus-dir", str(w.root / "ws" / "corpus"),
                 "--forbid-dir", "other", "--forbid-dir", "WS", "--dry-run"]
         err = io.StringIO()
         with mock.patch.object(run, "run_experiment") as started, redirect_stderr(err):

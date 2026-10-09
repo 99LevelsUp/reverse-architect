@@ -94,11 +94,22 @@ Bez souboru variant porovná běžeč dvojici „bez karet“ a „s kartami“.
 
 Pokus porovnává právě dvě varianty s různými jmény. První je referenční, druhá srovnávaná. Varianta bez korpusu má `"corpus_dir": null` nebo pole nemá, volby RA bez korpusu běžeč odmítne. Nepovinné pole `card_format` jen popisuje formát karet ve zprávě. Relativní cesty v souboru variant se berou od souboru.
 
+Nepovinné pole `ra_command` určuje příkaz RA jen pro korpus té varianty: neprázdný seznam textů, binárka a její pevné argumenty (například `["<jiná binárka RA>"]`), vzatý tak, jak je zapsaný. Bez něj korpus vygeneruje `--ra-binary`. Tak jde porovnat dvě verze RA: každá varianta má vlastní příkaz a verzi RA si běžeč zapíše do účtenky a do zprávy. Příkaz RA bez korpusu běžeč odmítne.
+
 Korpus každé varianty vygeneruje běžeč sám binárkou RA z exportu základní revize a vedle korpusu zapíše účtenku `<korpus>.receipt.json`: revizi, otisk stromu, verzi RA, volby a otisk korpusu. Korpus bez platné účtenky, z jiného stromu nebo změněný po vystavení účtenky běžeč odmítne. Agent dostane korpus jen jako adresář se soubory, které čte a prohledává stejnými nástroji jako zdrojáky. Každá varianta vidí jen svůj korpus, čtení cizího korpusu běh zkazí.
 
 Korpus jde připravit předem: `--prepare-only` provede export, kontrolu případů a vygeneruje korpusy s účtenkou, pak skončí. Agenta nespustí. Korpus si tak před pokusem prohlédneš.
 
 Další spuštění potřebuje nový prázdný `--export-dir`. Korpus se znovu použije podle účtenky, pokud jsou volby RA stejné jako při generování.
+
+#### Role čtenáře (`--role`)
+
+`--role` je povinná a nemá výchozí hodnotu, bez ní běžeč neběží.
+
+- `vyvojar`: agent je čtenář se zdrojáky. Pracuje v exportu základní revize, platí výchozí dvojice variant. Takhle běžel každý dosavadní pokus.
+- `podpora`: agent je čtenář bez zdrojáků. Jeho pracovní adresář je prázdný izolovaný adresář (vedle `--export-dir`, pojmenovaný podle něj s příponou `-podpora-prazdny`, musí neexistovat nebo být prázdný) a korpus čte přes `--add-dir`. Zadání říká, že zdrojáky nemá, a audit uznává jen korpus: čtení souboru ze zdrojáků je `path_outside` a běh se zkazí. Kontrola nástroje pro tuto roli nevytváří pracovní adresář se zdrojáky.
+
+V roli `podpora` se položky druhu `chyba` neměří. Zpráva je uvede jako „v roli podpora se neměří“. Katalog bez jiné položky než `chyba` běžeč odmítne (kód 2). Výchozí dvojice variant tu nedává smysl („bez karet“ nemá co číst), proto se obě varianty zadávají výslovně souborem `--variants`, každá s korpusem. Výchozí volání i varianta bez korpusu skončí kódem 2. Role je ve zprávě, v `report.json` jako `experiment.role` a seznam neměřených položek jako `experiment.not_measured`.
 
 ### 5. Spuštění z externího terminálu
 
@@ -121,6 +132,7 @@ python tools\search-eval\run.py `
   --model <model agenta> `
   --cap-seconds <s> --cap-steps <kroky> --cap-tokens <tokeny> `
   --seed <semínko> `
+  --role <vyvojar|podpora> `
   --corpus-dir <adresář pokusu>\korpus-s-kartami `
   --dry-run
 ```

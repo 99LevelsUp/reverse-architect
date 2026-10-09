@@ -17,6 +17,7 @@ What spoils a run (one `AuditFinding` per problem):
   argument.
 * `path_outside` — a path outside the work tree (and, when the variant has a
   corpus, outside the corpus). Relative paths resolve against the work tree.
+  In the support role the corpus is the only permitted location.
 
 Every path is judged at two locations, and a finding at either counts: its
 literal prefix up to the first glob character (`../../x/**` leaves the tree)
@@ -55,10 +56,17 @@ class AuditFinding:
     detail: str
 
 
-def audit_run(record: RunRecord) -> tuple[AuditFinding, ...]:
-    """Every forbidden attempt in the run; empty means the run is clean."""
+def audit_run(record: RunRecord, *, corpus_only: bool = False) -> tuple[AuditFinding, ...]:
+    """Every forbidden attempt in the run; empty means the run is clean.
+
+    With `corpus_only` (the support role, KTD9) only the corpus is a permitted
+    location: the work directory is an empty directory without sources, so a
+    read of a file from the sources, or of anything that is not the corpus, is
+    `path_outside`. Relative paths still resolve against the work directory,
+    which therefore counts as outside as well.
+    """
     workdir = canonical_path(record.workdir)
-    roots = [workdir]
+    roots = [] if corpus_only else [workdir]
     if record.corpus_dir:
         roots.append(canonical_path(record.corpus_dir))
     config_dir = canonical_path(record.config_dir)
