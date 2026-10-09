@@ -65,7 +65,7 @@ impl Language {
             Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
             #[cfg(feature = "python")]
             Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
-            #[cfg(feature = "csharp")]
+            #[cfg(any(feature = "csharp", feature = "csharp-body"))]
             Language::CSharp => Some(tree_sitter_c_sharp::LANGUAGE.into()),
             #[cfg(feature = "go")]
             Language::Go => Some(tree_sitter_go::LANGUAGE.into()),

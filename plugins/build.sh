@@ -24,6 +24,9 @@ for lang in rust ecmascript python csharp go java; do
   cargo build --release --target wasm32-wasip2 -p treesitter --features "$lang"
   cp "$out/treesitter.wasm" "prebuilt/$lang.wasm"
 done
+# The bodies of C# members (contract 0.3): the same crate, its own component.
+cargo build --release --target wasm32-wasip2 -p treesitter --features csharp-body
+cp "$out/treesitter.wasm" prebuilt/csharp-body.wasm
 # Built like a third party's plugin: its own workspace, the published WIT only.
 (cd ../examples/plugin-sql && cargo build --release --target wasm32-wasip2)
 cp ../examples/plugin-sql/target/wasm32-wasip2/release/plugin_sql.wasm prebuilt/sql.wasm

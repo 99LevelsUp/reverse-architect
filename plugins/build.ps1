@@ -32,6 +32,8 @@ Build "probe3" $null "probe3"
 foreach ($lang in "rust", "ecmascript", "python", "csharp", "go", "java") {
   Build "treesitter" $lang $lang
 }
+# The bodies of C# members (contract 0.3): the same crate, its own component.
+Build "treesitter" "csharp-body" "csharp-body"
 # Built like a third party's plugin: its own workspace, the published WIT only.
 if ($Only.Count -eq 0 -or $Only -contains "sql") {
   Push-Location "$PSScriptRoot\..\examples\plugin-sql"
