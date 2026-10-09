@@ -50,7 +50,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Protocol, Sequence
+from typing import Any, Iterator, Mapping, Protocol, Sequence
 
 from prepare import canonical_path
 
@@ -362,6 +362,50 @@ def isolated_config_dir(isolation_root: str | os.PathLike[str],
         yield target
     finally:
         remove_tree(target)
+
+
+# Inherited from the parent only because the OS or the runtime needs them. The
+# Claude adapter keeps its own copy of this list (`claude_code._INHERITED_ENV`);
+# the two are meant to stay equal.
+INHERITED_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+                 "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+
+
+def build_isolated_env(parent: Mapping[str, str], config_dir: str | os.PathLike[str], *,
+                       passthrough: Sequence[str] = (),
+                       fixed: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The child's whole environment, built from an allow-list (agent-neutral).
+
+    Counterpart of `claude_code.build_env` for CLIs that are not Claude Code
+    (the judge, KTD6). Only the OS/runtime variables of `INHERITED_ENV` and the
+    variables named in `passthrough` (names matched case-insensitively, as on
+    Windows) are taken from `parent`; home, temp and cache directories all
+    point into `config_dir`; `fixed` adds the variables one CLI family needs
+    (its own configuration directory). `fixed` wins over `passthrough`, and a
+    passed-through variable never overrides the isolation variables, so an
+    allow-listed name cannot redirect the CLI out of its private directory.
+    """
+    by_upper = {key.upper(): value for key, value in parent.items()}
+    env = {name: by_upper[name] for name in INHERITED_ENV if name in by_upper}
+    for name in passthrough:
+        if name.upper() in by_upper:
+            env[name.upper() if os.name == "nt" else name] = by_upper[name.upper()]
+    cfg = Path(config_dir)
+    tmp = cfg / "tmp"
+    env.update({
+        "HOME": str(cfg),
+        "USERPROFILE": str(cfg),
+        "APPDATA": str(cfg / "appdata"),
+        "LOCALAPPDATA": str(cfg / "localappdata"),
+        "XDG_CONFIG_HOME": str(cfg / "xdg-config"),
+        "XDG_CACHE_HOME": str(cfg / "xdg-cache"),
+        "XDG_DATA_HOME": str(cfg / "xdg-data"),
+        "TEMP": str(tmp),
+        "TMP": str(tmp),
+        "TMPDIR": str(tmp),
+    })
+    env.update(fixed or {})
+    return env
 
 
 def seed_config_files(config_dir: Path, files: Sequence[tuple[str, str]]) -> None:
