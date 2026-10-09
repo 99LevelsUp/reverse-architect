@@ -1,0 +1,25 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| six_grammar::MANIFESTS.contains(&p.file.as_str()))"
+---
+--- facts ---
+File Cargo.toml
+  Loc = 7  [metrics Measured Heuristic @ Cargo.toml:whole]
+Dependency dep:cargo:serde
+  DependencyName = "serde"  [manifest-deps Measured Heuristic @ Cargo.toml:whole]
+  DependencyScope = "normal"  [manifest-deps Measured Heuristic @ Cargo.toml:whole]
+Dependency dep:go:github.com/google/uuid
+  DependencyName = "github.com/google/uuid"  [manifest-deps Measured Heuristic @ go.mod:whole]
+  DependencyScope = "normal"  [manifest-deps Measured Heuristic @ go.mod:whole]
+Dependency dep:npm:left-pad
+  DependencyName = "left-pad"  [manifest-deps Measured Heuristic @ package.json:whole]
+  DependencyScope = "normal"  [manifest-deps Measured Heuristic @ package.json:whole]
+File package.json
+  Loc = 7  [metrics Measured Heuristic @ package.json:whole]
+--- edges ---
+Contains . -> Cargo.toml  [filetree Measured Heuristic @ Cargo.toml:whole]
+Contains . -> go.mod  [filetree Measured Heuristic @ go.mod:whole]
+Contains . -> package.json  [filetree Measured Heuristic @ package.json:whole]
+DependsOn Cargo.toml -> dep:cargo:serde  [manifest-deps Measured Heuristic @ Cargo.toml:whole]
+DependsOn go.mod -> dep:go:github.com/google/uuid  [manifest-deps Measured Heuristic @ go.mod:whole]
+DependsOn package.json -> dep:npm:left-pad  [manifest-deps Measured Heuristic @ package.json:whole]

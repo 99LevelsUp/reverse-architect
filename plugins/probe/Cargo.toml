@@ -1,0 +1,13 @@
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test component for the plugin host: each input path exercises one sandbox boundary."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.51.0"
+getrandom = "=0.3.4"

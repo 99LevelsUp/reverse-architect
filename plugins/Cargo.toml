@@ -1,0 +1,17 @@
+# The plugin workspace: WebAssembly components built for `wasm32-wasip2`.
+#
+# Kept out of the host's build on purpose. The host embeds the COMMITTED
+# artifacts under `prebuilt/`, a deliberate packaging decision,
+# so installing reverse-architect never needs a
+# wasm toolchain; rebuilding a plugin does — see `build.ps1` / `build.sh`.
+[workspace]
+resolver = "2"
+members = ["probe", "treesitter"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+debug = false
+panic = "abort"

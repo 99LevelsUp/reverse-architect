@@ -1,0 +1,161 @@
+---
+source: tests/card.rs
+expression: combined
+---
+===== cards/module/_root.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# .
+
+**module** · 1 file · 1 sub-module · 17 lines
+
+A module: a directory and what it holds. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `.`
+
+## Role
+
+`(repository root)` holds 1 file and 1 sub-module (1 line here, 17 lines with its sub-modules).
+
+## Contents
+
+| Sub-module | Lines | Summary |
+|---|---|---|
+| [src](src.md) | 16 |  |
+
+| File | Lines | Declares |
+|---|---|---|
+| [appsettings.json](../file/appsettings.json.md) | 1 |  |
+
+===== cards/file/appsettings.json.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# appsettings.json
+
+**file** · in [(repository root)](../module/_root.md) · 1 line · `appsettings.json`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `appsettings.json`
+
+## Referenced by
+
+- contains [.](../module/_root.md) (heuristic) — `appsettings.json`
+
+===== cards/module/src.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# src
+
+**module** · part of [(repository root)](_root.md) · 2 files · 1 type · 16 lines
+
+A module: a directory and what it holds. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src`
+- Map: [1 type](../map/src.md)
+
+## Role
+
+`src` holds 2 files (16 lines), declaring 1 type.
+It was not seen depending on any other module of this repository.
+
+## Key types
+
+| Type | Kind | Used by | Summary |
+|---|---|---|---|
+| [Invoice](../type/csharp/Orbit.Billing/Invoice.md) | class | 0 | Faktura vydaná odběrateli. |
+
+## Contents
+
+| File | Lines | Declares |
+|---|---|---|
+| [Invoice.cs](../file/src/Invoice.cs.md) | 15 | [Invoice](../type/csharp/Orbit.Billing/Invoice.md) |
+| [notes.md](../file/src/notes.md.md) | 1 |  |
+
+## Referenced by
+
+- contains [.](_root.md) (heuristic) — `src`
+
+===== cards/file/src/Invoice.cs.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/Invoice.cs
+
+**file** · in [src](../../module/src.md) · 15 lines · `src/Invoice.cs`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src/Invoice.cs`
+
+## Role
+
+`src/Invoice.cs` declares 1 type: [Invoice](../../type/csharp/Orbit.Billing/Invoice.md).
+
+## Referenced by
+
+- contains [src](../../module/src.md) (heuristic) — `src/Invoice.cs`
+
+## Test pairing
+
+- test by convention not found (derived)
+
+===== cards/file/src/notes.md.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/notes.md
+
+**file** · in [src](../../module/src.md) · 1 line · `src/notes.md`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src/notes.md`
+
+## Referenced by
+
+- contains [src](../../module/src.md) (heuristic) — `src/notes.md`
+
+===== cards/type/csharp/Orbit.Billing/Invoice.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: type
+---
+
+# Invoice
+
+**public class** · in [src](../../../module/src.md) · 11 lines · `src/Invoice.cs:4-14`
+
+- Identity: `sym:csharp:Orbit.Billing#Invoice`
+- Detail: [detail](../../../detail/type/csharp/Orbit.Billing/Invoice.md)
+
+## Purpose
+
+Faktura vydaná odběrateli. (from the comment)
+
+## Role
+
+No other type or file in this repository was seen using `Invoice`.
+
+## Keywords
+
+faktura, invoice, odběrateli (odberateli), recalculate, total, vydaná (vydana)

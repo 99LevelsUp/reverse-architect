@@ -1,0 +1,109 @@
+---
+source: src/render/mermaid.rs
+expression: diagram(&edges).unwrap()
+---
+```mermaid
+flowchart TD
+    n0["."]
+    n1["src"]
+    n0 --> n1
+```
+
+```mermaid
+flowchart TD
+    n0["src"]
+    n1["src/a"]
+    n2["src/b"]
+    n0 --> n1
+    n0 --> n2
+```
+
+```mermaid
+flowchart TD
+    n0["src/a"]
+    n1["src/a/f00.rs"]
+    n2["src/a/f01.rs"]
+    n3["src/a/f02.rs"]
+    n4["src/a/f03.rs"]
+    n5["src/a/f04.rs"]
+    n6["src/a/f05.rs"]
+    n7["src/a/f06.rs"]
+    n8["src/a/f07.rs"]
+    n9["src/a/f08.rs"]
+    n10["src/a/f09.rs"]
+    n11["src/a/f10.rs"]
+    n12["src/a/f11.rs"]
+    n13["src/a/f12.rs"]
+    n14["src/a/f13.rs"]
+    n15["src/a/f14.rs"]
+    n16["src/a/f15.rs"]
+    n17["src/a/f16.rs"]
+    n18["src/a/f17.rs"]
+    n19["src/a/f18.rs"]
+    n20["src/a/f19.rs"]
+    n0 --> n1
+    n0 --> n2
+    n0 --> n3
+    n0 --> n4
+    n0 --> n5
+    n0 --> n6
+    n0 --> n7
+    n0 --> n8
+    n0 --> n9
+    n0 --> n10
+    n0 --> n11
+    n0 --> n12
+    n0 --> n13
+    n0 --> n14
+    n0 --> n15
+    n0 --> n16
+    n0 --> n17
+    n0 --> n18
+    n0 --> n19
+    n0 --> n20
+```
+
+```mermaid
+flowchart TD
+    n0["src/b"]
+    n1["src/b/f00.rs"]
+    n2["src/b/f01.rs"]
+    n3["src/b/f02.rs"]
+    n4["src/b/f03.rs"]
+    n5["src/b/f04.rs"]
+    n6["src/b/f05.rs"]
+    n7["src/b/f06.rs"]
+    n8["src/b/f07.rs"]
+    n9["src/b/f08.rs"]
+    n10["src/b/f09.rs"]
+    n11["src/b/f10.rs"]
+    n12["src/b/f11.rs"]
+    n13["src/b/f12.rs"]
+    n14["src/b/f13.rs"]
+    n15["src/b/f14.rs"]
+    n16["src/b/f15.rs"]
+    n17["src/b/f16.rs"]
+    n18["src/b/f17.rs"]
+    n19["src/b/f18.rs"]
+    n20["src/b/f19.rs"]
+    n0 --> n1
+    n0 --> n2
+    n0 --> n3
+    n0 --> n4
+    n0 --> n5
+    n0 --> n6
+    n0 --> n7
+    n0 --> n8
+    n0 --> n9
+    n0 --> n10
+    n0 --> n11
+    n0 --> n12
+    n0 --> n13
+    n0 --> n14
+    n0 --> n15
+    n0 --> n16
+    n0 --> n17
+    n0 --> n18
+    n0 --> n19
+    n0 --> n20
+```

@@ -1,0 +1,44 @@
+# Rust build output
+/target/
+# Plugin workspace build output (the committed artifacts live in plugins/prebuilt/)
+/plugins/target/
+# Example plugins build in their own workspaces (their Cargo.lock is committed,
+# so a rebuilt bundled component comes from the same dependency set)
+/examples/*/target/
+**/*.rs.bk
+
+# insta: unreviewed pending snapshots (accepted ones live in committed *.snap)
+*.snap.new
+*.pending-snap
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*~
+
+# cross-CLI review scratch output
+/.review-out/
+
+# Python bytecode (tools/search-eval)
+__pycache__/
+
+# Working documents (plans, ideation, brainstorms, reviews, backlog, measurements)
+# stay local and are never committed. Only user-facing docs are listed back in.
+/docs/*
+!/docs/plugins.md
+!/docs/wasm-toolchain.md
+# Measurement reports are part of the code: a granted delete right names one
+# and a test checks it is committed. Only the reports and their guide are public.
+!/docs/measurements/
+/docs/measurements/*
+!/docs/measurements/README.md
+!/docs/measurements/*.json
+/reference/
+/CONTEXT.md
+CLAUDE.md
+/.claude/

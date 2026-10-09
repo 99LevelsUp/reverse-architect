@@ -1,0 +1,1559 @@
+---
+source: tests/vocabulary_baseline.rs
+expression: projection()
+---
+=== corpus/index.md ===
+# Architecture corpus
+
+This corpus was generated deterministically from the source's file enumeration — no inference, no LLM.
+
+## Views
+
+- [Overview](overview.md)
+- [Module structure](module-structure.md)
+- [Dependencies](dependencies.md)
+- [Entry points](entry-points.md)
+- [Test coverage](test-coverage.md)
+
+## Modules
+
+| Module | Files | Lines | Types | Summary |
+|---|---|---|---|---|
+| [(repository root)](cards/module/_root.md) | 2 |  | 0 |  |
+| [src](cards/module/src.md) | 1 |  | [1](cards/map/src.md) |  |
+| [src/extract](cards/module/src/extract.md) | 1 |  | 0 |  |
+
+## Notable types
+
+| Type | Kind | Module | Used by | Summary |
+|---|---|---|---|---|
+| [sym:src/lib.rs#Corpus](cards/type/src/lib.rs/Corpus.md) | struct | [src](cards/module/src.md) | 0 |  |
+
+=== corpus/overview.md ===
+# Overview
+
+**Guiding question:** What is this repository, and how is it shaped at the top level?
+
+## Problem
+
+A newcomer needs a truthful first picture of a repository — what it contains and how it is shaped — before trusting any deeper claim. Guessed overviews mislead; this one is built only from the files the source enumerates.
+
+## Mechanism
+
+The overview counts the enumerated files and modules, lists the top-level entries and ranks the modules that hold the most files. Every number is derived deterministically from the file enumeration this run was given — the git index at HEAD where there is a repository, the tree itself where there is not — with no history, no inference and no LLM.
+
+## In this repository
+
+- 4 tracked files across 2 modules.
+- Top-level entries: Cargo.toml, README.md, src.
+- Largest modules: `src` (2 files), `src/extract` (1 file).
+
+
+=== corpus/module-structure.md ===
+# Module structure
+
+**Guiding question:** How is the code split into modules, and what does each module contain?
+
+## Problem
+
+To navigate or change a codebase you must know how it is partitioned into modules and what each holds. Without that map, every change risks landing in the wrong place.
+
+## Mechanism
+
+Enumerated directories become modules; each module's contents are the files and sub-modules the enumeration records beneath it. The structure is read from the file tree, never assumed.
+
+## Diagram
+
+```mermaid
+flowchart TD
+    n0["."]
+    n1["Cargo.toml"]
+    n2["README.md"]
+    n3["src"]
+    n4["src/extract"]
+    n5["src/extract/walk.rs"]
+    n6["src/lib.rs"]
+    n0 --> n1
+    n0 --> n2
+    n0 --> n3
+    n3 --> n4
+    n3 --> n6
+    n4 --> n5
+```
+
+## In this repository
+
+- `src` — 2 entries, 2 files
+  - `src/extract` — 1 file
+
+
+=== corpus/dependencies.md ===
+# Dependencies
+
+**Guiding question:** What external code does this repository depend on, and how?
+
+## Problem
+
+Every dependency is a promise the codebase cannot keep on its own — a surface for bugs, licensing, and supply-chain risk. To reason about a repository you must know what it pulls in, and whether each is needed to ship or only to build and test.
+
+## Mechanism
+
+Dependencies are read from the ecosystem manifests the enumeration contains — `Cargo.toml`, `package.json`, `go.mod`, `*.csproj`. Each is tagged with the scope it was declared under (normal vs. dev) and the manifest that declares it. Nothing is inferred from source; a dependency no enumerated manifest names is never listed.
+
+## Diagram
+
+```mermaid
+flowchart TD
+    n0["Cargo.toml"]
+    n1["dep:cargo:serde"]
+    n0 --> n1
+```
+
+## In this repository
+
+- `serde` (unscoped) — declared in `Cargo.toml`.
+
+
+=== corpus/entry-points.md ===
+# Entry points
+
+**Guiding question:** Where does execution start, and how is this code entered?
+
+## Problem
+
+To read a program you need a way in — the point where control first lands. Missing the real entry points sends a reader down the wrong path; claiming there are none where the floor simply cannot see them is worse, because it reads as a fact.
+
+## Mechanism
+
+Entry points come from two honest sources: language-level starts the grammar can see (a Rust/Go/C# `main`, a Python `__main__` guard, a C# top-level program) and manifest declarations (a Cargo `[[bin]]`/`[lib]`, a `package.json` `main`/`bin`, a `.csproj` `OutputType`). Framework-level entries — web routes, message handlers, scheduled jobs — are outside what a deterministic floor can detect, so their absence here is never asserted as their absence in the code (E9).
+
+## In this repository
+
+- No language-level or manifest-declared entry point was detected — a library or a framework-driven project may expose none of these directly.
+- Framework-level entry points — web routes, message handlers, scheduled jobs, dependency-injected services — are invisible to the deterministic floor; this list is what the code and manifests declare, not a proof that no other entry exists.
+
+
+=== corpus/test-coverage.md ===
+# Test coverage
+
+**Guiding question:** Which sources have a test by convention, and how far does extraction reach?
+
+## Problem
+
+Tests are evidence a piece of code was meant to hold a contract. Knowing which sources have a paired test — and being honest about the limits of a name-based check — tells a reader where the safety net is, without ever pretending a missing match proves a missing test.
+
+## Mechanism
+
+A source is paired with a test when the two share a language and a stem under the ecosystem's naming convention (`foo_test.rs`, `test_foo.py`, `Foo.test.ts`, `FooTests.cs`). The check reads names and the file tree only, never contents — so it can confirm a convention-matching test but never prove one absent, hence "test by convention not found", never "untested". A per-language extraction-coverage line reports how many sources carry tree-sitter structural facts versus only metrics and the file tree.
+
+## In this repository
+
+> No facts were found for this view.
+
+
+=== manifest ===
+{
+  "schema_version": 10,
+  "strings": [
+    ".",
+    "Cargo.toml",
+    "README.md",
+    "dep:cargo:serde",
+    "ext:rust:std::fmt::Display",
+    "src/lib.rs",
+    "src",
+    "src/extract",
+    "src/extract/walk.rs",
+    "sym:src/lib.rs#Corpus"
+  ],
+  "documents": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "guiding_question": "What is this repository, and how is it shaped at the top level?",
+      "path": "overview.md",
+      "chunks": [
+        {
+          "id": "overview#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "overview#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "overview#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "module-structure",
+      "title": "Module structure",
+      "guiding_question": "How is the code split into modules, and what does each module contain?",
+      "path": "module-structure.md",
+      "chunks": [
+        {
+          "id": "module-structure#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "module-structure#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "module-structure#diagram",
+          "heading": "Diagram"
+        },
+        {
+          "id": "module-structure#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "dependencies",
+      "title": "Dependencies",
+      "guiding_question": "What external code does this repository depend on, and how?",
+      "path": "dependencies.md",
+      "chunks": [
+        {
+          "id": "dependencies#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "dependencies#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "dependencies#diagram",
+          "heading": "Diagram"
+        },
+        {
+          "id": "dependencies#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "entry-points",
+      "title": "Entry points",
+      "guiding_question": "Where does execution start, and how is this code entered?",
+      "path": "entry-points.md",
+      "chunks": [
+        {
+          "id": "entry-points#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "entry-points#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "entry-points#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "test-coverage",
+      "title": "Test coverage",
+      "guiding_question": "Which sources have a test by convention, and how far does extraction reach?",
+      "path": "test-coverage.md",
+      "chunks": [
+        {
+          "id": "test-coverage#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "test-coverage#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "test-coverage#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "key_id": 0,
+      "kind": "module",
+      "facts": []
+    },
+    {
+      "key_id": 1,
+      "kind": "file",
+      "facts": []
+    },
+    {
+      "key_id": 2,
+      "kind": "file",
+      "facts": []
+    },
+    {
+      "key_id": 3,
+      "kind": "dependency",
+      "facts": [
+        {
+          "kind": "dependency_name",
+          "value": "serde",
+          "provenance": {
+            "file_id": 1,
+            "line": 1,
+            "extractor": "baseline",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 4,
+      "kind": "external",
+      "facts": [
+        {
+          "kind": "external_name",
+          "value": "std::fmt::Display",
+          "provenance": {
+            "file_id": 5,
+            "line": 1,
+            "extractor": "baseline",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 6,
+      "kind": "module",
+      "facts": []
+    },
+    {
+      "key_id": 7,
+      "kind": "module",
+      "facts": []
+    },
+    {
+      "key_id": 8,
+      "kind": "file",
+      "facts": []
+    },
+    {
+      "key_id": 5,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 42,
+          "provenance": {
+            "file_id": 5,
+            "line": 1,
+            "extractor": "baseline",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 9,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_kind",
+          "value": "struct",
+          "provenance": {
+            "file_id": 5,
+            "line": 1,
+            "extractor": "baseline",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from_id": 0,
+      "to_id": 1,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 0,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 2,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 0,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 6,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 0,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 1,
+      "to_id": 3,
+      "kind": "depends_on",
+      "provenance": {
+        "file_id": 1,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 6,
+      "to_id": 7,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 6,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 6,
+      "to_id": 5,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 6,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 7,
+      "to_id": 8,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 7,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 5,
+      "to_id": 9,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 5,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 9,
+      "to_id": 4,
+      "kind": "uses",
+      "provenance": {
+        "file_id": 5,
+        "line": 1,
+        "extractor": "baseline",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    }
+  ]
+}
+=== manifest-strings.json ===
+{"schema_version":10,"strings":[".","Cargo.toml","README.md","dep:cargo:serde","ext:rust:std::fmt::Display","src/lib.rs","src","src/extract","src/extract/walk.rs","sym:src/lib.rs#Corpus"]}
+=== manifest-nodes.jsonl ===
+{"key_id":0,"kind":"module","facts":[]}
+{"key_id":1,"kind":"file","facts":[]}
+{"key_id":2,"kind":"file","facts":[]}
+{"key_id":3,"kind":"dependency","facts":[{"kind":"dependency_name","value":"serde","provenance":{"file_id":1,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}]}
+{"key_id":4,"kind":"external","facts":[{"kind":"external_name","value":"std::fmt::Display","provenance":{"file_id":5,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}]}
+{"key_id":6,"kind":"module","facts":[]}
+{"key_id":7,"kind":"module","facts":[]}
+{"key_id":8,"kind":"file","facts":[]}
+{"key_id":5,"kind":"file","facts":[{"kind":"loc","value":42,"provenance":{"file_id":5,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}]}
+{"key_id":9,"kind":"symbol","facts":[{"kind":"symbol_kind","value":"struct","provenance":{"file_id":5,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}]}
+
+=== manifest-edges.jsonl ===
+{"from_id":0,"to_id":1,"kind":"contains","provenance":{"file_id":0,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":0,"to_id":2,"kind":"contains","provenance":{"file_id":0,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":0,"to_id":6,"kind":"contains","provenance":{"file_id":0,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":1,"to_id":3,"kind":"depends_on","provenance":{"file_id":1,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":6,"to_id":7,"kind":"contains","provenance":{"file_id":6,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":6,"to_id":5,"kind":"contains","provenance":{"file_id":6,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":7,"to_id":8,"kind":"contains","provenance":{"file_id":7,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":5,"to_id":9,"kind":"declares","provenance":{"file_id":5,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+{"from_id":9,"to_id":4,"kind":"uses","provenance":{"file_id":5,"line":1,"extractor":"baseline","tier":"measured","resolution":"heuristic"},"dissent":[]}
+
+=== manifest-documents.jsonl ===
+{"id":"overview","title":"Overview","guiding_question":"What is this repository, and how is it shaped at the top level?","path":"overview.md","chunks":[{"id":"overview#problem","heading":"Problem"},{"id":"overview#mechanism","heading":"Mechanism"},{"id":"overview#in-this-repository","heading":"In this repository"}]}
+{"id":"module-structure","title":"Module structure","guiding_question":"How is the code split into modules, and what does each module contain?","path":"module-structure.md","chunks":[{"id":"module-structure#problem","heading":"Problem"},{"id":"module-structure#mechanism","heading":"Mechanism"},{"id":"module-structure#diagram","heading":"Diagram"},{"id":"module-structure#in-this-repository","heading":"In this repository"}]}
+{"id":"dependencies","title":"Dependencies","guiding_question":"What external code does this repository depend on, and how?","path":"dependencies.md","chunks":[{"id":"dependencies#problem","heading":"Problem"},{"id":"dependencies#mechanism","heading":"Mechanism"},{"id":"dependencies#diagram","heading":"Diagram"},{"id":"dependencies#in-this-repository","heading":"In this repository"}]}
+{"id":"entry-points","title":"Entry points","guiding_question":"Where does execution start, and how is this code entered?","path":"entry-points.md","chunks":[{"id":"entry-points#problem","heading":"Problem"},{"id":"entry-points#mechanism","heading":"Mechanism"},{"id":"entry-points#in-this-repository","heading":"In this repository"}]}
+{"id":"test-coverage","title":"Test coverage","guiding_question":"Which sources have a test by convention, and how far does extraction reach?","path":"test-coverage.md","chunks":[{"id":"test-coverage#problem","heading":"Problem"},{"id":"test-coverage#mechanism","heading":"Mechanism"},{"id":"test-coverage#in-this-repository","heading":"In this repository"}]}
+
+=== card En cards/module/_root.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# .
+
+**module** · 2 files · 1 sub-module
+
+A module: a directory and what it holds. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `.`
+
+## Role
+
+`(repository root)` holds 2 files and 1 sub-module (0 lines).
+
+## Contents
+
+| Sub-module | Lines | Summary |
+|---|---|---|
+| [src](src.md) |  |  |
+
+| File | Lines | Declares |
+|---|---|---|
+| [Cargo.toml](../file/Cargo.toml.md) |  |  |
+| [README.md](../file/README.md.md) |  |  |
+
+=== card En cards/file/Cargo.toml.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# Cargo.toml
+
+**file** · in [(repository root)](../module/_root.md) · `Cargo.toml`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `Cargo.toml`
+
+## Relations
+
+- depends_on `serde` (heuristic) — `Cargo.toml:1`
+
+## Referenced by
+
+- contains [.](../module/_root.md) (heuristic) — `.:1`
+
+=== card En cards/file/README.md.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# README.md
+
+**file** · in [(repository root)](../module/_root.md) · `README.md`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `README.md`
+
+## Referenced by
+
+- contains [.](../module/_root.md) (heuristic) — `.:1`
+
+=== card En cards/module/src.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# src
+
+**module** · part of [(repository root)](_root.md) · 1 file · 1 sub-module · 1 type
+
+A module: a directory and what it holds. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src`
+- Map: [1 type](../map/src.md)
+
+## Role
+
+`src` holds 1 file and 1 sub-module (42 lines), declaring 1 type.
+It was not seen depending on any other module of this repository.
+Outside the repository it reaches `std::fmt::Display`.
+
+## Key types
+
+| Type | Kind | Used by | Summary |
+|---|---|---|---|
+| [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md) | struct | 0 |  |
+
+## Contents
+
+| Sub-module | Lines | Summary |
+|---|---|---|
+| [src/extract](src/extract.md) |  |  |
+
+| File | Lines | Declares |
+|---|---|---|
+| [lib.rs](../file/src/lib.rs.md) | 42 | [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md) |
+
+## Outside the repository
+
+| External | Kind | Uses |
+|---|---|---|
+| `std::fmt::Display` |  | 1 |
+
+## Referenced by
+
+- contains [.](_root.md) (heuristic) — `.:1`
+
+=== card En cards/module/src/extract.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# src/extract
+
+**module** · part of [src](../src.md) · 1 file
+
+A module: a directory and what it holds. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src/extract`
+
+## Role
+
+`src/extract` holds 1 file (0 lines).
+
+## Contents
+
+| File | Lines | Declares |
+|---|---|---|
+| [walk.rs](../../file/src/extract/walk.rs.md) |  |  |
+
+## Referenced by
+
+- contains [src](../src.md) (heuristic) — `src:1`
+
+=== card En cards/file/src/extract/walk.rs.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/extract/walk.rs
+
+**file** · in [src/extract](../../../module/src/extract.md) · `src/extract/walk.rs`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src/extract/walk.rs`
+
+## Referenced by
+
+- contains [src/extract](../../../module/src/extract.md) (heuristic) — `src/extract:1`
+
+=== card En cards/file/src/lib.rs.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/lib.rs
+
+**file** · in [src](../../module/src.md) · 42 lines · `src/lib.rs`
+
+A file of this repository. The types it declares have cards of their own; this card holds what no type claims — free functions and similar items — and what the file as a whole imports and is used by. Whether nothing was declared or nothing could be extracted is coverage.json's to say. Everything below was read from the source, and every statement that has a place in it names that place.
+
+- Identity: `src/lib.rs`
+
+## Role
+
+`src/lib.rs` declares 1 type: [sym:src/lib.rs#Corpus](../../type/src/lib.rs/Corpus.md).
+
+## Referenced by
+
+- contains [src](../../module/src.md) (heuristic) — `src:1`
+
+=== card En cards/type/src/lib.rs/Corpus.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: type
+---
+
+# sym:src/lib.rs#Corpus
+
+**struct** · in [src](../../../module/src.md) · `src/lib.rs:1`
+
+- Identity: `sym:src/lib.rs#Corpus`
+
+## Purpose
+
+`struct` with no members. (from the structure)
+
+## Role
+
+No other type or file in this repository was seen using `sym:src/lib.rs#Corpus`.
+Outside the repository it reaches `std::fmt::Display`.
+
+=== map En cards/map/src.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: map
+of: module
+---
+
+# src
+
+**module map** · [src](../module/src.md) · 1 type
+
+One row per type of the module: its kind, its card, its purpose in brief and what sets it apart — the database objects it `writes`, `reads` or `calls`, what it implements or extends, and whether it is an entry point.
+
+## Types
+
+- struct [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md)
+
+=== card documents En ===
+[
+  {
+    "id": ".",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": ".",
+      "module": ".",
+      "kind": "module",
+      "name": "."
+    },
+    "title": ".",
+    "guiding_question": "What does `.` hold, and what does it depend on?",
+    "path": "cards/module/_root.md",
+    "chunks": [
+      {
+        "id": ".#role",
+        "heading": "Role"
+      },
+      {
+        "id": ".#contents",
+        "heading": "Contents"
+      }
+    ]
+  },
+  {
+    "id": "Cargo.toml",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "Cargo.toml",
+      "module": ".",
+      "kind": "file",
+      "name": "Cargo.toml"
+    },
+    "title": "Cargo.toml",
+    "guiding_question": "What does `Cargo.toml` declare, and what does it use?",
+    "path": "cards/file/Cargo.toml.md",
+    "chunks": [
+      {
+        "id": "Cargo.toml#relations",
+        "heading": "Relations"
+      },
+      {
+        "id": "Cargo.toml#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "README.md",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "README.md",
+      "module": ".",
+      "kind": "file",
+      "name": "README.md"
+    },
+    "title": "README.md",
+    "guiding_question": "What does `README.md` declare, and what does it use?",
+    "path": "cards/file/README.md.md",
+    "chunks": [
+      {
+        "id": "README.md#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": "src",
+      "module": "src",
+      "kind": "module",
+      "name": "src"
+    },
+    "title": "src",
+    "guiding_question": "What does `src` hold, and what does it depend on?",
+    "path": "cards/module/src.md",
+    "chunks": [
+      {
+        "id": "src#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src#key-types",
+        "heading": "Key types"
+      },
+      {
+        "id": "src#contents",
+        "heading": "Contents"
+      },
+      {
+        "id": "src#outside-the-repository",
+        "heading": "Outside the repository"
+      },
+      {
+        "id": "src#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/extract",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": "src/extract",
+      "module": "src/extract",
+      "kind": "module",
+      "name": "src/extract"
+    },
+    "title": "src/extract",
+    "guiding_question": "What does `src/extract` hold, and what does it depend on?",
+    "path": "cards/module/src/extract.md",
+    "chunks": [
+      {
+        "id": "src/extract#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src/extract#contents",
+        "heading": "Contents"
+      },
+      {
+        "id": "src/extract#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/extract/walk.rs",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "src/extract/walk.rs",
+      "module": "src/extract",
+      "kind": "file",
+      "name": "src/extract/walk.rs"
+    },
+    "title": "src/extract/walk.rs",
+    "guiding_question": "What does `src/extract/walk.rs` declare, and what does it use?",
+    "path": "cards/file/src/extract/walk.rs.md",
+    "chunks": [
+      {
+        "id": "src/extract/walk.rs#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/lib.rs",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "src/lib.rs",
+      "module": "src",
+      "kind": "file",
+      "name": "src/lib.rs"
+    },
+    "title": "src/lib.rs",
+    "guiding_question": "What does `src/lib.rs` declare, and what does it use?",
+    "path": "cards/file/src/lib.rs.md",
+    "chunks": [
+      {
+        "id": "src/lib.rs#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src/lib.rs#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "sym:src/lib.rs#Corpus",
+    "kind": "card:type",
+    "level": "card",
+    "parent": "map:src",
+    "header": {
+      "path": "src/lib.rs",
+      "module": "src",
+      "kind": "struct",
+      "name": "sym:src/lib.rs#Corpus"
+    },
+    "title": "sym:src/lib.rs#Corpus",
+    "guiding_question": "What is `sym:src/lib.rs#Corpus` for, and what does it work with?",
+    "path": "cards/type/src/lib.rs/Corpus.md",
+    "chunks": [
+      {
+        "id": "sym:src/lib.rs#Corpus#purpose",
+        "heading": "Purpose"
+      },
+      {
+        "id": "sym:src/lib.rs#Corpus#role",
+        "heading": "Role"
+      }
+    ]
+  },
+  {
+    "id": "map:src",
+    "kind": "map",
+    "level": "map",
+    "parent": "src",
+    "header": {
+      "path": "src",
+      "module": "src",
+      "kind": "module",
+      "name": "src"
+    },
+    "title": "Map of src",
+    "guiding_question": "Which types does `src` hold, and what is each of them for?",
+    "path": "cards/map/src.md",
+    "chunks": [
+      {
+        "id": "map:src#types",
+        "heading": "Types"
+      }
+    ]
+  }
+]
+=== card Cs cards/module/_root.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# .
+
+**modul** · 2 soubory · 1 podmodul
+
+Modul: adresář a jeho obsah. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `.`
+
+## Role
+
+`(kořen repozitáře)` obsahuje 2 soubory a 1 podmodul (0 řádků).
+
+## Contents
+
+| Sub-module | Lines | Summary |
+|---|---|---|
+| [src](src.md) |  |  |
+
+| File | Lines | Declares |
+|---|---|---|
+| [Cargo.toml](../file/Cargo.toml.md) |  |  |
+| [README.md](../file/README.md.md) |  |  |
+
+=== card Cs cards/file/Cargo.toml.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# Cargo.toml
+
+**soubor** · v [(kořen repozitáře)](../module/_root.md) · `Cargo.toml`
+
+Soubor tohoto repozitáře. Typy, které deklaruje, mají vlastní karty; tahle karta nese to, co si žádný typ nenárokuje — volné funkce a podobné položky — a co soubor jako celek importuje a kdo ho používá. Zda nebylo nic deklarováno, nebo nic extrahováno, říká coverage.json. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `Cargo.toml`
+
+## Relations
+
+- depends_on `serde` (heuristic) — `Cargo.toml:1`
+
+## Referenced by
+
+- contains [.](../module/_root.md) (heuristic) — `.:1`
+
+=== card Cs cards/file/README.md.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# README.md
+
+**soubor** · v [(kořen repozitáře)](../module/_root.md) · `README.md`
+
+Soubor tohoto repozitáře. Typy, které deklaruje, mají vlastní karty; tahle karta nese to, co si žádný typ nenárokuje — volné funkce a podobné položky — a co soubor jako celek importuje a kdo ho používá. Zda nebylo nic deklarováno, nebo nic extrahováno, říká coverage.json. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `README.md`
+
+## Referenced by
+
+- contains [.](../module/_root.md) (heuristic) — `.:1`
+
+=== card Cs cards/module/src.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# src
+
+**modul** · součást [(kořen repozitáře)](_root.md) · 1 soubor · 1 podmodul · 1 typ
+
+Modul: adresář a jeho obsah. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `src`
+- Map: [1 typ](../map/src.md)
+
+## Role
+
+`src` obsahuje 1 soubor a 1 podmodul (42 řádků), deklaruje 1 typ.
+Nebylo vidět, že by závisel na jiném modulu tohoto repozitáře.
+Mimo repozitář sahá na `std::fmt::Display`.
+
+## Key types
+
+| Type | Kind | Used by | Summary |
+|---|---|---|---|
+| [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md) | struct | 0 |  |
+
+## Contents
+
+| Sub-module | Lines | Summary |
+|---|---|---|
+| [src/extract](src/extract.md) |  |  |
+
+| File | Lines | Declares |
+|---|---|---|
+| [lib.rs](../file/src/lib.rs.md) | 42 | [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md) |
+
+## Outside the repository
+
+| External | Kind | Uses |
+|---|---|---|
+| `std::fmt::Display` |  | 1 |
+
+## Referenced by
+
+- contains [.](_root.md) (heuristic) — `.:1`
+
+=== card Cs cards/module/src/extract.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: module
+---
+
+# src/extract
+
+**modul** · součást [src](../src.md) · 1 soubor
+
+Modul: adresář a jeho obsah. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `src/extract`
+
+## Role
+
+`src/extract` obsahuje 1 soubor (0 řádků).
+
+## Contents
+
+| File | Lines | Declares |
+|---|---|---|
+| [walk.rs](../../file/src/extract/walk.rs.md) |  |  |
+
+## Referenced by
+
+- contains [src](../src.md) (heuristic) — `src:1`
+
+=== card Cs cards/file/src/extract/walk.rs.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/extract/walk.rs
+
+**soubor** · v [src/extract](../../../module/src/extract.md) · `src/extract/walk.rs`
+
+Soubor tohoto repozitáře. Typy, které deklaruje, mají vlastní karty; tahle karta nese to, co si žádný typ nenárokuje — volné funkce a podobné položky — a co soubor jako celek importuje a kdo ho používá. Zda nebylo nic deklarováno, nebo nic extrahováno, říká coverage.json. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `src/extract/walk.rs`
+
+## Referenced by
+
+- contains [src/extract](../../../module/src/extract.md) (heuristic) — `src/extract:1`
+
+=== card Cs cards/file/src/lib.rs.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: file
+---
+
+# src/lib.rs
+
+**soubor** · v [src](../../module/src.md) · 42 řádků · `src/lib.rs`
+
+Soubor tohoto repozitáře. Typy, které deklaruje, mají vlastní karty; tahle karta nese to, co si žádný typ nenárokuje — volné funkce a podobné položky — a co soubor jako celek importuje a kdo ho používá. Zda nebylo nic deklarováno, nebo nic extrahováno, říká coverage.json. Vše níže je přečtené ze zdroje a každé tvrzení, které má ve zdroji místo, toto místo uvádí.
+
+- Identity: `src/lib.rs`
+
+## Role
+
+`src/lib.rs` deklaruje 1 typ: [sym:src/lib.rs#Corpus](../../type/src/lib.rs/Corpus.md).
+
+## Referenced by
+
+- contains [src](../../module/src.md) (heuristic) — `src:1`
+
+=== card Cs cards/type/src/lib.rs/Corpus.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: type
+---
+
+# sym:src/lib.rs#Corpus
+
+**struct** · v [src](../../../module/src.md) · `src/lib.rs:1`
+
+- Identity: `sym:src/lib.rs#Corpus`
+
+## Purpose
+
+`struct` bez členů. (ze struktury)
+
+## Role
+
+V tomto repozitáři nebylo vidět, že by `sym:src/lib.rs#Corpus` používal jiný typ nebo soubor.
+Mimo repozitář sahá na `std::fmt::Display`.
+
+=== map Cs cards/map/src.md ===
+---
+schema: 6
+tool: reverse-architect
+kind: map
+of: module
+---
+
+# src
+
+**mapa modulu** · [src](../module/src.md) · 1 typ
+
+Jeden řádek na každý typ modulu: druh, karta, účel ve zkratce a čím se typ liší — databázové objekty, do kterých zapisuje (`writes`), které čte (`reads`) nebo volá (`calls`), co implementuje nebo rozšiřuje a zda je vstupním bodem.
+
+## Types
+
+- struct [sym:src/lib.rs#Corpus](../type/src/lib.rs/Corpus.md)
+
+=== card documents Cs ===
+[
+  {
+    "id": ".",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": ".",
+      "module": ".",
+      "kind": "module",
+      "name": "."
+    },
+    "title": ".",
+    "guiding_question": "What does `.` hold, and what does it depend on?",
+    "path": "cards/module/_root.md",
+    "chunks": [
+      {
+        "id": ".#role",
+        "heading": "Role"
+      },
+      {
+        "id": ".#contents",
+        "heading": "Contents"
+      }
+    ]
+  },
+  {
+    "id": "Cargo.toml",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "Cargo.toml",
+      "module": ".",
+      "kind": "file",
+      "name": "Cargo.toml"
+    },
+    "title": "Cargo.toml",
+    "guiding_question": "What does `Cargo.toml` declare, and what does it use?",
+    "path": "cards/file/Cargo.toml.md",
+    "chunks": [
+      {
+        "id": "Cargo.toml#relations",
+        "heading": "Relations"
+      },
+      {
+        "id": "Cargo.toml#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "README.md",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "README.md",
+      "module": ".",
+      "kind": "file",
+      "name": "README.md"
+    },
+    "title": "README.md",
+    "guiding_question": "What does `README.md` declare, and what does it use?",
+    "path": "cards/file/README.md.md",
+    "chunks": [
+      {
+        "id": "README.md#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": "src",
+      "module": "src",
+      "kind": "module",
+      "name": "src"
+    },
+    "title": "src",
+    "guiding_question": "What does `src` hold, and what does it depend on?",
+    "path": "cards/module/src.md",
+    "chunks": [
+      {
+        "id": "src#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src#key-types",
+        "heading": "Key types"
+      },
+      {
+        "id": "src#contents",
+        "heading": "Contents"
+      },
+      {
+        "id": "src#outside-the-repository",
+        "heading": "Outside the repository"
+      },
+      {
+        "id": "src#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/extract",
+    "kind": "card:module",
+    "level": "card",
+    "header": {
+      "path": "src/extract",
+      "module": "src/extract",
+      "kind": "module",
+      "name": "src/extract"
+    },
+    "title": "src/extract",
+    "guiding_question": "What does `src/extract` hold, and what does it depend on?",
+    "path": "cards/module/src/extract.md",
+    "chunks": [
+      {
+        "id": "src/extract#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src/extract#contents",
+        "heading": "Contents"
+      },
+      {
+        "id": "src/extract#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/extract/walk.rs",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "src/extract/walk.rs",
+      "module": "src/extract",
+      "kind": "file",
+      "name": "src/extract/walk.rs"
+    },
+    "title": "src/extract/walk.rs",
+    "guiding_question": "What does `src/extract/walk.rs` declare, and what does it use?",
+    "path": "cards/file/src/extract/walk.rs.md",
+    "chunks": [
+      {
+        "id": "src/extract/walk.rs#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "src/lib.rs",
+    "kind": "card:file",
+    "level": "card",
+    "header": {
+      "path": "src/lib.rs",
+      "module": "src",
+      "kind": "file",
+      "name": "src/lib.rs"
+    },
+    "title": "src/lib.rs",
+    "guiding_question": "What does `src/lib.rs` declare, and what does it use?",
+    "path": "cards/file/src/lib.rs.md",
+    "chunks": [
+      {
+        "id": "src/lib.rs#role",
+        "heading": "Role"
+      },
+      {
+        "id": "src/lib.rs#referenced-by",
+        "heading": "Referenced by"
+      }
+    ]
+  },
+  {
+    "id": "sym:src/lib.rs#Corpus",
+    "kind": "card:type",
+    "level": "card",
+    "parent": "map:src",
+    "header": {
+      "path": "src/lib.rs",
+      "module": "src",
+      "kind": "struct",
+      "name": "sym:src/lib.rs#Corpus"
+    },
+    "title": "sym:src/lib.rs#Corpus",
+    "guiding_question": "What is `sym:src/lib.rs#Corpus` for, and what does it work with?",
+    "path": "cards/type/src/lib.rs/Corpus.md",
+    "chunks": [
+      {
+        "id": "sym:src/lib.rs#Corpus#purpose",
+        "heading": "Purpose"
+      },
+      {
+        "id": "sym:src/lib.rs#Corpus#role",
+        "heading": "Role"
+      }
+    ]
+  },
+  {
+    "id": "map:src",
+    "kind": "map",
+    "level": "map",
+    "parent": "src",
+    "header": {
+      "path": "src",
+      "module": "src",
+      "kind": "module",
+      "name": "src"
+    },
+    "title": "Map of src",
+    "guiding_question": "Which types does `src` hold, and what is each of them for?",
+    "path": "cards/map/src.md",
+    "chunks": [
+      {
+        "id": "map:src#types",
+        "heading": "Types"
+      }
+    ]
+  }
+]
+=== coverage ===
+{
+  "schema_version": 6,
+  "repo_revision": null,
+  "languages": [
+    {
+      "language": "rust",
+      "files": 2,
+      "structural": 1,
+      "resolved": 0
+    }
+  ],
+  "unclassified_files": 2,
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "language": null,
+      "extractors": [
+        "baseline"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "no grammar covers this file type"
+    },
+    {
+      "path": "README.md",
+      "language": null,
+      "extractors": [
+        "baseline"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "no grammar covers this file type"
+    },
+    {
+      "path": "src/extract/walk.rs",
+      "language": "rust",
+      "extractors": [
+        "baseline"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "a grammar covers this file type but it declares no symbol"
+    },
+    {
+      "path": "src/lib.rs",
+      "language": "rust",
+      "extractors": [
+        "baseline"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    }
+  ],
+  "modules": [
+    {
+      "path": ".",
+      "files": 4,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "src",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "src/extract",
+      "files": 1,
+      "resolved": 0,
+      "fully_resolved": false
+    }
+  ],
+  "noise": {
+    "edges_by_rung": {
+      "resolved_by_index": 0,
+      "rules_backed": 0,
+      "name_only": 0,
+      "ambiguous": 0
+    },
+    "card_rows": {
+      "duplicate_rows": {
+        "before_filter": 0,
+        "after_filter": 0
+      },
+      "reversed_rows": {
+        "before_filter": 0,
+        "after_filter": 0
+      }
+    },
+    "deleted_by_rule": {},
+    "over_cap_sites": 0,
+    "plugins_by_contract": {}
+  },
+  "enum_decisions": {
+    "verified": 0,
+    "unverified": 0,
+    "comparisons": 0,
+    "unmatched": 0
+  },
+  "anchors": {
+    "kept": 0,
+    "dropped_by_cap": 0,
+    "withheld": {}
+  },
+  "db_accesses": {
+    "reads": 0,
+    "writes": 0,
+    "calls": 0,
+    "mentions": 0
+  }
+}

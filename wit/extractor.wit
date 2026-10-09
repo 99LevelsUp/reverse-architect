@@ -1,0 +1,209 @@
+package ra:plugin@0.1.0;
+
+// The contract a reverse-architect language plugin is built against, version
+// 0.1.
+//
+// FROZEN. New plugins are built against 0.2 (`wit-v2/extractor.wit`), which
+// adds what the syntax says around each usage. The host still loads this
+// version: it tries 0.2 first and 0.1 second, and lifts a 0.1 plugin's output
+// to the 0.2 shape with no column and no context, so a plugin built against
+// this file keeps working unchanged and its usages are resolved by name
+// alone. Do not edit the types below: a changed record is an incompatible
+// change for every component already built against them. Comments may be
+// clarified; the package version stays 0.1.0.
+//
+// A plugin is a WebAssembly component (`wasm32-wasip2`) that reads one source
+// file at a time and reports what it declares and what it uses. It never sees
+// the repository, the graph, the disk or the network: the host hands it the
+// bytes of one file and a frozen view of which paths exist, and turns what it
+// returns into facts.
+//
+// Two passes, because a use in one file can name a declaration in any other:
+//
+// 1. `declarations` — every declaration in the file, with its facts (name,
+//    kind, signature, doc comment, …), the edges it owns (a file declares a
+//    symbol, a type has a member, a file imports another) and the type
+//    relations it names (extends, implements) by spelling.
+// 2. `usages` — every identifier the file uses as a call, a construction or a
+//    type. Only the spelling and the line: the HOST resolves names against the
+//    whole repository, applies the ambiguity ceiling and finds the enclosing
+//    declaration, so every plugin gets the same honesty about ambiguous names
+//    and none can claim a relation the core would call a guess.
+//
+// Kinds are strings. A core kind is its wire word (`symbol_name`, `declares`,
+// `has_member`, `imports`, …); a kind of the plugin's own is `namespace:name`
+// and must be declared in `vocabulary` before it is used.
+
+interface types {
+    /// Where in the file a statement was read. Lines are 1-based and inclusive.
+    variant place {
+        whole,
+        line(u32),
+        range(tuple<u32, u32>),
+    }
+
+    variant value {
+        text(string),
+        int(s64),
+        flag(bool),
+    }
+
+    record fact {
+        kind: string,
+        value: value,
+        place: place,
+    }
+
+    record edge {
+        source: string,
+        target: string,
+        kind: string,
+        place: place,
+    }
+
+    /// A declaration and everything hung off it. Created as one group: if the
+    /// key is already held by a node of another kind, the whole group is
+    /// dropped rather than its facts attached to the wrong node.
+    //
+    // The group should carry the `declares` edge from its file: the host
+    // never infers it, and a file whose symbols arrive without one is reported
+    // as declaring nothing. The `symbol_kind` fact decides what a usage can
+    // resolve to: `function`, `method`, `constructor` and `procedure` are
+    // called; `class`, `struct`, `interface`, `trait`, `enum`, `record`,
+    // `type`, `table`, `view` and `trigger` are referenced and get their own
+    // card. Any other kind is kept and shown, and nothing resolves to it.
+    record symbol {
+        key: string,
+        facts: list<fact>,
+        edges: list<edge>,
+    }
+
+    record keyed-fact {
+        node: string,
+        fact: fact,
+    }
+
+    enum relation-kind {
+        extends,
+        implements,
+        /// The syntax does not say (a C# base list): the host decides from
+        /// the target's declared kind — an interface is implemented, anything
+        /// else is extended.
+        by-target-kind,
+    }
+
+    /// A type relation named by spelling. Both sides are candidate keys, most
+    /// specific first; the host keeps the first that exists after every file
+    /// has been read, and falls back to the one repository type of that name
+    /// in the same language family when none does.
+    record relation {
+        sources: list<string>,
+        targets: list<string>,
+        kind: relation-kind,
+        place: place,
+    }
+
+    /// One change, applied in the order returned.
+    variant op {
+        /// A fact on a node the plugin did not create (a file's own doc comment).
+        fact(keyed-fact),
+        symbol(symbol),
+        /// An edge between existing nodes; dropped if either end does not exist.
+        edge(edge),
+        relation(relation),
+    }
+
+    enum usage-kind {
+        /// `f(…)`, `x.m(…)` — resolves against callables.
+        call,
+        /// A call that may also be a construction (`Foo()` in Python, a tuple
+        /// struct in Rust): callables first, types if no callable matches.
+        call-or-construct,
+        /// `new T(…)`, a struct or composite literal — resolves against types.
+        construct,
+        /// A type named in a type position — resolves against types.
+        reference,
+    }
+
+    record usage {
+        /// The simple name: a qualified spelling reduced to its last segment.
+        name: string,
+        kind: usage-kind,
+        line: u32,
+    }
+
+    record language {
+        /// The reporting name coverage uses (`typescript`, `csharp`).
+        name: string,
+        /// Extensions without the dot (`ts`, `tsx`).
+        extensions: list<string>,
+    }
+
+    record manifest {
+        /// A stable id: lowercase letters, digits and `-`. It names the cache
+        /// phases and appears in every fact's provenance.
+        id: string,
+        version: string,
+        languages: list<language>,
+        /// How far the plugin's scalar facts outrank another extractor's on
+        /// the same node (KTD22). The bundled language plugins use 30.
+        trust-rank: u8,
+        /// Ids of plugins that must run before this one.
+        depends-on: list<string>,
+    }
+
+    /// What the operator configured for this run.
+    record config {
+        /// Extra token prefixes the plugin must treat as credentials in text it
+        /// quotes (signatures, doc comments). The host redacts again anyway.
+        secret-prefixes: list<string>,
+    }
+
+    /// The core's closed role sets. They are the one place this interface uses
+    /// enums rather than strings: they are the core's vocabulary, not the
+    /// plugin's.
+    enum structural-role { container, leaf, definition, %package, external, opaque }
+    enum link-role { containment, declaration, dependency, opaque }
+    enum cardinality { additive, scalar }
+
+    record node-kind-decl {
+        name: string,
+        role: structural-role,
+        /// The card kind (declared below) its nodes get a card under, if any.
+        card: option<string>,
+    }
+    record edge-kind-decl { name: string, role: link-role }
+    record fact-kind-decl { name: string, cardinality: cardinality }
+
+    /// Kinds this plugin adds to the corpus, all under one namespace.
+    record vocabulary {
+        namespace: string,
+        card-kinds: list<string>,
+        node-kinds: list<node-kind-decl>,
+        edge-kinds: list<edge-kind-decl>,
+        fact-kinds: list<fact-kind-decl>,
+    }
+}
+
+/// What the host offers a plugin. Answered from a snapshot frozen before the
+/// walk, so an answer can never depend on how far the walk has got.
+interface host {
+    /// Whether a file or directory with this repository-relative key exists
+    /// (`/`-separated, no leading `./`). How a plugin resolves an import.
+    path-exists: func(key: string) -> bool;
+}
+
+interface extractor {
+    use types.{manifest, vocabulary, config, op, usage};
+
+    describe: func() -> manifest;
+    /// Called once per run, before any file.
+    declare: func() -> option<vocabulary>;
+    declarations: func(path: string, source: list<u8>, config: config) -> list<op>;
+    usages: func(path: string, source: list<u8>) -> list<usage>;
+}
+
+world language-plugin {
+    import host;
+    export extractor;
+}

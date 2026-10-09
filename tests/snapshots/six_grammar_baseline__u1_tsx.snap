@@ -1,0 +1,77 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+Symbol sym:ts:tsx/consumer.tsx#TsxReport
+  SymbolName = "TsxReport"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:7-13]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:7-13]
+  SymbolSignature = "class TsxReport"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:7-13]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:7-13]
+  DocComment = "Výkaz vykreslovaný do stránky.\nDrží už jen výslednou částku."  [ecmascript Measured Heuristic @ tsx/consumer.tsx:3-6]
+Symbol sym:ts:tsx/consumer.tsx#TsxReport.amount
+  SymbolName = "amount"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+  SymbolKind = "field"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+  SymbolContainer = "TsxReport"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+  SymbolSignature = "amount: number"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+Symbol sym:ts:tsx/consumer.tsx#TsxReport.constructor(number)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+  SymbolContainer = "TsxReport"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+  SymbolSignature = "constructor(amount: number)"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+Symbol sym:ts:tsx/consumer.tsx#tsxBuildReport(number)
+  SymbolName = "tsxBuildReport"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:19-22]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:19-22]
+  SymbolSignature = "function tsxBuildReport(amount: number)"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:19-22]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ tsx/consumer.tsx:19-22]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [ecmascript Measured Heuristic @ tsx/consumer.tsx:15-18]
+  Anchor = "literal 1 6 report"  [external Measured Heuristic @ tsx/consumer.tsx:21-21]
+Symbol sym:ts:tsx/model.tsx#TsxInvoice
+  SymbolName = "TsxInvoice"  [ecmascript Measured Heuristic @ tsx/model.tsx:5-11]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ tsx/model.tsx:5-11]
+  SymbolSignature = "class TsxInvoice"  [ecmascript Measured Heuristic @ tsx/model.tsx:5-11]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ tsx/model.tsx:5-11]
+  DocComment = "Faktura vykreslovaná do stránky.\nČástka se zobrazuje v haléřích."  [ecmascript Measured Heuristic @ tsx/model.tsx:1-4]
+Symbol sym:ts:tsx/model.tsx#TsxInvoice.amount
+  SymbolName = "amount"  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+  SymbolKind = "field"  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+  SymbolContainer = "TsxInvoice"  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+  SymbolSignature = "amount: number"  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+Symbol sym:ts:tsx/model.tsx#TsxInvoice.constructor(number)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+  SymbolContainer = "TsxInvoice"  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+  SymbolSignature = "constructor(amount: number)"  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+Symbol sym:ts:tsx/model.tsx#tsxRenderAmount(TsxInvoice)
+  SymbolName = "tsxRenderAmount"  [ecmascript Measured Heuristic @ tsx/model.tsx:17-19]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ tsx/model.tsx:17-19]
+  SymbolSignature = "function tsxRenderAmount(invoice: TsxInvoice)"  [ecmascript Measured Heuristic @ tsx/model.tsx:17-19]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ tsx/model.tsx:17-19]
+  DocComment = "Vykreslí částku faktury.\nVrací jediný prvek span."  [ecmascript Measured Heuristic @ tsx/model.tsx:13-16]
+  Anchor = "literal 1 6 amount"  [external Measured Heuristic @ tsx/model.tsx:18-18]
+File tsx/consumer.tsx
+  Loc = 22  [metrics Measured Heuristic @ tsx/consumer.tsx:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ tsx/consumer.tsx:whole]
+  Anchor = "literal 1 7 ./model"  [external Measured Heuristic @ tsx/consumer.tsx:1-1]
+File tsx/model.tsx
+  Loc = 19  [metrics Measured Heuristic @ tsx/model.tsx:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ tsx/model.tsx:whole]
+--- edges ---
+HasMember sym:ts:tsx/consumer.tsx#TsxReport -> sym:ts:tsx/consumer.tsx#TsxReport.amount  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+HasMember sym:ts:tsx/consumer.tsx#TsxReport -> sym:ts:tsx/consumer.tsx#TsxReport.constructor(number)  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+Instantiates sym:ts:tsx/consumer.tsx#tsxBuildReport(number) -> sym:ts:tsx/model.tsx#TsxInvoice  [ecmascript Measured Heuristic @ tsx/consumer.tsx:20-20]
+Calls sym:ts:tsx/consumer.tsx#tsxBuildReport(number) -> sym:ts:tsx/model.tsx#tsxRenderAmount(TsxInvoice)  [ecmascript Measured Heuristic @ tsx/consumer.tsx:21-21]
+HasMember sym:ts:tsx/model.tsx#TsxInvoice -> sym:ts:tsx/model.tsx#TsxInvoice.amount  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+HasMember sym:ts:tsx/model.tsx#TsxInvoice -> sym:ts:tsx/model.tsx#TsxInvoice.constructor(number)  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+References sym:ts:tsx/model.tsx#tsxRenderAmount(TsxInvoice) -> sym:ts:tsx/model.tsx#TsxInvoice  [ecmascript Measured Heuristic @ tsx/model.tsx:17-17]
+Contains tsx -> tsx/consumer.tsx  [filetree Measured Heuristic @ tsx/consumer.tsx:whole]
+Contains tsx -> tsx/model.tsx  [filetree Measured Heuristic @ tsx/model.tsx:whole]
+Declares tsx/consumer.tsx -> sym:ts:tsx/consumer.tsx#TsxReport  [ecmascript Measured Heuristic @ tsx/consumer.tsx:7-13]
+Declares tsx/consumer.tsx -> sym:ts:tsx/consumer.tsx#TsxReport.amount  [ecmascript Measured Heuristic @ tsx/consumer.tsx:8-8]
+Declares tsx/consumer.tsx -> sym:ts:tsx/consumer.tsx#TsxReport.constructor(number)  [ecmascript Measured Heuristic @ tsx/consumer.tsx:10-12]
+Declares tsx/consumer.tsx -> sym:ts:tsx/consumer.tsx#tsxBuildReport(number)  [ecmascript Measured Heuristic @ tsx/consumer.tsx:19-22]
+Imports tsx/consumer.tsx -> tsx/model.tsx  [ecmascript Measured Heuristic @ tsx/consumer.tsx:1-1]
+Declares tsx/model.tsx -> sym:ts:tsx/model.tsx#TsxInvoice  [ecmascript Measured Heuristic @ tsx/model.tsx:5-11]
+Declares tsx/model.tsx -> sym:ts:tsx/model.tsx#TsxInvoice.amount  [ecmascript Measured Heuristic @ tsx/model.tsx:6-6]
+Declares tsx/model.tsx -> sym:ts:tsx/model.tsx#TsxInvoice.constructor(number)  [ecmascript Measured Heuristic @ tsx/model.tsx:8-10]
+Declares tsx/model.tsx -> sym:ts:tsx/model.tsx#tsxRenderAmount(TsxInvoice)  [ecmascript Measured Heuristic @ tsx/model.tsx:17-19]

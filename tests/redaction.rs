@@ -1,0 +1,1187 @@
+//! R22 gate over the WHOLE output, not one projection.
+//!
+//! The plan's Verification Contract asks for "a test that no secret-shaped value
+//! appears in the corpus OR in the export". Until this file existed the only
+//! redaction test looked at a rendered card, so a secret travelled into
+//! `manifest.json` unredacted — the fact itself was never filtered, only one
+//! projection of it. These tests assert over every artifact a run writes.
+
+mod common;
+
+use common::init_repo_with_files;
+use reverse_architect::config::{Config, DEFAULT_AMBIGUITY_CEILING};
+use reverse_architect::render::RenderedFile;
+use reverse_architect::{card, cli::LinkStyle, coverage, generate, manifest, Generated};
+use std::path::Path;
+
+/// Every distinctive secret value the fixture contains. None of these may appear
+/// anywhere in any artifact.
+const SECRETS: &[&str] = &[
+    "hunter2-do-not-ship",
+    "SuperSecretConnString1",
+    "MIIEowIBAAKCAQEAx7fakekeymaterial",
+    "sk-live-9f2b7c11ea-fake",
+];
+
+/// What a redaction leaves behind. Spelled out here rather than imported: the
+/// marker is what a READER sees, so a test that asserts on it must break when the
+/// visible text changes, not follow the constant silently.
+const REDACTION_MARKER: &str = "[redacted: ";
+
+const BASE_FILES: [(&str, &str); 2] = [
+    (
+        "src/Conn.cs",
+        "namespace Orbit.Infra\n\
+                 {\n\
+                 \x20   /// <summary>Example: password = \"hunter2-do-not-ship\"</summary>\n\
+                 \x20   public class Conn\n\
+                 \x20   {\n\
+                 \x20       private const string Fallback = \
+                 \"Server=sql01;Database=orbit;User Id=sa;Password=SuperSecretConnString1\";\n\
+                 \x20   }\n\
+                 }\n",
+    ),
+    (
+        "src/keys.rs",
+        "//! Deployment notes.\n\
+                 //!\n\
+                 //! -----BEGIN RSA PRIVATE KEY-----\n\
+                 //! MIIEowIBAAKCAQEAx7fakekeymaterial\n\
+                 //! -----END RSA PRIVATE KEY-----\n\
+                 \n\
+                 /// Rotate this monthly. api_key = \"sk-live-9f2b7c11ea-fake\"\n\
+                 pub struct Keys {\n\
+                 \x20   pub id: i64,\n\
+                 }\n",
+    ),
+];
+
+fn fixture(dir: &Path) {
+    init_repo_with_files(dir, "Alice", &BASE_FILES);
+}
+
+fn config_for(repo: &Path, out: &Path) -> Config {
+    Config {
+        repo_root: repo.to_path_buf(),
+        corpus_dir: out.to_path_buf(),
+        links: LinkStyle::Portable,
+        profile: None,
+        ambiguity_ceiling: DEFAULT_AMBIGUITY_CEILING,
+        secret_prefixes: Vec::new(),
+        plugins: Vec::new(),
+        scip_index: None,
+        lang: "en".to_string(),
+        sites: false,
+        rights: reverse_architect::extract::RightsTable::granted(),
+        model_verification: false,
+        model_purpose: false,
+        trace_over_ceiling: false,
+    }
+}
+
+/// Every rendered artifact of one run, as (label, contents).
+fn all_artifacts(repo: &Path, out: &Path) -> Vec<(String, String)> {
+    artifacts_of(&generate(&config_for(repo, out)).expect("the pipeline runs"))
+}
+
+/// Every rendered artifact of `generated`, as (label, contents).
+fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
+    let mut artifacts: Vec<(String, String)> = Vec::new();
+    for file in &generated.corpus.files {
+        artifacts.push((format!("view {}", file.path), file.contents.clone()));
+    }
+    for file in &generated.cards {
+        artifacts.push((format!("card {}", file.path), file.contents.clone()));
+    }
+    // A type's members, anchors and relations are its detail's since plan B,
+    // U9 — the surface a secret would now travel on.
+    for file in &generated.details {
+        artifacts.push((format!("detail {}", file.path), file.contents.clone()));
+    }
+    // A type's row with its purpose and its database accesses (plan B, U10).
+    for file in &generated.maps {
+        artifacts.push((format!("map {}", file.path), file.contents.clone()));
+    }
+    artifacts.push((
+        "manifest.json".to_string(),
+        manifest::to_json(&generated.manifest),
+    ));
+    // The line-delimited form a large corpus is written in instead — which
+    // one a run writes is decided by size, not by the caller, so both are
+    // swept.
+    for (name, form) in [
+        (
+            manifest::STRINGS_FILENAME,
+            manifest::to_strings_json as fn(&manifest::Manifest) -> String,
+        ),
+        (manifest::NODES_FILENAME, manifest::to_nodes_jsonl),
+        (manifest::EDGES_FILENAME, manifest::to_edges_jsonl),
+        (manifest::DOCUMENTS_FILENAME, manifest::to_documents_jsonl),
+    ] {
+        artifacts.push((name.to_string(), form(&generated.manifest)));
+    }
+    artifacts.push((
+        manifest::SITES_FILENAME.to_string(),
+        manifest::to_sites_jsonl(&generated.graph),
+    ));
+    artifacts.push((
+        "coverage.json".to_string(),
+        coverage::to_json(&generated.coverage),
+    ));
+    artifacts
+}
+
+#[test]
+fn no_secret_value_reaches_any_artifact_of_a_run() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    assert!(
+        artifacts.len() > 5,
+        "the fixture must produce a real corpus, saw {}",
+        artifacts.len()
+    );
+
+    for (label, contents) in &artifacts {
+        for secret in SECRETS {
+            assert!(
+                !contents.contains(secret),
+                "R22: `{secret}` leaked into {label}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_manifest_export_is_covered_not_just_the_card() {
+    // The regression this file exists for: redaction lived in the card renderer
+    // only, so the same fact reached manifest.json in the clear.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let generated = generate(&config_for(repo.path(), out.path())).unwrap();
+    let json = manifest::to_json(&generated.manifest);
+
+    assert!(
+        json.contains("doc_comment"),
+        "the export must still carry doc comments — this is not a test that they vanished"
+    );
+    for secret in SECRETS {
+        assert!(
+            !json.contains(secret),
+            "R22: `{secret}` leaked into the export"
+        );
+    }
+    assert!(
+        json.contains("[redacted:"),
+        "the export should show the marker where a secret was removed"
+    );
+}
+
+#[test]
+fn a_multi_line_pem_block_is_redacted_through_its_end_line() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    let joined: String = artifacts.iter().map(|(_, c)| c.as_str()).collect();
+
+    // The key material is the line a line-wise filter would have published: the
+    // BEGIN header matches the pattern, the base64 body matches nothing.
+    assert!(
+        !joined.contains("MIIEowIBAAKCAQEAx7fakekeymaterial"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("[redacted: private key"),
+        "the block must be named as a private key: {joined}"
+    );
+}
+
+#[test]
+fn a_field_initializer_does_not_travel_in_the_signature() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let generated = generate(&config_for(repo.path(), out.path())).unwrap();
+
+    // A declaration with no body keeps its initializer in the signature header, so
+    // the signature is a secret carrier exactly like a doc comment. A member's
+    // signature is in its type's detail since plan B, U9 (the API list).
+    let signatures: String = generated
+        .cards
+        .iter()
+        .chain(&generated.details)
+        .filter(|f| {
+            f.contents.contains("## Signature")
+                || f.contents.contains("signature:")
+                || f.contents.contains("## API")
+        })
+        .map(|f| f.contents.as_str())
+        .collect();
+    // Assert the thing exists before asserting what it does not contain. Without
+    // this the test passes just as happily when signatures stop being rendered at
+    // all — proving the absence of a secret in the absence of the artifact.
+    assert!(
+        !signatures.is_empty(),
+        "the fixture must actually render a signature, or the assertion below is vacuous"
+    );
+    assert!(
+        signatures.contains("Fallback"),
+        "the field itself must still be listed, redacted rather than dropped: {signatures}"
+    );
+    assert!(
+        signatures.contains(REDACTION_MARKER),
+        "and its initializer must be visibly withheld: {signatures}"
+    );
+    assert!(
+        !signatures.contains("SuperSecretConnString1"),
+        "R22: a connection string travelled in a signature: {signatures}"
+    );
+}
+
+#[test]
+fn ordinary_prose_and_code_survive_the_filter() {
+    // Over-redaction is the intended failure direction, but it must not eat the
+    // whole comment: a filter that redacts everything would pass every assertion
+    // above while destroying the corpus.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    let joined: String = artifacts.iter().map(|(_, c)| c.as_str()).collect();
+
+    assert!(
+        joined.contains("Deployment notes."),
+        "prose above a secret must survive: {joined}"
+    );
+    // Prose sharing a line with the secret shape goes with that line — the whole
+    // line is replaced by design, because a partial mask has to guess where the
+    // value ends. What must survive is everything else.
+    assert!(
+        joined.contains("Keys"),
+        "the declaration itself must survive: {joined}"
+    );
+    assert!(
+        joined.contains("Example:") || joined.contains("[redacted: password"),
+        "the C# doc comment must be present, redacted rather than dropped: {joined}"
+    );
+}
+
+#[test]
+fn two_runs_still_agree_after_redaction() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let first = all_artifacts(repo.path(), out.path());
+    let second = all_artifacts(repo.path(), out.path());
+    assert_eq!(first, second, "redaction must be deterministic (R18)");
+}
+
+#[test]
+fn the_card_still_flags_that_something_was_removed() {
+    let repo = tempfile::tempdir().unwrap();
+    fixture(repo.path());
+
+    let repo_handle = reverse_architect::extract::Repo::open(repo.path()).unwrap();
+    let mut graph = reverse_architect::graph::Graph::new();
+    reverse_architect::extract::run_all(&repo_handle, &mut graph).unwrap();
+    reverse_architect::graph::merge(&mut graph, &reverse_architect::extract::trust_ranks());
+
+    let cards = card::build_cards(&graph);
+    let conn = cards
+        .iter()
+        .find(|c| c.title == "Conn")
+        .expect("a Conn card");
+
+    // The reader must still learn that a value was withheld and where to look.
+    assert!(
+        conn.doc.as_ref().is_some_and(|d| d.redacted),
+        "the card must still report the redaction: {:?}",
+        conn.doc
+    );
+    assert!(
+        conn.caveats
+            .iter()
+            .any(|c| c.text.contains("secret pattern")),
+        "and name it in the notes: {:?}",
+        conn.caveats
+    );
+    // …on the page a reader receives: since the card trim (plan B) a type's
+    // comment is quoted in its detail, and the note about it sits there too.
+    let detail = rendered_detail(&cards, "Conn");
+    assert!(
+        detail.contains("\n## Documentation\n") && detail.contains(REDACTION_MARKER),
+        "the detail quotes the comment with the marker: {detail}"
+    );
+    assert!(
+        detail
+            .split("\n## Notes\n")
+            .nth(1)
+            .is_some_and(|notes| notes.contains("secret pattern")),
+        "and its notes say a line was replaced: {detail}"
+    );
+}
+
+/// The rendered detail of the type card titled `title`.
+fn rendered_detail(cards: &[card::Card], title: &str) -> String {
+    let index = card::links::CardIndex::build(cards);
+    let card = cards
+        .iter()
+        .find(|c| c.title == title)
+        .unwrap_or_else(|| panic!("a {title} card"));
+    card::detail::render_detail(card, card::render::Lang::En, LinkStyle::Portable, &index)
+        .unwrap_or_else(|| panic!("{title} has a detail"))
+}
+
+#[test]
+fn an_unterminated_key_block_does_not_swallow_the_rest_of_the_comment() {
+    // Someone quoting the SHAPE of a key in a comment writes the BEGIN line and
+    // then stops. A filter that waits for `-----END` before letting go redacts
+    // every line after it to the end of the text — the comment loses everything
+    // it was actually written to say, and the corpus loses it silently.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[(
+            "src/notes.rs",
+            "//! Key rotation.\n\
+             //!\n\
+             //! The deployment secret is stored as a PEM block, i.e.\n\
+             //! -----BEGIN RSA PRIVATE KEY-----\n\
+             //!\n\
+             //! Ask the platform team for the current one, and file it under\n\
+             //! the rotation ticket before the quarter closes.\n\
+             \n\
+             pub struct Notes;\n",
+        )],
+    );
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    let joined: String = artifacts.iter().map(|(_, c)| c.as_str()).collect();
+
+    assert!(
+        joined.contains("[redacted: private key"),
+        "the BEGIN line itself must still go: {joined}"
+    );
+    assert!(
+        joined.contains("Ask the platform team for the current one"),
+        "prose after the unterminated block must survive: {joined}"
+    );
+    assert!(
+        joined.contains("rotation ticket before the quarter closes"),
+        "including the last line of it: {joined}"
+    );
+}
+
+#[test]
+fn a_credential_carried_in_a_url_never_reaches_an_artifact() {
+    // The shape with no keyword on the line: the password is the URL's userinfo.
+    // The literal path already treated this as a credential; a doc comment
+    // reached the card through the pattern table alone, which had no rule for it.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[(
+            "src/store.rs",
+            "/// Connects to mongodb://app:hunter2-in-a-url@db01:27017/orbit on start.\n\
+             ///\n\
+             /// Clone the fixtures from git+ssh://git@github.com/orbit/fixtures first.\n\
+             pub struct Store;\n",
+        )],
+    );
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    for (label, contents) in &artifacts {
+        assert!(
+            !contents.contains("hunter2-in-a-url"),
+            "R22: a URL credential leaked into {label}"
+        );
+    }
+
+    let joined: String = artifacts.iter().map(|(_, c)| c.as_str()).collect();
+    assert!(
+        joined.contains("[redacted: credentials in a URL"),
+        "and the reader must be told what was withheld: {joined}"
+    );
+    // A userinfo with no password is not a secret, and half the READMEs ever
+    // written contain one. Redacting that line would cost documentation for
+    // nothing.
+    assert!(
+        joined.contains("git+ssh://git@github.com/orbit/fixtures"),
+        "a passwordless userinfo must survive: {joined}"
+    );
+}
+
+#[test]
+fn a_secret_withheld_inside_a_method_is_confessed_in_the_owning_types_detail() {
+    // A member owns no card (KTD5). Its `RedactedLiteral` fact therefore has
+    // nowhere to surface unless the owning type's card lifts it — the same
+    // reason U9 lifts member relations. Without that the corpus records the
+    // withholding and tells no reader about it. Since the card trim (plan B)
+    // the confession is in the type's detail, beside the anchors the withheld
+    // literal left its place in.
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[(
+            "src/Wire.cs",
+            "namespace Orbit.Infra\n\
+             {\n\
+             \x20   public class Wire\n\
+             \x20   {\n\
+             \x20       public string Open()\n\
+             \x20       {\n\
+             \x20           return \
+             \"Server=sql01;Database=orbit;User Id=sa;Password=method-local-secret\";\n\
+             \x20       }\n\
+             \x20   }\n\
+             }\n",
+        )],
+    );
+
+    let repo_handle = reverse_architect::extract::Repo::open(repo.path()).unwrap();
+    let mut graph = reverse_architect::graph::Graph::new();
+    reverse_architect::extract::run_all(&repo_handle, &mut graph).unwrap();
+    reverse_architect::graph::merge(&mut graph, &reverse_architect::extract::trust_ranks());
+
+    let cards = card::build_cards(&graph);
+    let wire = cards
+        .iter()
+        .find(|c| c.title == "Wire")
+        .expect("a Wire card");
+
+    let notes = rendered_detail(&cards, "Wire")
+        .split("\n## Notes\n")
+        .nth(1)
+        .map(str::to_string)
+        .unwrap_or_else(|| panic!("Wire's detail has notes: {:?}", wire.caveats));
+    assert!(
+        notes
+            .lines()
+            .any(|l| l.contains("`Open`") && l.contains("`password`")),
+        "the note must name the member it came from and the shape withheld: {notes}"
+    );
+    assert!(!notes.contains("method-local-secret"), "{notes}");
+}
+
+#[test]
+fn a_provider_token_in_prose_is_redacted_end_to_end() {
+    // The shape C28 is about: a credential with no keyword and no separator
+    // anywhere on the line. Nothing in the pattern table saw it before, because
+    // every rule needed a `password =`-style assignment to fire.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[(
+            "src/deploy.rs",
+            "//! Deployment.\n\
+             //!\n\
+             //! Paste ghp_Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq into the CI secret store.\n\
+             //!\n\
+             //! GitHub personal access tokens start with ghp_ and OpenAI keys with sk-.\n\
+             pub struct Deploy;\n",
+        )],
+    );
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    for (label, contents) in &artifacts {
+        assert!(
+            !contents.contains("ghp_Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2Rr1Qq"),
+            "R22: a provider token leaked into {label}"
+        );
+    }
+
+    let joined: String = artifacts.iter().map(|(_, c)| c.as_str()).collect();
+    assert!(
+        joined.contains("[redacted: provider token"),
+        "and the reader must be told what shape was withheld: {joined}"
+    );
+    // The sentence that merely NAMES the prefixes must survive. A match replaces
+    // the whole line, so this is the expensive mistake, and the one that makes a
+    // prefix rule safe to run without a keyword.
+    assert!(
+        joined.contains("GitHub personal access tokens start with"),
+        "prose naming a prefix must not be redacted: {joined}"
+    );
+}
+
+#[test]
+fn a_configured_company_prefix_is_redacted_and_the_public_ones_still_are() {
+    // `--secret-prefix` exists so a company token shape no public list knows can
+    // be recognized without a rebuild. It must ADD to the built-in list, never
+    // replace it: an operator who names their own must not silently lose the
+    // public ones.
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[(
+            "src/wire.rs",
+            "/// Ours: acmetok-AaBbCcDdEeFfGgHhIiJjKk\n\
+             /// Theirs: ghp_Mm1Nn2Oo3Pp4Qq5Rr6Ss7Tt8Uu\n\
+             pub struct Wire;\n",
+        )],
+    );
+
+    let mut config = config_for(repo.path(), out.path());
+    config.secret_prefixes = vec!["acmetok-".to_string()];
+    let generated = generate(&config).expect("the pipeline runs");
+    // The comment is quoted in the type's detail since the card trim.
+    let joined: String = generated
+        .cards
+        .iter()
+        .chain(&generated.details)
+        .chain(generated.corpus.files.iter())
+        .map(|f| f.contents.as_str())
+        .chain(std::iter::once(
+            manifest::to_json(&generated.manifest).as_str(),
+        ))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !joined.contains("acmetok-AaBbCcDdEeFfGgHhIiJjKk"),
+        "the configured prefix must be honoured: {joined}"
+    );
+    // Negative control: without the configuration the same token survives, so
+    // the assertion above is about the wiring and not about some other rule
+    // happening to catch it.
+    let out_default = tempfile::tempdir().unwrap();
+    let unconfigured = generate(&config_for(repo.path(), out_default.path())).unwrap();
+    let plain: String = unconfigured
+        .cards
+        .iter()
+        .chain(&unconfigured.details)
+        .map(|f| f.contents.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        plain.contains("acmetok-AaBbCcDdEeFfGgHhIiJjKk"),
+        "a company prefix nobody configured is NOT a built-in one: {plain}"
+    );
+    assert!(
+        !joined.contains("ghp_Mm1Nn2Oo3Pp4Qq5Rr6Ss7Tt8Uu"),
+        "and the public list must still be in force: {joined}"
+    );
+}
+
+// ---- The surfaces anchors added (plan B, U3 and U4: R10, KTD11) ----
+
+/// The secret values the anchor surfaces carry: comments, literals read with
+/// the code on their line, the Czech and SQL spellings, and a C header.
+const ANCHOR_SECRETS: &[&str] = &[
+    "MIIEcommentkeymaterialSentinel",
+    "hunter2-comment-nextline",
+    "pivo-heslo-sentinel",
+    "kocka-secret-sentinel",
+    "sql-pw-sentinel",
+    "9f2b7c11ea3d40aa9c1fdeadbeef0123",
+    "header-pw-sentinel",
+    "define-pw-sentinel",
+];
+
+/// The base fixture plus one file per new surface.
+fn anchor_fixture(dir: &Path) {
+    let mut files = BASE_FILES.to_vec();
+    files.push((
+        "src/Ops.cs",
+        "namespace Orbit.Ops\n\
+         {\n\
+         \x20   public class Ops\n\
+         \x20   {\n\
+         \x20       public void Run()\n\
+         \x20       {\n\
+         \x20           // -----BEGIN RSA PRIVATE KEY-----\n\
+         \x20           // MIIEcommentkeymaterialSentinel\n\
+         \x20           // -----END RSA PRIVATE KEY-----\n\
+         \x20           // password:\n\
+         \x20           // hunter2-comment-nextline\n\
+         \x20           heslo = \"pivo-heslo-sentinel\";\n\
+         \x20           secret = \"kocka-secret-sentinel\";\n\
+         \x20           Exec(\"create login k with password 'sql-pw-sentinel'\");\n\
+         \x20           var token = \"9f2b7c11ea3d40aa9c1fdeadbeef0123\";\n\
+         \x20           throw new OrbitException(\"Chybné heslo\");\n\
+         \x20       }\n\
+         \x20   }\n\
+         }\n",
+    ));
+    files.push((
+        "native/k.h",
+        "/* password: header-pw-sentinel */\n#define TIMEOUT 30\n\
+         #define DB_PASSWORD \"define-pw-sentinel\"\n",
+    ));
+    init_repo_with_files(dir, "Alice", &files);
+}
+
+/// R10 over the whole run AND the graph: anchors reach no artifact before the
+/// detail exists (U8), so a value that leaked into an anchor would pass every
+/// artifact sweep. The graph is where it would sit.
+#[test]
+fn no_secret_value_reaches_the_graph_through_an_anchor_surface() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    anchor_fixture(repo.path());
+
+    let generated = generate(&config_for(repo.path(), out.path())).expect("the pipeline runs");
+    let texts: Vec<String> = generated
+        .graph
+        .nodes_sorted()
+        .iter()
+        .flat_map(|n| n.facts.iter())
+        .filter_map(|f| match &f.value {
+            reverse_architect::graph::FactValue::Text(t) => Some(t.clone()),
+            _ => None,
+        })
+        .collect();
+    let anchors: Vec<&String> = generated
+        .graph
+        .nodes_sorted()
+        .iter()
+        .flat_map(|n| n.facts.iter())
+        .filter(|f| f.kind == reverse_architect::graph::FactKind::Anchor)
+        .filter_map(|f| match &f.value {
+            reverse_architect::graph::FactValue::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        anchors.iter().any(|a| a.ends_with("Chybné heslo")),
+        "control: the fixture's message is an anchor, so the sweep is not vacuous: {anchors:#?}"
+    );
+    for text in &texts {
+        for secret in SECRETS.iter().chain(ANCHOR_SECRETS) {
+            assert!(
+                !text.contains(secret),
+                "R10: `{secret}` reached a fact: {text}"
+            );
+        }
+    }
+
+    let artifacts = all_artifacts(repo.path(), out.path());
+    for (label, contents) in &artifacts {
+        for secret in SECRETS.iter().chain(ANCHOR_SECRETS) {
+            assert!(
+                !contents.contains(secret),
+                "R10: `{secret}` leaked into {label}"
+            );
+        }
+    }
+}
+
+// ---- Every surface of area B (plan B, U15: R10, KTD11) ----
+//
+// The sweeps above look for each secret as one substring. That misses the
+// surface plan B added that cuts text into words: a keyword is a word of a
+// comment or a literal, split at case changes, digits and separators and
+// lowercased (KTD4). `hunter2-comment-nextline` leaking into the keywords
+// arrives as `nextline` and passes every check above. So the sentinels below
+// are single lowercase words — a keyword would carry one whole — each planted
+// behind one secret shape, and every sweep lowercases what it reads.
+
+/// The configured company prefix, and the token it names.
+const B_PREFIX: &str = "acmetok-";
+/// The part of the prefixed token a keyword would carry.
+const B_PREFIXED: &str = "glimmerstoneharborvale";
+
+/// (sentinel, where it is planted) — one row per secret shape of KTD11.
+const B_SECRETS: &[(&str, &str)] = &[
+    ("zorbaglimmer", "a `password:` comment"),
+    ("quillfrond", "a `secret = \"…\"` literal"),
+    ("mossbrindle", "the password of a connection string"),
+    ("tarnwhistle", "a Czech `heslo = \"…\"` literal"),
+    ("plinthgrove", "a SQL `PASSWORD '…'`"),
+    ("vexmarrow", "the first sentence of a doc comment"),
+    (
+        B_PREFIXED,
+        "a configured-prefix token in a comment and a literal",
+    ),
+    (
+        "fernwickjson",
+        "a JSON literal with a quoted `\"password\"` key",
+    ),
+    (
+        "brackleescaped",
+        "an escaped JSON literal: `\\\"password\\\":`",
+    ),
+    ("gorsecomment", "a JSON line in a comment"),
+    ("thistlexml", "an XML `<Password>` element in a literal"),
+    ("bramblesetting", "an appSettings `key=… value=…` pair"),
+    ("quillondefine", "a C `#define DB_PASSWORD \"…\"`"),
+    ("pemtailwarbler", "a PEM body literal no rule names alone"),
+    (
+        "miiepaibaakcaqeazinnober7",
+        "a PEM body literal with its `\\n` escape",
+    ),
+    (
+        "qmfzzty0u2vudgluzwxcbg9i7x",
+        "a lone key-shaped literal with its `\\n` escape",
+    ),
+    (
+        "c0ffee5eed1234abcd5678ef90abcdef",
+        "a `Bearer` value inside a multi-word literal",
+    ),
+    (
+        "wombatquasar",
+        "a passphrase of several words assigned to `password`",
+    ),
+    (
+        "kestrelvane",
+        "a passphrase of several words assigned to a Czech `heslo` name",
+    ),
+    ("plovermarsh", "a value on the line below `apiKey =`"),
+    (LEDGER_KEY_WORD, "a key-shaped word of a doc comment"),
+    ("lanternmoth", "a value at column zero below `var pwd =`"),
+    (
+        "lanternfinch",
+        "a passphrase at column zero below `var dbPassword =`",
+    ),
+    (
+        STAMP_KEY_WORD,
+        "a key-shaped word inside a doc comment's `<c>` tag",
+    ),
+    (
+        TOKEN_KEY_WORD,
+        "a key-shaped doc comment `<summary>KEY</summary>`",
+    ),
+    (
+        "quokkaphrase",
+        "a passphrase under a quoted JS `\"password\"` key",
+    ),
+];
+
+/// A key-shaped word written inside a doc comment's `<c>` tag, and that word
+/// as a lowercased sweep reads it.
+const STAMP_KEY: &str = "Hx4PqL8wZt2RvN6kYb3Mj9Cd";
+const STAMP_KEY_WORD: &str = "hx4pql8wzt2rvn6kyb3mj9cd";
+/// A key-shaped word that is a doc comment's whole `<summary>`, unspaced.
+const TOKEN_KEY: &str = "Wd5TgB7nRk2XpM9vLc4Hs8Qa";
+const TOKEN_KEY_WORD: &str = "wd5tgb7nrk2xpm9vlc4hs8qa";
+
+/// The purpose a doc comment gives `Ledger`, before the key-shaped word
+/// [`LEDGER_KEY`] that follows it in the same sentence.
+const LEDGER_PURPOSE: &str = "Seals the ledger with";
+/// A key-shaped word in a doc comment's first sentence — what the purpose
+/// would quote whole — and that word as a lowercased sweep reads it.
+const LEDGER_KEY: &str = "Zq7RtVx3Kp9WmN2bYc5Hd8Fg";
+const LEDGER_KEY_WORD: &str = "zq7rtvx3kp9wmn2byc5hd8fg";
+
+/// The two messages support searches for, which name a password without
+/// being one (AE5). Neither may be withheld.
+const MESSAGES: [&str; 2] = ["Chybné heslo", "Zadejte heslo"];
+
+/// The purpose sentence of the type that holds no secret: the control that
+/// the purpose surfaces — card, map row, header, model input — are there.
+const CLEAN_PURPOSE: &str = "Removes the temporary files a restore leaves behind.";
+
+fn vault_cs() -> String {
+    format!(
+        "namespace Orbit.Vault\n\
+         {{\n\
+         \x20   /// <summary>Opens the vault with api_key = \"vexmarrow\" for the restore.</summary>\n\
+         \x20   public class Vault\n\
+         \x20   {{\n\
+         \x20       public void Open()\n\
+         \x20       {{\n\
+         \x20           // password: zorbaglimmer\n\
+         \x20           secret = \"quillfrond\";\n\
+         \x20           var conn = \"Server=sql01;Database=orbit;User Id=sa;Password=mossbrindle\";\n\
+         \x20           heslo = \"tarnwhistle\";\n\
+         \x20           Exec(\"create login k with password 'plinthgrove'\");\n\
+         \x20           // Rotate with {B_PREFIX}{B_PREFIXED} yearly\n\
+         \x20           var t = \"{B_PREFIX}{B_PREFIXED}\";\n\
+         \x20           var body = \"\"\"{{\"user\": \"admin\", \"password\": \"fernwickjson\"}}\"\"\";\n\
+         \x20           var json = \"{{\\\"user\\\":\\\"admin\\\",\\\"password\\\":\\\"brackleescaped\\\"}}\";\n\
+         \x20           // {{\"password\": \"gorsecomment\"}}\n\
+         \x20           var xml = \"<Password>thistlexml</Password>\";\n\
+         \x20           var cfg = \"<add key=\\\"DbPassword\\\" value=\\\"bramblesetting\\\" />\";\n\
+         \x20           var auth = \"Bearer c0ffee5eed1234abcd5678ef90abcdef\";\n\
+         \x20           var blob = \"QmFzZTY0U2VudGluZWxCbG9i7x\\n\";\n\
+         \x20           var key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +\n\
+         \x20               \"MIIEpAIBAAKCAQEAzinnober7\\n\" +\n\
+         \x20               \"pemtailwarbler==\\n\" +\n\
+         \x20               \"-----END RSA PRIVATE KEY-----\\n\";\n\
+         \x20           password = \"saffron wombatquasar lintel\";\n\
+         \x20           var noveHeslo = \"moje tajne kestrelvane\";\n\
+         \x20           apiKey =\n\
+         \x20               \"plovermarsh\";\n\
+         \x20           var pwd =\n\
+         \"lanternmoth\";\n\
+         \x20           var dbPassword =\n\
+         \"tichy lanternfinch kamen\";\n\
+         \x20           Exec(\"update dba.vault_keys set rotated = 1\");\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// <summary>{LEDGER_PURPOSE} {LEDGER_KEY} before the audit.</summary>\n\
+         \x20   public class Ledger\n\
+         \x20   {{\n\
+         \x20       public void Seal() {{ }}\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// <summary>Stamps the seal <c>{STAMP_KEY}</c>.</summary>\n\
+         \x20   public class Stamp\n\
+         \x20   {{\n\
+         \x20       public void Press() {{ }}\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// <summary>{TOKEN_KEY}</summary>\n\
+         \x20   public class Token\n\
+         \x20   {{\n\
+         \x20       public void Spend() {{ }}\n\
+         \x20   }}\n\
+         \n\
+         \x20   /// <summary>{CLEAN_PURPOSE}</summary>\n\
+         \x20   public class Sweeper\n\
+         \x20   {{\n\
+         \x20       public string Check(bool bad)\n\
+         \x20       {{\n\
+         \x20           // Rotates the quarterly snapshots\n\
+         \x20           if (bad) throw new OrbitException(\"Chybné heslo\");\n\
+         \x20           return \"Zadejte heslo\";\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         }}\n"
+    )
+}
+
+/// The base fixture plus the area-B file.
+fn b_fixture(dir: &Path) {
+    let vault = vault_cs();
+    let mut files = BASE_FILES.to_vec();
+    files.push(("src/Vault.cs", &vault));
+    files.push((
+        "src/vault.ts",
+        "export function vaultCfg() {\n    return { \"password\": \"amber quokkaphrase tide\" };\n}\n",
+    ));
+    files.push((
+        "native/vault.h",
+        "#define DB_PASSWORD \"quillondefine\"\n#define GREETING \"Vitejte v trezoru\"\n",
+    ));
+    init_repo_with_files(dir, "Alice", &files);
+}
+
+fn b_config(repo: &Path, out: &Path) -> Config {
+    let mut config = config_for(repo, out);
+    config.secret_prefixes = vec![B_PREFIX.to_string()];
+    config
+}
+
+/// Assert no sentinel of [`B_SECRETS`] — nor any older secret of this file —
+/// is in `text`, read lowercased.
+fn assert_no_b_secret(label: &str, text: &str) {
+    let lower = text.to_lowercase();
+    for (secret, planted) in B_SECRETS {
+        assert!(
+            !lower.contains(secret),
+            "R10: `{secret}` ({planted}) leaked into {label}"
+        );
+    }
+    for secret in SECRETS.iter().chain(ANCHOR_SECRETS) {
+        assert!(
+            !lower.contains(&secret.to_lowercase()),
+            "R10: `{secret}` leaked into {label}"
+        );
+    }
+}
+
+/// The lines of a rendered page's `## name` section.
+fn section_lines<'a>(page: &'a str, name: &str) -> Vec<&'a str> {
+    page.split(&format!("\n## {name}\n"))
+        .nth(1)
+        .unwrap_or("")
+        .lines()
+        .take_while(|l| !l.starts_with("## "))
+        .collect()
+}
+
+/// The one rendered file whose path starts with `prefix` and ends in
+/// `/<name>.md`.
+fn page<'a>(files: &'a [RenderedFile], prefix: &str, name: &str) -> &'a str {
+    let found: Vec<&RenderedFile> = files
+        .iter()
+        .filter(|f| f.path.starts_with(prefix) && f.path.ends_with(&format!("/{name}.md")))
+        .collect();
+    assert_eq!(found.len(), 1, "{prefix}…/{name}.md");
+    &found[0].contents
+}
+
+/// R10 over every surface plan B added, one sentinel per secret shape: the
+/// anchors and the database accesses in the details, the keywords and the
+/// purpose on the cards, the map rows, every manifest form and the header of
+/// every document. Each surface is shown to be present first, so no sweep
+/// passes over an artifact that simply stopped carrying it.
+#[test]
+fn no_secret_reaches_any_surface_area_b_added() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    b_fixture(repo.path());
+    let generated = generate(&b_config(repo.path(), out.path())).expect("the pipeline runs");
+
+    // The surfaces are there.
+    let sweeper = page(&generated.details, "cards/detail/type/", "Sweeper");
+    let anchors = section_lines(sweeper, "Anchors");
+    for message in MESSAGES {
+        assert!(
+            anchors
+                .iter()
+                .any(|l| l.starts_with(&format!("- `{message}` → `Check(bool)`"))),
+            "AE5: `{message}` is a message, not a secret, and stays an anchor: {sweeper}"
+        );
+    }
+    let vault = page(&generated.details, "cards/detail/type/", "Vault");
+    assert!(
+        section_lines(vault, "Anchors")
+            .iter()
+            .any(|l| l.starts_with("- withheld: ")),
+        "the withheld texts keep their place: {vault}"
+    );
+    assert!(
+        section_lines(vault, "Anchors")
+            .iter()
+            .any(|l| l.starts_with("- `Bearer` → ")),
+        "the words around a key stay an anchor, the key does not: {vault}"
+    );
+    assert!(
+        section_lines(vault, "Database")
+            .iter()
+            .any(|l| l.contains("writes `dba.vault_keys`")),
+        "{vault}"
+    );
+    let card = page(&generated.cards, "cards/type/", "Sweeper");
+    assert!(
+        section_lines(card, "Keywords")
+            .concat()
+            .contains("quarterly"),
+        "a comment's word reaches the keywords, so a secret's word could: {card}"
+    );
+    assert!(
+        section_lines(card, "Purpose")
+            .iter()
+            .any(|l| l.starts_with(CLEAN_PURPOSE)),
+        "{card}"
+    );
+    assert!(
+        generated.maps.iter().any(|m| m
+            .contents
+            .lines()
+            .any(|row| row.contains("[Sweeper](") && row.contains(CLEAN_PURPOSE))),
+        "the map row carries the purpose"
+    );
+    let headers: Vec<String> = generated
+        .manifest
+        .documents
+        .iter()
+        .filter_map(|d| d.header.as_ref())
+        .map(|h| serde_json::to_string(h).unwrap())
+        .collect();
+    assert!(
+        headers.iter().any(|h| h.contains(CLEAN_PURPOSE)),
+        "a header carries the purpose: {headers:#?}"
+    );
+    assert!(
+        headers.iter().any(|h| h.contains("\"name\":\"Vault\"")),
+        "the vault has headers of its own: {headers:#?}"
+    );
+    // The doc comment around the key-shaped word still gives the purpose —
+    // on the card, the map row and the header — so the sweep below reads
+    // the very sentence the word was cut out of.
+    let ledger = page(&generated.cards, "cards/type/", "Ledger");
+    assert!(
+        section_lines(ledger, "Purpose")
+            .iter()
+            .any(|l| l.starts_with(LEDGER_PURPOSE)),
+        "{ledger}"
+    );
+    assert!(
+        generated.maps.iter().any(|m| m
+            .contents
+            .lines()
+            .any(|row| row.contains("[Ledger](") && row.contains(LEDGER_PURPOSE))),
+        "the map row carries the ledger's purpose"
+    );
+    assert!(
+        headers.iter().any(|h| h.contains(LEDGER_PURPOSE)),
+        "a header carries the ledger's purpose: {headers:#?}"
+    );
+
+    // And none of them carries a secret.
+    for (label, contents) in artifacts_of(&generated) {
+        assert_no_b_secret(&label, &contents);
+    }
+    for header in &headers {
+        assert_no_b_secret("a manifest header", header);
+    }
+}
+
+/// The configured prefix is what keeps its token out — without it the same
+/// token reaches the anchors — so the sweep above can fail, and the
+/// sentinel row for the prefix is not covered by some other rule.
+#[test]
+fn without_the_configured_prefix_its_token_reaches_the_anchors() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    b_fixture(repo.path());
+    let generated = generate(&config_for(repo.path(), out.path())).expect("the pipeline runs");
+    let vault = page(&generated.details, "cards/detail/type/", "Vault");
+    assert!(
+        section_lines(vault, "Anchors")
+            .iter()
+            .any(|l| l.contains(B_PREFIXED)),
+        "{vault}"
+    );
+}
+
+/// The written corpus and the extraction cache beside it hold no secret,
+/// after a cold run and after a warm one over the same directory.
+#[test]
+fn no_secret_reaches_a_written_file_or_the_cache_cold_or_warm() {
+    let repo = tempfile::tempdir().unwrap();
+    b_fixture(repo.path());
+    let out = repo.path().join("corpus");
+    for run in ["cold", "warm"] {
+        assert_cmd::Command::cargo_bin("reverse-architect")
+            .unwrap()
+            .arg(repo.path())
+            .arg("--out")
+            .arg(&out)
+            .arg("--secret-prefix")
+            .arg(B_PREFIX)
+            .assert()
+            .success();
+        let files = every_file(&out);
+        assert!(
+            files.iter().any(|(p, _)| p.starts_with(".ra-cache/")),
+            "the sweep covers the cache: {:?}",
+            files.iter().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+        assert!(files.iter().any(|(p, _)| p.starts_with("cards/map/")));
+        assert!(files.iter().any(|(p, _)| p.starts_with("cards/detail/")));
+        for (path, bytes) in &files {
+            assert_no_b_secret(&format!("{path} ({run})"), &String::from_utf8_lossy(bytes));
+        }
+    }
+}
+
+/// The input of the purpose layer — every prompt a backend receives — the
+/// layer file, the answer cache and the corpus generated with the layer hold
+/// no secret, while the facts the prompts are about are there.
+#[test]
+fn no_secret_reaches_the_model_purpose_layer_or_its_backend() {
+    use reverse_architect::enrich::backend::{BackendError, LlmBackend};
+    use reverse_architect::verify::{purpose, BackendSettings};
+
+    /// Records every prompt and answers each with one licensed sentence.
+    struct Recording(std::cell::RefCell<Vec<String>>);
+    impl LlmBackend for Recording {
+        fn narrate(&self, prompt: &str) -> Result<String, BackendError> {
+            self.0.borrow_mut().push(prompt.to_string());
+            Ok(MODEL_SENTENCE.to_string())
+        }
+        fn id(&self) -> &'static str {
+            "recording"
+        }
+    }
+    const MODEL_SENTENCE: &str = "Keeps the work of the program together.";
+
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    b_fixture(repo.path());
+    let config = b_config(repo.path(), out.path());
+    let backend = Recording(std::cell::RefCell::new(Vec::new()));
+    let settings = BackendSettings {
+        backend: "fake".to_string(),
+        model: Some("small".to_string()),
+        base_url: None,
+    };
+    purpose::run(
+        &config,
+        &settings,
+        card::render::Lang::En,
+        Some(&backend),
+        &reverse_architect::progress::Silent,
+    )
+    .expect("verify --purpose runs");
+
+    let prompts = backend.0.into_inner();
+    let vault = prompts
+        .iter()
+        .find(|p| p.contains("Name: `Vault`"))
+        .expect("the vault's facts were asked about");
+    assert!(vault.contains("dba.vault_keys"), "{vault}");
+    let sweeper = prompts
+        .iter()
+        .find(|p| p.contains("Name: `Sweeper`"))
+        .expect("the sweeper's facts were asked about");
+    assert!(
+        sweeper.contains(CLEAN_PURPOSE) && MESSAGES.iter().all(|m| sweeper.contains(m)),
+        "the purpose and the anchors are sent: {sweeper}"
+    );
+    let ledger = prompts
+        .iter()
+        .find(|p| p.contains("Name: `Ledger`"))
+        .expect("the ledger's facts were asked about");
+    assert!(ledger.contains(LEDGER_PURPOSE), "{ledger}");
+    for prompt in &prompts {
+        assert_no_b_secret("a prompt", prompt);
+    }
+    let files = every_file(out.path());
+    assert!(
+        files.iter().any(|(p, _)| p == purpose::LAYER_FILENAME),
+        "{:?}",
+        files.iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+    for (path, bytes) in &files {
+        assert_no_b_secret(path, &String::from_utf8_lossy(bytes));
+    }
+
+    let shown = generate(&Config {
+        model_purpose: true,
+        ..config
+    })
+    .expect("generation reads the layer");
+    assert!(
+        page(&shown.cards, "cards/type/", "Vault").contains(MODEL_SENTENCE),
+        "the layer is shown"
+    );
+    for (label, contents) in artifacts_of(&shown) {
+        assert_no_b_secret(&label, &contents);
+    }
+}
+
+/// Every file under `dir`, the caches included, as (relative path, bytes).
+fn every_file(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push((rel, std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out
+}

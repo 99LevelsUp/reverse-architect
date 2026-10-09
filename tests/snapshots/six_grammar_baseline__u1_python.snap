@@ -1,0 +1,56 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+File py/consumer.py
+  Loc = 16  [metrics Measured Heuristic @ py/consumer.py:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ py/consumer.py:whole]
+File py/model.py
+  Loc = 12  [metrics Measured Heuristic @ py/model.py:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ py/model.py:whole]
+Symbol sym:python:py.consumer#PyReport
+  SymbolName = "PyReport"  [python Measured Heuristic @ py/consumer.py:4-9]
+  SymbolKind = "class"  [python Measured Heuristic @ py/consumer.py:4-9]
+  SymbolSignature = "class PyReport:"  [python Measured Heuristic @ py/consumer.py:4-9]
+  DocComment = "Výkaz shrnující jednu fakturu.\n    Drží už jen výslednou částku."  [python Measured Heuristic @ py/consumer.py:5-6]
+Symbol sym:python:py.consumer#PyReport.__init__(self,total)
+  SymbolName = "__init__"  [python Measured Heuristic @ py/consumer.py:8-9]
+  SymbolKind = "method"  [python Measured Heuristic @ py/consumer.py:8-9]
+  SymbolContainer = "PyReport"  [python Measured Heuristic @ py/consumer.py:8-9]
+  SymbolSignature = "def __init__(self, total):"  [python Measured Heuristic @ py/consumer.py:8-9]
+Symbol sym:python:py.consumer#py_build_report(amount)
+  SymbolName = "py_build_report"  [python Measured Heuristic @ py/consumer.py:12-16]
+  SymbolKind = "function"  [python Measured Heuristic @ py/consumer.py:12-16]
+  SymbolSignature = "def py_build_report(amount):"  [python Measured Heuristic @ py/consumer.py:12-16]
+  DocComment = "Sestaví výkaz z částky.\n    Použije model ze sousedního souboru."  [python Measured Heuristic @ py/consumer.py:13-14]
+Symbol sym:python:py.model#PyInvoice
+  SymbolName = "PyInvoice"  [python Measured Heuristic @ py/model.py:1-6]
+  SymbolKind = "class"  [python Measured Heuristic @ py/model.py:1-6]
+  SymbolSignature = "class PyInvoice:"  [python Measured Heuristic @ py/model.py:1-6]
+  DocComment = "Faktura s částkou.\n    Záporné hodnoty jsou neplatné."  [python Measured Heuristic @ py/model.py:2-3]
+Symbol sym:python:py.model#PyInvoice.__init__(self,amount)
+  SymbolName = "__init__"  [python Measured Heuristic @ py/model.py:5-6]
+  SymbolKind = "method"  [python Measured Heuristic @ py/model.py:5-6]
+  SymbolContainer = "PyInvoice"  [python Measured Heuristic @ py/model.py:5-6]
+  SymbolSignature = "def __init__(self, amount):"  [python Measured Heuristic @ py/model.py:5-6]
+Symbol sym:python:py.model#py_compute_total(invoice)
+  SymbolName = "py_compute_total"  [python Measured Heuristic @ py/model.py:9-12]
+  SymbolKind = "function"  [python Measured Heuristic @ py/model.py:9-12]
+  SymbolSignature = "def py_compute_total(invoice):"  [python Measured Heuristic @ py/model.py:9-12]
+  DocComment = "Spočítá celkovou částku.\n    Nikdy nevrací zápornou hodnotu."  [python Measured Heuristic @ py/model.py:10-11]
+--- edges ---
+Contains py -> py/consumer.py  [filetree Measured Heuristic @ py/consumer.py:whole]
+Contains py -> py/model.py  [filetree Measured Heuristic @ py/model.py:whole]
+Imports py/consumer.py -> py/model.py  [python Measured Heuristic @ py/consumer.py:1-1]
+Declares py/consumer.py -> sym:python:py.consumer#PyReport  [python Measured Heuristic @ py/consumer.py:4-9]
+Declares py/consumer.py -> sym:python:py.consumer#PyReport.__init__(self,total)  [python Measured Heuristic @ py/consumer.py:8-9]
+Declares py/consumer.py -> sym:python:py.consumer#py_build_report(amount)  [python Measured Heuristic @ py/consumer.py:12-16]
+Declares py/model.py -> sym:python:py.model#PyInvoice  [python Measured Heuristic @ py/model.py:1-6]
+Declares py/model.py -> sym:python:py.model#PyInvoice.__init__(self,amount)  [python Measured Heuristic @ py/model.py:5-6]
+Declares py/model.py -> sym:python:py.model#py_compute_total(invoice)  [python Measured Heuristic @ py/model.py:9-12]
+HasMember sym:python:py.consumer#PyReport -> sym:python:py.consumer#PyReport.__init__(self,total)  [python Measured Heuristic @ py/consumer.py:8-9]
+Instantiates sym:python:py.consumer#py_build_report(amount) -> sym:python:py.consumer#PyReport  [python Measured Heuristic @ py/consumer.py:16-16]
+Instantiates sym:python:py.consumer#py_build_report(amount) -> sym:python:py.model#PyInvoice  [python Measured Heuristic @ py/consumer.py:15-15]
+Calls sym:python:py.consumer#py_build_report(amount) -> sym:python:py.model#py_compute_total(invoice)  [python Measured Heuristic @ py/consumer.py:16-16]
+HasMember sym:python:py.model#PyInvoice -> sym:python:py.model#PyInvoice.__init__(self,amount)  [python Measured Heuristic @ py/model.py:5-6]

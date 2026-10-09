@@ -1,0 +1,77 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+Symbol sym:ts:ts/consumer.ts#TsReport
+  SymbolName = "TsReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:7-13]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ ts/consumer.ts:7-13]
+  SymbolSignature = "class TsReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:7-13]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ ts/consumer.ts:7-13]
+  DocComment = "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku."  [ecmascript Measured Heuristic @ ts/consumer.ts:3-6]
+Symbol sym:ts:ts/consumer.ts#TsReport.constructor(number)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+  SymbolContainer = "TsReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+  SymbolSignature = "constructor(total: number)"  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+Symbol sym:ts:ts/consumer.ts#TsReport.total
+  SymbolName = "total"  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+  SymbolKind = "field"  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+  SymbolContainer = "TsReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+  SymbolSignature = "total: number"  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+Symbol sym:ts:ts/consumer.ts#tsBuildReport(number)
+  SymbolName = "tsBuildReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:19-22]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ ts/consumer.ts:19-22]
+  SymbolSignature = "function tsBuildReport(amount: number): TsReport"  [ecmascript Measured Heuristic @ ts/consumer.ts:19-22]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ ts/consumer.ts:19-22]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [ecmascript Measured Heuristic @ ts/consumer.ts:15-18]
+Symbol sym:ts:ts/model.ts#TsInvoice
+  SymbolName = "TsInvoice"  [ecmascript Measured Heuristic @ ts/model.ts:5-11]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ ts/model.ts:5-11]
+  SymbolSignature = "class TsInvoice"  [ecmascript Measured Heuristic @ ts/model.ts:5-11]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ ts/model.ts:5-11]
+  DocComment = "Faktura s částkou.\nZáporné hodnoty jsou neplatné."  [ecmascript Measured Heuristic @ ts/model.ts:1-4]
+Symbol sym:ts:ts/model.ts#TsInvoice.amount
+  SymbolName = "amount"  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+  SymbolKind = "field"  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+  SymbolContainer = "TsInvoice"  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+  SymbolSignature = "amount: number"  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+Symbol sym:ts:ts/model.ts#TsInvoice.constructor(number)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+  SymbolContainer = "TsInvoice"  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+  SymbolSignature = "constructor(amount: number)"  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+Symbol sym:ts:ts/model.ts#tsComputeTotal(TsInvoice)
+  SymbolName = "tsComputeTotal"  [ecmascript Measured Heuristic @ ts/model.ts:17-19]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ ts/model.ts:17-19]
+  SymbolSignature = "function tsComputeTotal(invoice: TsInvoice): number"  [ecmascript Measured Heuristic @ ts/model.ts:17-19]
+  SymbolVisibility = "export"  [ecmascript Measured Heuristic @ ts/model.ts:17-19]
+  DocComment = "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu."  [ecmascript Measured Heuristic @ ts/model.ts:13-16]
+File ts/consumer.ts
+  Loc = 22  [metrics Measured Heuristic @ ts/consumer.ts:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ ts/consumer.ts:whole]
+  Anchor = "literal 1 7 ./model"  [external Measured Heuristic @ ts/consumer.ts:1-1]
+File ts/model.ts
+  Loc = 19  [metrics Measured Heuristic @ ts/model.ts:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ ts/model.ts:whole]
+--- edges ---
+HasMember sym:ts:ts/consumer.ts#TsReport -> sym:ts:ts/consumer.ts#TsReport.constructor(number)  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+HasMember sym:ts:ts/consumer.ts#TsReport -> sym:ts:ts/consumer.ts#TsReport.total  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+References sym:ts:ts/consumer.ts#tsBuildReport(number) -> sym:ts:ts/consumer.ts#TsReport  [ecmascript Measured Heuristic @ ts/consumer.ts:19-19]
+Instantiates sym:ts:ts/consumer.ts#tsBuildReport(number) -> sym:ts:ts/consumer.ts#TsReport  [ecmascript Measured Heuristic @ ts/consumer.ts:21-21]
+Instantiates sym:ts:ts/consumer.ts#tsBuildReport(number) -> sym:ts:ts/model.ts#TsInvoice  [ecmascript Measured Heuristic @ ts/consumer.ts:20-20]
+Calls sym:ts:ts/consumer.ts#tsBuildReport(number) -> sym:ts:ts/model.ts#tsComputeTotal(TsInvoice)  [ecmascript Measured Heuristic @ ts/consumer.ts:21-21]
+HasMember sym:ts:ts/model.ts#TsInvoice -> sym:ts:ts/model.ts#TsInvoice.amount  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+HasMember sym:ts:ts/model.ts#TsInvoice -> sym:ts:ts/model.ts#TsInvoice.constructor(number)  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+References sym:ts:ts/model.ts#tsComputeTotal(TsInvoice) -> sym:ts:ts/model.ts#TsInvoice  [ecmascript Measured Heuristic @ ts/model.ts:17-17]
+Contains ts -> ts/consumer.ts  [filetree Measured Heuristic @ ts/consumer.ts:whole]
+Contains ts -> ts/model.ts  [filetree Measured Heuristic @ ts/model.ts:whole]
+Declares ts/consumer.ts -> sym:ts:ts/consumer.ts#TsReport  [ecmascript Measured Heuristic @ ts/consumer.ts:7-13]
+Declares ts/consumer.ts -> sym:ts:ts/consumer.ts#TsReport.constructor(number)  [ecmascript Measured Heuristic @ ts/consumer.ts:10-12]
+Declares ts/consumer.ts -> sym:ts:ts/consumer.ts#TsReport.total  [ecmascript Measured Heuristic @ ts/consumer.ts:8-8]
+Declares ts/consumer.ts -> sym:ts:ts/consumer.ts#tsBuildReport(number)  [ecmascript Measured Heuristic @ ts/consumer.ts:19-22]
+Imports ts/consumer.ts -> ts/model.ts  [ecmascript Measured Heuristic @ ts/consumer.ts:1-1]
+Declares ts/model.ts -> sym:ts:ts/model.ts#TsInvoice  [ecmascript Measured Heuristic @ ts/model.ts:5-11]
+Declares ts/model.ts -> sym:ts:ts/model.ts#TsInvoice.amount  [ecmascript Measured Heuristic @ ts/model.ts:6-6]
+Declares ts/model.ts -> sym:ts:ts/model.ts#TsInvoice.constructor(number)  [ecmascript Measured Heuristic @ ts/model.ts:8-10]
+Declares ts/model.ts -> sym:ts:ts/model.ts#tsComputeTotal(TsInvoice)  [ecmascript Measured Heuristic @ ts/model.ts:17-19]

@@ -1,0 +1,16 @@
+# Normalize all text to LF in the repo. Determinism is the product's core
+# claim; golden snapshots and generated corpora must be byte-identical across
+# machines, so line endings must not depend on the checkout OS.
+* text=auto eol=lf
+
+# Generated / snapshot artifacts: always LF, never auto-detected as binary.
+*.rs   text eol=lf
+*.snap text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+
+# Plugin components are committed build artifacts whose hash is a run-fingerprint
+# input (R13): never let git touch their bytes.
+*.wasm binary
+SHA256SUMS text eol=lf

@@ -1,0 +1,7206 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: to_json_pretty(&manifest)
+---
+{
+  "schema_version": 10,
+  "strings": [
+    ".",
+    "Cargo.toml",
+    "cs",
+    "cs/Consumer.cs",
+    "cs/Model.cs",
+    "dep:cargo:serde",
+    "dep:go:github.com/google/uuid",
+    "go.mod",
+    "dep:npm:left-pad",
+    "package.json",
+    "go",
+    "go/consumer.go",
+    "go/model.go",
+    "java",
+    "java/demo",
+    "java/demo/JavaInvoice.java",
+    "java/demo/JavaReport.java",
+    "js",
+    "js/consumer.js",
+    "js/model.js",
+    "py",
+    "py/consumer.py",
+    "py/model.py",
+    "rust",
+    "rust/src",
+    "rust/src/consumer.rs",
+    "rust/src/model.rs",
+    "sym:csharp:Fixture.Billing#CsCalculator",
+    "sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice)",
+    "sym:csharp:Fixture.Billing#CsInvoice",
+    "sym:csharp:Fixture.Billing#CsInvoice.Amount",
+    "sym:csharp:Fixture.Billing#CsInvoice.CsInvoice(int)",
+    "sym:csharp:Fixture.Billing#CsReport",
+    "sym:csharp:Fixture.Billing#CsReport.BuildReport(int)",
+    "sym:csharp:Fixture.Billing#CsReport.Total",
+    "sym:go:go#GoBuildReport(int64)",
+    "sym:go:go#GoComputeTotal(GoInvoice)",
+    "sym:go:go#GoInvoice",
+    "sym:go:go#GoInvoice.Amount",
+    "sym:go:go#GoReport",
+    "sym:go:go#GoReport.Total",
+    "sym:java:demo#JavaInvoice",
+    "sym:java:demo#JavaInvoice.JavaInvoice(long)",
+    "sym:java:demo#JavaInvoice.amount",
+    "sym:java:demo#JavaInvoice.total()",
+    "sym:java:demo#JavaReport",
+    "sym:java:demo#JavaReport.JavaReport(long)",
+    "sym:java:demo#JavaReport.build(long)",
+    "sym:js:js/consumer.js#JsReport",
+    "sym:js:js/consumer.js#JsReport.constructor(total)",
+    "sym:js:js/consumer.js#jsBuildReport(amount)",
+    "sym:js:js/model.js#JsInvoice",
+    "sym:js:js/model.js#JsInvoice.amount",
+    "sym:js:js/model.js#JsInvoice.constructor(amount)",
+    "sym:js:js/model.js#jsComputeTotal(invoice)",
+    "sym:python:py.consumer#PyReport",
+    "sym:python:py.consumer#PyReport.__init__(self,total)",
+    "sym:python:py.consumer#py_build_report(amount)",
+    "sym:python:py.model#PyInvoice",
+    "sym:python:py.model#PyInvoice.__init__(self,amount)",
+    "sym:python:py.model#py_compute_total(invoice)",
+    "sym:rust:crate::consumer#RustReport",
+    "sym:rust:crate::consumer#RustReport.total",
+    "sym:rust:crate::consumer#rust_build_report(i64)",
+    "sym:rust:crate::model#RustInvoice",
+    "sym:rust:crate::model#RustInvoice.amount",
+    "sym:rust:crate::model#RustInvoice.new(i64)",
+    "sym:rust:crate::model#rust_compute_total(&RustInvoice)",
+    "sym:ts:ts/consumer.ts#TsReport",
+    "ts/consumer.ts",
+    "sym:ts:ts/consumer.ts#TsReport.constructor(number)",
+    "sym:ts:ts/consumer.ts#TsReport.total",
+    "sym:ts:ts/consumer.ts#tsBuildReport(number)",
+    "sym:ts:ts/model.ts#TsInvoice",
+    "ts/model.ts",
+    "sym:ts:ts/model.ts#TsInvoice.amount",
+    "sym:ts:ts/model.ts#TsInvoice.constructor(number)",
+    "sym:ts:ts/model.ts#tsComputeTotal(TsInvoice)",
+    "sym:ts:tsx/consumer.tsx#TsxReport",
+    "tsx/consumer.tsx",
+    "sym:ts:tsx/consumer.tsx#TsxReport.amount",
+    "sym:ts:tsx/consumer.tsx#TsxReport.constructor(number)",
+    "sym:ts:tsx/consumer.tsx#tsxBuildReport(number)",
+    "sym:ts:tsx/model.tsx#TsxInvoice",
+    "tsx/model.tsx",
+    "sym:ts:tsx/model.tsx#TsxInvoice.amount",
+    "sym:ts:tsx/model.tsx#TsxInvoice.constructor(number)",
+    "sym:ts:tsx/model.tsx#tsxRenderAmount(TsxInvoice)",
+    "ts",
+    "tsx",
+    "name-match",
+    "declared-receiver",
+    "base-spelling"
+  ],
+  "documents": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "guiding_question": "What is this repository, and how is it shaped at the top level?",
+      "path": "overview.md",
+      "chunks": [
+        {
+          "id": "overview#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "overview#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "overview#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "module-structure",
+      "title": "Module structure",
+      "guiding_question": "How is the code split into modules, and what does each module contain?",
+      "path": "module-structure.md",
+      "chunks": [
+        {
+          "id": "module-structure#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "module-structure#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "module-structure#diagram",
+          "heading": "Diagram"
+        },
+        {
+          "id": "module-structure#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "dependencies",
+      "title": "Dependencies",
+      "guiding_question": "What external code does this repository depend on, and how?",
+      "path": "dependencies.md",
+      "chunks": [
+        {
+          "id": "dependencies#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "dependencies#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "dependencies#diagram",
+          "heading": "Diagram"
+        },
+        {
+          "id": "dependencies#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "entry-points",
+      "title": "Entry points",
+      "guiding_question": "Where does execution start, and how is this code entered?",
+      "path": "entry-points.md",
+      "chunks": [
+        {
+          "id": "entry-points#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "entry-points#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "entry-points#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "test-coverage",
+      "title": "Test coverage",
+      "guiding_question": "Which sources have a test by convention, and how far does extraction reach?",
+      "path": "test-coverage.md",
+      "chunks": [
+        {
+          "id": "test-coverage#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "test-coverage#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "test-coverage#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "key_id": 0,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 298,
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "csharp: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "go: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "java: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "javascript: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "python: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "rust: 2 of 2 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "typescript: 4 of 4 source files carry tree-sitter structural facts; 0 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 1,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 7,
+          "provenance": {
+            "file_id": 1,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 2,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 42,
+          "provenance": {
+            "file_id": 2,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 3,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 18,
+          "provenance": {
+            "file_id": 3,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 3,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 4,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 24,
+          "provenance": {
+            "file_id": 4,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 4,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 5,
+      "kind": "dependency",
+      "facts": [
+        {
+          "kind": "dependency_name",
+          "value": "serde",
+          "provenance": {
+            "file_id": 1,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "dependency_scope",
+          "value": "normal",
+          "provenance": {
+            "file_id": 1,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 6,
+      "kind": "dependency",
+      "facts": [
+        {
+          "kind": "dependency_name",
+          "value": "github.com/google/uuid",
+          "provenance": {
+            "file_id": 7,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "dependency_scope",
+          "value": "normal",
+          "provenance": {
+            "file_id": 7,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 8,
+      "kind": "dependency",
+      "facts": [
+        {
+          "kind": "dependency_name",
+          "value": "left-pad",
+          "provenance": {
+            "file_id": 9,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "dependency_scope",
+          "value": "normal",
+          "provenance": {
+            "file_id": 9,
+            "line": null,
+            "extractor": "manifest-deps",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 10,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 27,
+          "provenance": {
+            "file_id": 10,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 7,
+      "kind": "file",
+      "facts": []
+    },
+    {
+      "key_id": 11,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 14,
+          "provenance": {
+            "file_id": 11,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 11,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 12,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 13,
+          "provenance": {
+            "file_id": 12,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 12,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 13,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 41,
+          "provenance": {
+            "file_id": 13,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 14,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 41,
+          "provenance": {
+            "file_id": 14,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 15,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 21,
+          "provenance": {
+            "file_id": 15,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 15,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 16,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 20,
+          "provenance": {
+            "file_id": 16,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 16,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 17,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 39,
+          "provenance": {
+            "file_id": 17,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 18,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 20,
+          "provenance": {
+            "file_id": 18,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 18,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 19,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 19,
+          "provenance": {
+            "file_id": 19,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 19,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 9,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 7,
+          "provenance": {
+            "file_id": 9,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 20,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 28,
+          "provenance": {
+            "file_id": 20,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 21,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 16,
+          "provenance": {
+            "file_id": 21,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 21,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 22,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 12,
+          "provenance": {
+            "file_id": 22,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 22,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 23,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 25,
+          "provenance": {
+            "file_id": 23,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 24,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 25,
+          "provenance": {
+            "file_id": 24,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 25,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 12,
+          "provenance": {
+            "file_id": 25,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 25,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 26,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 13,
+          "provenance": {
+            "file_id": 26,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 26,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 27,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "CsCalculator",
+          "provenance": {
+            "file_id": 4,
+            "line": 15,
+            "end_line": 23,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 4,
+            "line": 15,
+            "end_line": 23,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public class CsCalculator",
+          "provenance": {
+            "file_id": 4,
+            "line": 15,
+            "end_line": 23,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 4,
+            "line": 15,
+            "end_line": 23,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 28,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "CsComputeTotal",
+          "provenance": {
+            "file_id": 4,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 4,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "CsCalculator",
+          "provenance": {
+            "file_id": 4,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public int CsComputeTotal(CsInvoice invoice)",
+          "provenance": {
+            "file_id": 4,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 4,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 4,
+            "line": 17,
+            "end_line": 18,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 29,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "CsInvoice",
+          "provenance": {
+            "file_id": 4,
+            "line": 5,
+            "end_line": 13,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 4,
+            "line": 5,
+            "end_line": 13,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public class CsInvoice",
+          "provenance": {
+            "file_id": 4,
+            "line": 5,
+            "end_line": 13,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 4,
+            "line": 5,
+            "end_line": 13,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou.\nZáporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 4,
+            "line": 3,
+            "end_line": 4,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 30,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "Amount",
+          "provenance": {
+            "file_id": 4,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "property",
+          "provenance": {
+            "file_id": 4,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "CsInvoice",
+          "provenance": {
+            "file_id": 4,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public int Amount",
+          "provenance": {
+            "file_id": 4,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 4,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 31,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "CsInvoice",
+          "provenance": {
+            "file_id": 4,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 4,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "CsInvoice",
+          "provenance": {
+            "file_id": 4,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public CsInvoice(int amount)",
+          "provenance": {
+            "file_id": 4,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 4,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 32,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "CsReport",
+          "provenance": {
+            "file_id": 3,
+            "line": 5,
+            "end_line": 17,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 3,
+            "line": 5,
+            "end_line": 17,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public class CsReport",
+          "provenance": {
+            "file_id": 3,
+            "line": 5,
+            "end_line": 17,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 3,
+            "line": 5,
+            "end_line": 17,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 3,
+            "line": 3,
+            "end_line": 4,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 33,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "BuildReport",
+          "provenance": {
+            "file_id": 3,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 3,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "CsReport",
+          "provenance": {
+            "file_id": 3,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public CsReport BuildReport(int amount)",
+          "provenance": {
+            "file_id": 3,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 3,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 3,
+            "line": 9,
+            "end_line": 10,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 34,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "Total",
+          "provenance": {
+            "file_id": 3,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "property",
+          "provenance": {
+            "file_id": 3,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "CsReport",
+          "provenance": {
+            "file_id": 3,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public int Total",
+          "provenance": {
+            "file_id": 3,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 3,
+            "line": 7,
+            "extractor": "csharp",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 35,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "GoBuildReport",
+          "provenance": {
+            "file_id": 11,
+            "line": 11,
+            "end_line": 14,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 11,
+            "line": 11,
+            "end_line": 14,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "func GoBuildReport(amount int64) GoReport",
+          "provenance": {
+            "file_id": 11,
+            "line": 11,
+            "end_line": 14,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 36,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "GoComputeTotal",
+          "provenance": {
+            "file_id": 12,
+            "line": 11,
+            "end_line": 13,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 12,
+            "line": 11,
+            "end_line": 13,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "func GoComputeTotal(invoice GoInvoice) int64",
+          "provenance": {
+            "file_id": 12,
+            "line": 11,
+            "end_line": 13,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 37,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "GoInvoice",
+          "provenance": {
+            "file_id": 12,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "struct",
+          "provenance": {
+            "file_id": 12,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "GoInvoice struct",
+          "provenance": {
+            "file_id": 12,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 38,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "Amount",
+          "provenance": {
+            "file_id": 12,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 12,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "GoInvoice",
+          "provenance": {
+            "file_id": 12,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "Amount int64",
+          "provenance": {
+            "file_id": 12,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 39,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "GoReport",
+          "provenance": {
+            "file_id": 11,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "struct",
+          "provenance": {
+            "file_id": 11,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "GoReport struct",
+          "provenance": {
+            "file_id": 11,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 40,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "Total",
+          "provenance": {
+            "file_id": 11,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 11,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "GoReport",
+          "provenance": {
+            "file_id": 11,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "Total int64",
+          "provenance": {
+            "file_id": 11,
+            "line": 6,
+            "extractor": "go",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 41,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 7,
+            "end_line": 21,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 15,
+            "line": 7,
+            "end_line": 21,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public class JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 7,
+            "end_line": 21,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 15,
+            "line": 7,
+            "end_line": 21,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou.\nZáporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 15,
+            "line": 3,
+            "end_line": 6,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 42,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 15,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public JavaInvoice(long amount)",
+          "provenance": {
+            "file_id": 15,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 15,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 43,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 15,
+            "line": 8,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 15,
+            "line": 8,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 8,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "private final long amount;",
+          "provenance": {
+            "file_id": 15,
+            "line": 8,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "private",
+          "provenance": {
+            "file_id": 15,
+            "line": 8,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 44,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "total",
+          "provenance": {
+            "file_id": 15,
+            "line": 18,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 15,
+            "line": 18,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JavaInvoice",
+          "provenance": {
+            "file_id": 15,
+            "line": 18,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public long total()",
+          "provenance": {
+            "file_id": 15,
+            "line": 18,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 15,
+            "line": 18,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 15,
+            "line": 14,
+            "end_line": 17,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 45,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JavaReport",
+          "provenance": {
+            "file_id": 16,
+            "line": 7,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 16,
+            "line": 7,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public class JavaReport extends JavaInvoice",
+          "provenance": {
+            "file_id": 16,
+            "line": 7,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 16,
+            "line": 7,
+            "end_line": 20,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 16,
+            "line": 3,
+            "end_line": 6,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 46,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JavaReport",
+          "provenance": {
+            "file_id": 16,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 16,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JavaReport",
+          "provenance": {
+            "file_id": 16,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public JavaReport(long total)",
+          "provenance": {
+            "file_id": 16,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 16,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 47,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "build",
+          "provenance": {
+            "file_id": 16,
+            "line": 16,
+            "end_line": 19,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 16,
+            "line": 16,
+            "end_line": 19,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JavaReport",
+          "provenance": {
+            "file_id": 16,
+            "line": 16,
+            "end_line": 19,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "public static JavaReport build(long amount)",
+          "provenance": {
+            "file_id": 16,
+            "line": 16,
+            "end_line": 19,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "public",
+          "provenance": {
+            "file_id": 16,
+            "line": 16,
+            "end_line": 19,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 16,
+            "line": 12,
+            "end_line": 15,
+            "extractor": "java",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 48,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JsReport",
+          "provenance": {
+            "file_id": 18,
+            "line": 7,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 18,
+            "line": 7,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class JsReport extends JsInvoice",
+          "provenance": {
+            "file_id": 18,
+            "line": 7,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 18,
+            "line": 3,
+            "end_line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 49,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 18,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 18,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JsReport",
+          "provenance": {
+            "file_id": 18,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(total)",
+          "provenance": {
+            "file_id": 18,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 50,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "jsBuildReport",
+          "provenance": {
+            "file_id": 18,
+            "line": 17,
+            "end_line": 20,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 18,
+            "line": 17,
+            "end_line": 20,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "function jsBuildReport(amount)",
+          "provenance": {
+            "file_id": 18,
+            "line": 17,
+            "end_line": 20,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 18,
+            "line": 13,
+            "end_line": 16,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 51,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "JsInvoice",
+          "provenance": {
+            "file_id": 19,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 19,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class JsInvoice",
+          "provenance": {
+            "file_id": 19,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou.\nZáporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 19,
+            "line": 1,
+            "end_line": 4,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 52,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 19,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 19,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JsInvoice",
+          "provenance": {
+            "file_id": 19,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "amount = 0",
+          "provenance": {
+            "file_id": 19,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 53,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 19,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 19,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "JsInvoice",
+          "provenance": {
+            "file_id": 19,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(amount)",
+          "provenance": {
+            "file_id": 19,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 54,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "jsComputeTotal",
+          "provenance": {
+            "file_id": 19,
+            "line": 17,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 19,
+            "line": 17,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "const jsComputeTotal = (invoice) =>",
+          "provenance": {
+            "file_id": 19,
+            "line": 17,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 19,
+            "line": 13,
+            "end_line": 16,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 55,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "PyReport",
+          "provenance": {
+            "file_id": 21,
+            "line": 4,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 21,
+            "line": 4,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class PyReport:",
+          "provenance": {
+            "file_id": 21,
+            "line": 4,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\n    Drží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 21,
+            "line": 5,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 56,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "__init__",
+          "provenance": {
+            "file_id": 21,
+            "line": 8,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 21,
+            "line": 8,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "PyReport",
+          "provenance": {
+            "file_id": 21,
+            "line": 8,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "def __init__(self, total):",
+          "provenance": {
+            "file_id": 21,
+            "line": 8,
+            "end_line": 9,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 57,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "py_build_report",
+          "provenance": {
+            "file_id": 21,
+            "line": 12,
+            "end_line": 16,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 21,
+            "line": 12,
+            "end_line": 16,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "def py_build_report(amount):",
+          "provenance": {
+            "file_id": 21,
+            "line": 12,
+            "end_line": 16,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\n    Použije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 21,
+            "line": 13,
+            "end_line": 14,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 58,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "PyInvoice",
+          "provenance": {
+            "file_id": 22,
+            "line": 1,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 22,
+            "line": 1,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class PyInvoice:",
+          "provenance": {
+            "file_id": 22,
+            "line": 1,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou.\n    Záporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 22,
+            "line": 2,
+            "end_line": 3,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 59,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "__init__",
+          "provenance": {
+            "file_id": 22,
+            "line": 5,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 22,
+            "line": 5,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "PyInvoice",
+          "provenance": {
+            "file_id": 22,
+            "line": 5,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "def __init__(self, amount):",
+          "provenance": {
+            "file_id": 22,
+            "line": 5,
+            "end_line": 6,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 60,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "py_compute_total",
+          "provenance": {
+            "file_id": 22,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 22,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "def py_compute_total(invoice):",
+          "provenance": {
+            "file_id": 22,
+            "line": 9,
+            "end_line": 12,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku.\n    Nikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 22,
+            "line": 10,
+            "end_line": 11,
+            "extractor": "python",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 61,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "RustReport",
+          "provenance": {
+            "file_id": 25,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "struct",
+          "provenance": {
+            "file_id": 25,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub struct RustReport",
+          "provenance": {
+            "file_id": 25,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 25,
+            "line": 5,
+            "end_line": 7,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 25,
+            "line": 3,
+            "end_line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 62,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "total",
+          "provenance": {
+            "file_id": 25,
+            "line": 6,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 25,
+            "line": 6,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "RustReport",
+          "provenance": {
+            "file_id": 25,
+            "line": 6,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub total: i64",
+          "provenance": {
+            "file_id": 25,
+            "line": 6,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 25,
+            "line": 6,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 63,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "rust_build_report",
+          "provenance": {
+            "file_id": 25,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 25,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub fn rust_build_report(amount: i64) -> RustReport",
+          "provenance": {
+            "file_id": 25,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 25,
+            "line": 11,
+            "end_line": 16,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 25,
+            "line": 9,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 64,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "RustInvoice",
+          "provenance": {
+            "file_id": 26,
+            "line": 3,
+            "end_line": 5,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "struct",
+          "provenance": {
+            "file_id": 26,
+            "line": 3,
+            "end_line": 5,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub struct RustInvoice",
+          "provenance": {
+            "file_id": 26,
+            "line": 3,
+            "end_line": 5,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 26,
+            "line": 3,
+            "end_line": 5,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou v haléřích.\nZáporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 26,
+            "line": 1,
+            "end_line": 2,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 65,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 26,
+            "line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 26,
+            "line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "RustInvoice",
+          "provenance": {
+            "file_id": 26,
+            "line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub amount: i64",
+          "provenance": {
+            "file_id": 26,
+            "line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 26,
+            "line": 4,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 66,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "new",
+          "provenance": {
+            "file_id": 26,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 26,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "RustInvoice",
+          "provenance": {
+            "file_id": 26,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub fn new(amount: i64) -> RustInvoice",
+          "provenance": {
+            "file_id": 26,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 26,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 67,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "rust_compute_total",
+          "provenance": {
+            "file_id": 26,
+            "line": 15,
+            "end_line": 17,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 26,
+            "line": 15,
+            "end_line": 17,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "pub fn rust_compute_total(invoice: &RustInvoice) -> i64",
+          "provenance": {
+            "file_id": 26,
+            "line": 15,
+            "end_line": 17,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "pub",
+          "provenance": {
+            "file_id": 26,
+            "line": 15,
+            "end_line": 17,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku faktury.\nNikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 26,
+            "line": 13,
+            "end_line": 14,
+            "extractor": "rust",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 68,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "TsReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 69,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class TsReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 69,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 69,
+            "line": 3,
+            "end_line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 70,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 69,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 69,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(total: number)",
+          "provenance": {
+            "file_id": 69,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 71,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "total",
+          "provenance": {
+            "file_id": 69,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 69,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "total: number",
+          "provenance": {
+            "file_id": 69,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 72,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "tsBuildReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 69,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "function tsBuildReport(amount: number): TsReport",
+          "provenance": {
+            "file_id": 69,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 69,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 69,
+            "line": 15,
+            "end_line": 18,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 73,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "TsInvoice",
+          "provenance": {
+            "file_id": 74,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 74,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class TsInvoice",
+          "provenance": {
+            "file_id": 74,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 74,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura s částkou.\nZáporné hodnoty jsou neplatné.",
+          "provenance": {
+            "file_id": 74,
+            "line": 1,
+            "end_line": 4,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 75,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 74,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 74,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsInvoice",
+          "provenance": {
+            "file_id": 74,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "amount: number",
+          "provenance": {
+            "file_id": 74,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 76,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 74,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 74,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsInvoice",
+          "provenance": {
+            "file_id": 74,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(amount: number)",
+          "provenance": {
+            "file_id": 74,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 77,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "tsComputeTotal",
+          "provenance": {
+            "file_id": 74,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 74,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "function tsComputeTotal(invoice: TsInvoice): number",
+          "provenance": {
+            "file_id": 74,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 74,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu.",
+          "provenance": {
+            "file_id": 74,
+            "line": 13,
+            "end_line": 16,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 78,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "TsxReport",
+          "provenance": {
+            "file_id": 79,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 79,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class TsxReport",
+          "provenance": {
+            "file_id": 79,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 79,
+            "line": 7,
+            "end_line": 13,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Výkaz vykreslovaný do stránky.\nDrží už jen výslednou částku.",
+          "provenance": {
+            "file_id": 79,
+            "line": 3,
+            "end_line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 80,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 79,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 79,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsxReport",
+          "provenance": {
+            "file_id": 79,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "amount: number",
+          "provenance": {
+            "file_id": 79,
+            "line": 8,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 81,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 79,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 79,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsxReport",
+          "provenance": {
+            "file_id": 79,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(amount: number)",
+          "provenance": {
+            "file_id": 79,
+            "line": 10,
+            "end_line": 12,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 82,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "tsxBuildReport",
+          "provenance": {
+            "file_id": 79,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 79,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "function tsxBuildReport(amount: number)",
+          "provenance": {
+            "file_id": 79,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 79,
+            "line": 19,
+            "end_line": 22,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru.",
+          "provenance": {
+            "file_id": 79,
+            "line": 15,
+            "end_line": 18,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 83,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "TsxInvoice",
+          "provenance": {
+            "file_id": 84,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "class",
+          "provenance": {
+            "file_id": 84,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "class TsxInvoice",
+          "provenance": {
+            "file_id": 84,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 84,
+            "line": 5,
+            "end_line": 11,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Faktura vykreslovaná do stránky.\nČástka se zobrazuje v haléřích.",
+          "provenance": {
+            "file_id": 84,
+            "line": 1,
+            "end_line": 4,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 85,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "amount",
+          "provenance": {
+            "file_id": 84,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "field",
+          "provenance": {
+            "file_id": 84,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsxInvoice",
+          "provenance": {
+            "file_id": 84,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "amount: number",
+          "provenance": {
+            "file_id": 84,
+            "line": 6,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 86,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "constructor",
+          "provenance": {
+            "file_id": 84,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "method",
+          "provenance": {
+            "file_id": 84,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_container",
+          "value": "TsxInvoice",
+          "provenance": {
+            "file_id": 84,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "constructor(amount: number)",
+          "provenance": {
+            "file_id": 84,
+            "line": 8,
+            "end_line": 10,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 87,
+      "kind": "symbol",
+      "facts": [
+        {
+          "kind": "symbol_name",
+          "value": "tsxRenderAmount",
+          "provenance": {
+            "file_id": 84,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_kind",
+          "value": "function",
+          "provenance": {
+            "file_id": 84,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_signature",
+          "value": "function tsxRenderAmount(invoice: TsxInvoice)",
+          "provenance": {
+            "file_id": 84,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "symbol_visibility",
+          "value": "export",
+          "provenance": {
+            "file_id": 84,
+            "line": 17,
+            "end_line": 19,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "doc_comment",
+          "value": "Vykreslí částku faktury.\nVrací jediný prvek span.",
+          "provenance": {
+            "file_id": 84,
+            "line": 13,
+            "end_line": 16,
+            "extractor": "ecmascript",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 88,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 41,
+          "provenance": {
+            "file_id": 88,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 69,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 22,
+          "provenance": {
+            "file_id": 69,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 69,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 74,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 19,
+          "provenance": {
+            "file_id": 74,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 74,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 89,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 41,
+          "provenance": {
+            "file_id": 89,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 79,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 22,
+          "provenance": {
+            "file_id": 79,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 79,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 84,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 19,
+          "provenance": {
+            "file_id": 84,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 84,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from_id": 0,
+      "to_id": 1,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 1,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 2,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 2,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 10,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 10,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 7,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 7,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 13,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 13,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 17,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 17,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 9,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 9,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 20,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 20,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 23,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 23,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 88,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 88,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 89,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 89,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 1,
+      "to_id": 5,
+      "kind": "depends_on",
+      "provenance": {
+        "file_id": 1,
+        "line": null,
+        "extractor": "manifest-deps",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 2,
+      "to_id": 3,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 3,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 2,
+      "to_id": 4,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 4,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 3,
+      "to_id": 32,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 3,
+        "line": 5,
+        "end_line": 17,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 3,
+      "to_id": 33,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 3,
+        "line": 11,
+        "end_line": 16,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 3,
+      "to_id": 34,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 3,
+        "line": 7,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 4,
+      "to_id": 27,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 4,
+        "line": 15,
+        "end_line": 23,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 4,
+      "to_id": 28,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 4,
+        "line": 19,
+        "end_line": 22,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 4,
+      "to_id": 29,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 4,
+        "line": 5,
+        "end_line": 13,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 4,
+      "to_id": 30,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 4,
+        "line": 7,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 4,
+      "to_id": 31,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 4,
+        "line": 9,
+        "end_line": 12,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 10,
+      "to_id": 11,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 11,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 10,
+      "to_id": 12,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 12,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 7,
+      "to_id": 6,
+      "kind": "depends_on",
+      "provenance": {
+        "file_id": 7,
+        "line": null,
+        "extractor": "manifest-deps",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 11,
+      "to_id": 35,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 11,
+        "line": 11,
+        "end_line": 14,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 11,
+      "to_id": 39,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 11,
+        "line": 5,
+        "end_line": 7,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 11,
+      "to_id": 40,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 11,
+        "line": 6,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 12,
+      "to_id": 36,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 12,
+        "line": 11,
+        "end_line": 13,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 12,
+      "to_id": 37,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 12,
+        "line": 5,
+        "end_line": 7,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 12,
+      "to_id": 38,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 12,
+        "line": 6,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 13,
+      "to_id": 14,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 14,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 14,
+      "to_id": 15,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 15,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 14,
+      "to_id": 16,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 16,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 15,
+      "to_id": 41,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 15,
+        "line": 7,
+        "end_line": 21,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 15,
+      "to_id": 42,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 15,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 15,
+      "to_id": 43,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 15,
+        "line": 8,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 15,
+      "to_id": 44,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 15,
+        "line": 18,
+        "end_line": 20,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 16,
+      "to_id": 45,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 16,
+        "line": 7,
+        "end_line": 20,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 16,
+      "to_id": 46,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 16,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 16,
+      "to_id": 47,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 16,
+        "line": 16,
+        "end_line": 19,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 17,
+      "to_id": 18,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 18,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 17,
+      "to_id": 19,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 19,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 18,
+      "to_id": 19,
+      "kind": "imports",
+      "provenance": {
+        "file_id": 18,
+        "line": 1,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 18,
+      "to_id": 48,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 18,
+        "line": 7,
+        "end_line": 11,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 18,
+      "to_id": 49,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 18,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 18,
+      "to_id": 50,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 18,
+        "line": 17,
+        "end_line": 20,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 19,
+      "to_id": 51,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 19,
+        "line": 5,
+        "end_line": 11,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 19,
+      "to_id": 52,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 19,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 19,
+      "to_id": 53,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 19,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 19,
+      "to_id": 54,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 19,
+        "line": 17,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 9,
+      "to_id": 8,
+      "kind": "depends_on",
+      "provenance": {
+        "file_id": 9,
+        "line": null,
+        "extractor": "manifest-deps",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 20,
+      "to_id": 21,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 21,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 20,
+      "to_id": 22,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 22,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 21,
+      "to_id": 22,
+      "kind": "imports",
+      "provenance": {
+        "file_id": 21,
+        "line": 1,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 21,
+      "to_id": 55,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 21,
+        "line": 4,
+        "end_line": 9,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 21,
+      "to_id": 56,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 21,
+        "line": 8,
+        "end_line": 9,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 21,
+      "to_id": 57,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 21,
+        "line": 12,
+        "end_line": 16,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 22,
+      "to_id": 58,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 22,
+        "line": 1,
+        "end_line": 6,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 22,
+      "to_id": 59,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 22,
+        "line": 5,
+        "end_line": 6,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 22,
+      "to_id": 60,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 22,
+        "line": 9,
+        "end_line": 12,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 23,
+      "to_id": 24,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 24,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 24,
+      "to_id": 25,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 25,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 24,
+      "to_id": 26,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 26,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 25,
+      "to_id": 26,
+      "kind": "imports",
+      "provenance": {
+        "file_id": 25,
+        "line": 1,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 25,
+      "to_id": 61,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 25,
+        "line": 5,
+        "end_line": 7,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 25,
+      "to_id": 62,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 25,
+        "line": 6,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 25,
+      "to_id": 63,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 25,
+        "line": 11,
+        "end_line": 16,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 26,
+      "to_id": 64,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 26,
+        "line": 3,
+        "end_line": 5,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 26,
+      "to_id": 64,
+      "kind": "references",
+      "provenance": {
+        "file_id": 26,
+        "line": 7,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 26,
+          "line": 7
+        }
+      ]
+    },
+    {
+      "from_id": 26,
+      "to_id": 65,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 26,
+        "line": 4,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 26,
+      "to_id": 66,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 26,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 26,
+      "to_id": 67,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 26,
+        "line": 15,
+        "end_line": 17,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 27,
+      "to_id": 28,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 4,
+        "line": 19,
+        "end_line": 22,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 28,
+      "to_id": 29,
+      "kind": "references",
+      "provenance": {
+        "file_id": 4,
+        "line": 19,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 4,
+          "line": 19,
+          "column": 35
+        }
+      ]
+    },
+    {
+      "from_id": 29,
+      "to_id": 30,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 4,
+        "line": 7,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 29,
+      "to_id": 31,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 4,
+        "line": 9,
+        "end_line": 12,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 32,
+      "to_id": 33,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 3,
+        "line": 11,
+        "end_line": 16,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 32,
+      "to_id": 34,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 3,
+        "line": 7,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 33,
+      "to_id": 27,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 3,
+        "line": 14,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 3,
+          "line": 14,
+          "column": 34
+        }
+      ]
+    },
+    {
+      "from_id": 33,
+      "to_id": 28,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 3,
+        "line": 15,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "rules_backed",
+        "rule_id": 91
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 3,
+          "line": 15,
+          "column": 54
+        }
+      ]
+    },
+    {
+      "from_id": 33,
+      "to_id": 29,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 3,
+        "line": 13,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 3,
+          "line": 13,
+          "column": 31
+        }
+      ]
+    },
+    {
+      "from_id": 33,
+      "to_id": 32,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 3,
+        "line": 15,
+        "extractor": "csharp",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 3,
+          "line": 15,
+          "column": 24
+        }
+      ]
+    },
+    {
+      "from_id": 35,
+      "to_id": 36,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 11,
+        "line": 13,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 11,
+          "line": 13
+        }
+      ]
+    },
+    {
+      "from_id": 35,
+      "to_id": 37,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 11,
+        "line": 12,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 11,
+          "line": 12
+        }
+      ]
+    },
+    {
+      "from_id": 35,
+      "to_id": 39,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 11,
+        "line": 13,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 11,
+          "line": 13
+        }
+      ]
+    },
+    {
+      "from_id": 36,
+      "to_id": 37,
+      "kind": "references",
+      "provenance": {
+        "file_id": 12,
+        "line": 11,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 12,
+          "line": 11
+        }
+      ]
+    },
+    {
+      "from_id": 37,
+      "to_id": 38,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 12,
+        "line": 6,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 39,
+      "to_id": 40,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 11,
+        "line": 6,
+        "extractor": "go",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 41,
+      "to_id": 42,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 15,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 41,
+      "to_id": 43,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 15,
+        "line": 8,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 41,
+      "to_id": 44,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 15,
+        "line": 18,
+        "end_line": 20,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 45,
+      "to_id": 41,
+      "kind": "extends",
+      "provenance": {
+        "file_id": 16,
+        "line": 7,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "rules_backed",
+        "rule_id": 92
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 7
+        }
+      ]
+    },
+    {
+      "from_id": 45,
+      "to_id": 41,
+      "kind": "references",
+      "provenance": {
+        "file_id": 16,
+        "line": 7,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 7
+        }
+      ]
+    },
+    {
+      "from_id": 45,
+      "to_id": 46,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 16,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 45,
+      "to_id": 47,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 16,
+        "line": 16,
+        "end_line": 19,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 47,
+      "to_id": 41,
+      "kind": "references",
+      "provenance": {
+        "file_id": 16,
+        "line": 17,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 17
+        }
+      ]
+    },
+    {
+      "from_id": 47,
+      "to_id": 41,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 16,
+        "line": 17,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 17
+        }
+      ]
+    },
+    {
+      "from_id": 47,
+      "to_id": 44,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 16,
+        "line": 18,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 18
+        }
+      ]
+    },
+    {
+      "from_id": 47,
+      "to_id": 45,
+      "kind": "references",
+      "provenance": {
+        "file_id": 16,
+        "line": 16,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 16
+        }
+      ]
+    },
+    {
+      "from_id": 47,
+      "to_id": 45,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 16,
+        "line": 18,
+        "extractor": "java",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 16,
+          "line": 18
+        }
+      ]
+    },
+    {
+      "from_id": 48,
+      "to_id": 49,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 18,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 48,
+      "to_id": 51,
+      "kind": "extends",
+      "provenance": {
+        "file_id": 18,
+        "line": 7,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 18,
+          "line": 7
+        }
+      ]
+    },
+    {
+      "from_id": 50,
+      "to_id": 48,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 18,
+        "line": 19,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 18,
+          "line": 19
+        }
+      ]
+    },
+    {
+      "from_id": 50,
+      "to_id": 51,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 18,
+        "line": 18,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 18,
+          "line": 18
+        }
+      ]
+    },
+    {
+      "from_id": 50,
+      "to_id": 54,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 18,
+        "line": 19,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 18,
+          "line": 19
+        }
+      ]
+    },
+    {
+      "from_id": 51,
+      "to_id": 52,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 19,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 51,
+      "to_id": 53,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 19,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 55,
+      "to_id": 56,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 21,
+        "line": 8,
+        "end_line": 9,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 57,
+      "to_id": 55,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 21,
+        "line": 16,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 21,
+          "line": 16
+        }
+      ]
+    },
+    {
+      "from_id": 57,
+      "to_id": 58,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 21,
+        "line": 15,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 21,
+          "line": 15
+        }
+      ]
+    },
+    {
+      "from_id": 57,
+      "to_id": 60,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 21,
+        "line": 16,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 21,
+          "line": 16
+        }
+      ]
+    },
+    {
+      "from_id": 58,
+      "to_id": 59,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 22,
+        "line": 5,
+        "end_line": 6,
+        "extractor": "python",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 61,
+      "to_id": 62,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 25,
+        "line": 6,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 63,
+      "to_id": 61,
+      "kind": "references",
+      "provenance": {
+        "file_id": 25,
+        "line": 11,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 25,
+          "line": 11
+        }
+      ]
+    },
+    {
+      "from_id": 63,
+      "to_id": 61,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 25,
+        "line": 13,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 25,
+          "line": 13
+        }
+      ]
+    },
+    {
+      "from_id": 63,
+      "to_id": 66,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 25,
+        "line": 12,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 25,
+          "line": 12
+        }
+      ]
+    },
+    {
+      "from_id": 63,
+      "to_id": 67,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 25,
+        "line": 14,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 25,
+          "line": 14
+        }
+      ]
+    },
+    {
+      "from_id": 64,
+      "to_id": 65,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 26,
+        "line": 4,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 64,
+      "to_id": 66,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 26,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 66,
+      "to_id": 64,
+      "kind": "references",
+      "provenance": {
+        "file_id": 26,
+        "line": 8,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 26,
+          "line": 8
+        }
+      ]
+    },
+    {
+      "from_id": 66,
+      "to_id": 64,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 26,
+        "line": 9,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 26,
+          "line": 9
+        }
+      ]
+    },
+    {
+      "from_id": 67,
+      "to_id": 64,
+      "kind": "references",
+      "provenance": {
+        "file_id": 26,
+        "line": 15,
+        "extractor": "rust",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 26,
+          "line": 15
+        }
+      ]
+    },
+    {
+      "from_id": 68,
+      "to_id": 70,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 69,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 68,
+      "to_id": 71,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 69,
+        "line": 8,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 72,
+      "to_id": 68,
+      "kind": "references",
+      "provenance": {
+        "file_id": 69,
+        "line": 19,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 69,
+          "line": 19
+        }
+      ]
+    },
+    {
+      "from_id": 72,
+      "to_id": 68,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 69,
+        "line": 21,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 69,
+          "line": 21
+        }
+      ]
+    },
+    {
+      "from_id": 72,
+      "to_id": 73,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 69,
+        "line": 20,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 69,
+          "line": 20
+        }
+      ]
+    },
+    {
+      "from_id": 72,
+      "to_id": 77,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 69,
+        "line": 21,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 69,
+          "line": 21
+        }
+      ]
+    },
+    {
+      "from_id": 73,
+      "to_id": 75,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 74,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 73,
+      "to_id": 76,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 74,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 77,
+      "to_id": 73,
+      "kind": "references",
+      "provenance": {
+        "file_id": 74,
+        "line": 17,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 74,
+          "line": 17
+        }
+      ]
+    },
+    {
+      "from_id": 78,
+      "to_id": 80,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 79,
+        "line": 8,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 78,
+      "to_id": 81,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 79,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 82,
+      "to_id": 83,
+      "kind": "instantiates",
+      "provenance": {
+        "file_id": 79,
+        "line": 20,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 79,
+          "line": 20
+        }
+      ]
+    },
+    {
+      "from_id": 82,
+      "to_id": 87,
+      "kind": "calls",
+      "provenance": {
+        "file_id": 79,
+        "line": 21,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 79,
+          "line": 21
+        }
+      ]
+    },
+    {
+      "from_id": 83,
+      "to_id": 85,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 84,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 83,
+      "to_id": 86,
+      "kind": "has_member",
+      "provenance": {
+        "file_id": 84,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 87,
+      "to_id": 83,
+      "kind": "references",
+      "provenance": {
+        "file_id": 84,
+        "line": 17,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic",
+        "confidence": "name_only",
+        "rule_id": 90
+      },
+      "dissent": [],
+      "sites": [
+        {
+          "file_id": 84,
+          "line": 17
+        }
+      ]
+    },
+    {
+      "from_id": 88,
+      "to_id": 69,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 69,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 88,
+      "to_id": 74,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 74,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 69,
+      "to_id": 68,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 69,
+        "line": 7,
+        "end_line": 13,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 69,
+      "to_id": 70,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 69,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 69,
+      "to_id": 71,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 69,
+        "line": 8,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 69,
+      "to_id": 72,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 69,
+        "line": 19,
+        "end_line": 22,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 69,
+      "to_id": 74,
+      "kind": "imports",
+      "provenance": {
+        "file_id": 69,
+        "line": 1,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 74,
+      "to_id": 73,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 74,
+        "line": 5,
+        "end_line": 11,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 74,
+      "to_id": 75,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 74,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 74,
+      "to_id": 76,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 74,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 74,
+      "to_id": 77,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 74,
+        "line": 17,
+        "end_line": 19,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 89,
+      "to_id": 79,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 79,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 89,
+      "to_id": 84,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 84,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 79,
+      "to_id": 78,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 79,
+        "line": 7,
+        "end_line": 13,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 79,
+      "to_id": 80,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 79,
+        "line": 8,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 79,
+      "to_id": 81,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 79,
+        "line": 10,
+        "end_line": 12,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 79,
+      "to_id": 82,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 79,
+        "line": 19,
+        "end_line": 22,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 79,
+      "to_id": 84,
+      "kind": "imports",
+      "provenance": {
+        "file_id": 79,
+        "line": 1,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 84,
+      "to_id": 83,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 84,
+        "line": 5,
+        "end_line": 11,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 84,
+      "to_id": 85,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 84,
+        "line": 6,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 84,
+      "to_id": 86,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 84,
+        "line": 8,
+        "end_line": 10,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 84,
+      "to_id": 87,
+      "kind": "declares",
+      "provenance": {
+        "file_id": 84,
+        "line": 17,
+        "end_line": 19,
+        "extractor": "ecmascript",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    }
+  ]
+}

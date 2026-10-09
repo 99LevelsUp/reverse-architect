@@ -1,0 +1,81 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+File cs/Consumer.cs
+  Loc = 18  [metrics Measured Heuristic @ cs/Consumer.cs:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ cs/Consumer.cs:whole]
+File cs/Model.cs
+  Loc = 24  [metrics Measured Heuristic @ cs/Model.cs:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ cs/Model.cs:whole]
+Symbol sym:csharp:Fixture.Billing#CsCalculator
+  SymbolName = "CsCalculator"  [csharp Measured Heuristic @ cs/Model.cs:15-23]
+  SymbolKind = "class"  [csharp Measured Heuristic @ cs/Model.cs:15-23]
+  SymbolSignature = "public class CsCalculator"  [csharp Measured Heuristic @ cs/Model.cs:15-23]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Model.cs:15-23]
+Symbol sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice)
+  SymbolName = "CsComputeTotal"  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+  SymbolKind = "method"  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+  SymbolContainer = "CsCalculator"  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+  SymbolSignature = "public int CsComputeTotal(CsInvoice invoice)"  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+  DocComment = "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu."  [csharp Measured Heuristic @ cs/Model.cs:17-18]
+Symbol sym:csharp:Fixture.Billing#CsInvoice
+  SymbolName = "CsInvoice"  [csharp Measured Heuristic @ cs/Model.cs:5-13]
+  SymbolKind = "class"  [csharp Measured Heuristic @ cs/Model.cs:5-13]
+  SymbolSignature = "public class CsInvoice"  [csharp Measured Heuristic @ cs/Model.cs:5-13]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Model.cs:5-13]
+  DocComment = "Faktura s částkou.\nZáporné hodnoty jsou neplatné."  [csharp Measured Heuristic @ cs/Model.cs:3-4]
+Symbol sym:csharp:Fixture.Billing#CsInvoice.Amount
+  SymbolName = "Amount"  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+  SymbolKind = "property"  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+  SymbolContainer = "CsInvoice"  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+  SymbolSignature = "public int Amount"  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+Symbol sym:csharp:Fixture.Billing#CsInvoice.CsInvoice(int)
+  SymbolName = "CsInvoice"  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+  SymbolKind = "constructor"  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+  SymbolContainer = "CsInvoice"  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+  SymbolSignature = "public CsInvoice(int amount)"  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+Symbol sym:csharp:Fixture.Billing#CsReport
+  SymbolName = "CsReport"  [csharp Measured Heuristic @ cs/Consumer.cs:5-17]
+  SymbolKind = "class"  [csharp Measured Heuristic @ cs/Consumer.cs:5-17]
+  SymbolSignature = "public class CsReport"  [csharp Measured Heuristic @ cs/Consumer.cs:5-17]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Consumer.cs:5-17]
+  DocComment = "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku."  [csharp Measured Heuristic @ cs/Consumer.cs:3-4]
+Symbol sym:csharp:Fixture.Billing#CsReport.BuildReport(int)
+  SymbolName = "BuildReport"  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+  SymbolKind = "method"  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+  SymbolContainer = "CsReport"  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+  SymbolSignature = "public CsReport BuildReport(int amount)"  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [csharp Measured Heuristic @ cs/Consumer.cs:9-10]
+Symbol sym:csharp:Fixture.Billing#CsReport.Total
+  SymbolName = "Total"  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+  SymbolKind = "property"  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+  SymbolContainer = "CsReport"  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+  SymbolSignature = "public int Total"  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+  SymbolVisibility = "public"  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+--- edges ---
+Contains cs -> cs/Consumer.cs  [filetree Measured Heuristic @ cs/Consumer.cs:whole]
+Contains cs -> cs/Model.cs  [filetree Measured Heuristic @ cs/Model.cs:whole]
+Declares cs/Consumer.cs -> sym:csharp:Fixture.Billing#CsReport  [csharp Measured Heuristic @ cs/Consumer.cs:5-17]
+Declares cs/Consumer.cs -> sym:csharp:Fixture.Billing#CsReport.BuildReport(int)  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+Declares cs/Consumer.cs -> sym:csharp:Fixture.Billing#CsReport.Total  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+Declares cs/Model.cs -> sym:csharp:Fixture.Billing#CsCalculator  [csharp Measured Heuristic @ cs/Model.cs:15-23]
+Declares cs/Model.cs -> sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice)  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+Declares cs/Model.cs -> sym:csharp:Fixture.Billing#CsInvoice  [csharp Measured Heuristic @ cs/Model.cs:5-13]
+Declares cs/Model.cs -> sym:csharp:Fixture.Billing#CsInvoice.Amount  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+Declares cs/Model.cs -> sym:csharp:Fixture.Billing#CsInvoice.CsInvoice(int)  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+HasMember sym:csharp:Fixture.Billing#CsCalculator -> sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice)  [csharp Measured Heuristic @ cs/Model.cs:19-22]
+References sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice) -> sym:csharp:Fixture.Billing#CsInvoice  [csharp Measured Heuristic @ cs/Model.cs:19-19]
+HasMember sym:csharp:Fixture.Billing#CsInvoice -> sym:csharp:Fixture.Billing#CsInvoice.Amount  [csharp Measured Heuristic @ cs/Model.cs:7-7]
+HasMember sym:csharp:Fixture.Billing#CsInvoice -> sym:csharp:Fixture.Billing#CsInvoice.CsInvoice(int)  [csharp Measured Heuristic @ cs/Model.cs:9-12]
+HasMember sym:csharp:Fixture.Billing#CsReport -> sym:csharp:Fixture.Billing#CsReport.BuildReport(int)  [csharp Measured Heuristic @ cs/Consumer.cs:11-16]
+HasMember sym:csharp:Fixture.Billing#CsReport -> sym:csharp:Fixture.Billing#CsReport.Total  [csharp Measured Heuristic @ cs/Consumer.cs:7-7]
+Instantiates sym:csharp:Fixture.Billing#CsReport.BuildReport(int) -> sym:csharp:Fixture.Billing#CsCalculator  [csharp Measured Heuristic @ cs/Consumer.cs:14-14]
+Calls sym:csharp:Fixture.Billing#CsReport.BuildReport(int) -> sym:csharp:Fixture.Billing#CsCalculator.CsComputeTotal(CsInvoice)  [csharp Measured Heuristic @ cs/Consumer.cs:15-15]
+Instantiates sym:csharp:Fixture.Billing#CsReport.BuildReport(int) -> sym:csharp:Fixture.Billing#CsInvoice  [csharp Measured Heuristic @ cs/Consumer.cs:13-13]
+Instantiates sym:csharp:Fixture.Billing#CsReport.BuildReport(int) -> sym:csharp:Fixture.Billing#CsReport  [csharp Measured Heuristic @ cs/Consumer.cs:15-15]

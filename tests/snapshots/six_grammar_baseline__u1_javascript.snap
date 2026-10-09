@@ -1,0 +1,65 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+File js/consumer.js
+  Loc = 20  [metrics Measured Heuristic @ js/consumer.js:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ js/consumer.js:whole]
+  Anchor = "literal 1 7 ./model"  [external Measured Heuristic @ js/consumer.js:1-1]
+File js/model.js
+  Loc = 19  [metrics Measured Heuristic @ js/model.js:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ js/model.js:whole]
+Symbol sym:js:js/consumer.js#JsReport
+  SymbolName = "JsReport"  [ecmascript Measured Heuristic @ js/consumer.js:7-11]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ js/consumer.js:7-11]
+  SymbolSignature = "class JsReport extends JsInvoice"  [ecmascript Measured Heuristic @ js/consumer.js:7-11]
+  DocComment = "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku."  [ecmascript Measured Heuristic @ js/consumer.js:3-6]
+Symbol sym:js:js/consumer.js#JsReport.constructor(total)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+  SymbolContainer = "JsReport"  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+  SymbolSignature = "constructor(total)"  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+Symbol sym:js:js/consumer.js#jsBuildReport(amount)
+  SymbolName = "jsBuildReport"  [ecmascript Measured Heuristic @ js/consumer.js:17-20]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ js/consumer.js:17-20]
+  SymbolSignature = "function jsBuildReport(amount)"  [ecmascript Measured Heuristic @ js/consumer.js:17-20]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [ecmascript Measured Heuristic @ js/consumer.js:13-16]
+Symbol sym:js:js/model.js#JsInvoice
+  SymbolName = "JsInvoice"  [ecmascript Measured Heuristic @ js/model.js:5-11]
+  SymbolKind = "class"  [ecmascript Measured Heuristic @ js/model.js:5-11]
+  SymbolSignature = "class JsInvoice"  [ecmascript Measured Heuristic @ js/model.js:5-11]
+  DocComment = "Faktura s částkou.\nZáporné hodnoty jsou neplatné."  [ecmascript Measured Heuristic @ js/model.js:1-4]
+Symbol sym:js:js/model.js#JsInvoice.amount
+  SymbolName = "amount"  [ecmascript Measured Heuristic @ js/model.js:6-6]
+  SymbolKind = "field"  [ecmascript Measured Heuristic @ js/model.js:6-6]
+  SymbolContainer = "JsInvoice"  [ecmascript Measured Heuristic @ js/model.js:6-6]
+  SymbolSignature = "amount = 0"  [ecmascript Measured Heuristic @ js/model.js:6-6]
+Symbol sym:js:js/model.js#JsInvoice.constructor(amount)
+  SymbolName = "constructor"  [ecmascript Measured Heuristic @ js/model.js:8-10]
+  SymbolKind = "method"  [ecmascript Measured Heuristic @ js/model.js:8-10]
+  SymbolContainer = "JsInvoice"  [ecmascript Measured Heuristic @ js/model.js:8-10]
+  SymbolSignature = "constructor(amount)"  [ecmascript Measured Heuristic @ js/model.js:8-10]
+Symbol sym:js:js/model.js#jsComputeTotal(invoice)
+  SymbolName = "jsComputeTotal"  [ecmascript Measured Heuristic @ js/model.js:17-17]
+  SymbolKind = "function"  [ecmascript Measured Heuristic @ js/model.js:17-17]
+  SymbolSignature = "const jsComputeTotal = (invoice) =>"  [ecmascript Measured Heuristic @ js/model.js:17-17]
+  DocComment = "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu."  [ecmascript Measured Heuristic @ js/model.js:13-16]
+--- edges ---
+Contains js -> js/consumer.js  [filetree Measured Heuristic @ js/consumer.js:whole]
+Contains js -> js/model.js  [filetree Measured Heuristic @ js/model.js:whole]
+Imports js/consumer.js -> js/model.js  [ecmascript Measured Heuristic @ js/consumer.js:1-1]
+Declares js/consumer.js -> sym:js:js/consumer.js#JsReport  [ecmascript Measured Heuristic @ js/consumer.js:7-11]
+Declares js/consumer.js -> sym:js:js/consumer.js#JsReport.constructor(total)  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+Declares js/consumer.js -> sym:js:js/consumer.js#jsBuildReport(amount)  [ecmascript Measured Heuristic @ js/consumer.js:17-20]
+Declares js/model.js -> sym:js:js/model.js#JsInvoice  [ecmascript Measured Heuristic @ js/model.js:5-11]
+Declares js/model.js -> sym:js:js/model.js#JsInvoice.amount  [ecmascript Measured Heuristic @ js/model.js:6-6]
+Declares js/model.js -> sym:js:js/model.js#JsInvoice.constructor(amount)  [ecmascript Measured Heuristic @ js/model.js:8-10]
+Declares js/model.js -> sym:js:js/model.js#jsComputeTotal(invoice)  [ecmascript Measured Heuristic @ js/model.js:17-17]
+HasMember sym:js:js/consumer.js#JsReport -> sym:js:js/consumer.js#JsReport.constructor(total)  [ecmascript Measured Heuristic @ js/consumer.js:8-10]
+Extends sym:js:js/consumer.js#JsReport -> sym:js:js/model.js#JsInvoice  [ecmascript Measured Heuristic @ js/consumer.js:7-7]
+Instantiates sym:js:js/consumer.js#jsBuildReport(amount) -> sym:js:js/consumer.js#JsReport  [ecmascript Measured Heuristic @ js/consumer.js:19-19]
+Instantiates sym:js:js/consumer.js#jsBuildReport(amount) -> sym:js:js/model.js#JsInvoice  [ecmascript Measured Heuristic @ js/consumer.js:18-18]
+Calls sym:js:js/consumer.js#jsBuildReport(amount) -> sym:js:js/model.js#jsComputeTotal(invoice)  [ecmascript Measured Heuristic @ js/consumer.js:19-19]
+HasMember sym:js:js/model.js#JsInvoice -> sym:js:js/model.js#JsInvoice.amount  [ecmascript Measured Heuristic @ js/model.js:6-6]
+HasMember sym:js:js/model.js#JsInvoice -> sym:js:js/model.js#JsInvoice.constructor(amount)  [ecmascript Measured Heuristic @ js/model.js:8-10]

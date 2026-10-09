@@ -1,0 +1,105 @@
+[package]
+name = "reverse-architect"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic, offline, LLM-free architectural corpus generator for source trees"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "reverse-architect"
+path = "src/main.rs"
+
+[lib]
+name = "reverse_architect"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+thiserror = "2"
+petgraph = "0.6"
+# `rc` supplies the `Arc<T>` Serialize/Deserialize impls `ExtractorId` needs
+# (U3). Serde's warning about it — that these impls do not preserve pointer
+# identity, so one Arc shared by N values deserializes as N separate
+# allocations — is exactly why `walk_files` canonicalizes a decoded id back to
+# the registry's Arc instead of keeping what serde handed it.
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+# git2 declared in Phase A to de-risk the vendored libgit2 C build early (used from U3).
+# default-features = false: a read-only local repo needs neither ssh nor https/OpenSSL,
+# so the system OpenSSL is not dragged into the binary (KTD2). vendored-libgit2 forces
+# the bundled C library to be compiled instead of probing for a (nonexistent) system one.
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+# The grammars left the host in U11: they are compiled into the language
+# plugins (plugins/treesitter), not into this binary.
+tokei = { version = "14", default-features = false }
+# `parse` gives the deserializer; `serde` re-exports `toml::Table` / `toml::Value`,
+# the untyped tree this extractor walks. No `display` (we never serialize TOML back).
+toml = { version = "1.1.2", default-features = false, features = ["parse", "serde"] }
+quick-xml = "0.41.0"
+regex = "1.12.4"
+reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls"] }
+url = "2.5.8"
+# The `resolved` tier reads a SCIP index the TARGET project's CI produced, or one
+# the explicit `index` subcommand built; the main run never runs an indexer
+# (plan A, R9). `index` also merges per-project indexes with these same types.
+# `scip` carries only the generated protobuf types,
+# and its own write helper exists so callers can avoid protobuf — but there is no
+# read helper, so `protobuf` is a direct dependency for `Message::parse_from_bytes`.
+scip = "0.9"
+protobuf = "3.7"
+rayon = "1.12.0"
+# U15's non-git directory source. `.gitignore` semantics are not a substring
+# match — precedence by depth, negations, directory-only patterns, `**` — and a
+# hand-rolled matcher that got any of them wrong would change which files enter
+# the corpus. This is ripgrep's walker, and it is already compiled into this
+# workspace as a transitive dependency of tokei, so taking it directly adds no
+# new subtree. Every default it applies is switched off explicitly at the call
+# site (`src/extract/directory.rs`) and only in-tree `.gitignore` is switched
+# back on; the per-machine ignore sources stay off.
+ignore = "0.4"
+# The secret-redaction filter, shared with the language plugins (crates/ra-redact).
+ra-redact = { path = "crates/ra-redact", version = "0.1.0" }
+# A fresh, empty working directory for each `claude -p` call (enrich, verify),
+# removed when the call ends: the CLI runs as an agent wherever it starts, and
+# the repository RA reads must not be that place.
+tempfile = "3"
+# The plugin host (U7). Exact pins: the runtime's version is a run-fingerprint
+# input (R13) and 48.0.1 is the version the R19/U17 probes measured.
+# default-features off so only the component model, cranelift and the
+# sandboxing pieces the host needs are compiled in.
+wasmtime = { version = "=48.0.1", default-features = false, features = ["anyhow", "cranelift", "runtime", "component-model", "std", "parallel-compilation", "cache"] }
+wasmtime-wasi = { version = "=48.0.1", default-features = false, features = ["p2"] }
+anyhow = "1"
+sha2 = "0.10"
+# A card's keywords keep each word as written and, beside it, the same word
+# without diacritics (`obnově` → `obnove`), so a search typed either way finds
+# the card (plan B, KTD4). Already in the lock file through another dependency;
+# taken directly at the version that is there.
+deunicode = "1.6"
+
+# Thirty test binaries each link the plugin runtime; full debug info made the
+# parallel links exhaust memory on an ordinary workstation (os error 1455).
+# Line tables keep backtraces readable at a fraction of the size.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
+# The plugin runtime compiles components with Cranelift. Unoptimized, that took
+# 32 s for the six bundled grammars in a debug build; the compiler crates are
+# worth optimizing even in development.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3
+
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+insta = "1"
+rayon = "1.12.0"

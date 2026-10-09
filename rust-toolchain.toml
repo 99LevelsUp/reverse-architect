@@ -1,0 +1,23 @@
+# Pinned so a wasm component built from this checkout is reproducible (U2, R19).
+#
+# `channel` is an exact version rather than `stable` on purpose. The compiler
+# version changes the bytes it emits, and under R13 a component's content hash
+# is a run-fingerprint input — so `stable` would make the fingerprint drift with
+# whatever rustc a contributor happened to have installed that week, and every
+# cache in the project would invalidate for a reason nobody chose. 1.95.0 is
+# also the floor wasmtime 48 requires (KTD18).
+#
+# `targets` carries wasm32-wasip2 only. wasip1 exists on this machine because
+# the R19 probe compared the two; it is not a target this project ships to.
+# WASI p3 is deliberately not used — see KTD19.
+#
+# `components` are here because the Verification Contract runs `cargo clippy`
+# and `cargo fmt --check` as gates on every unit. Without them a fresh checkout
+# fails those gates for a reason that has nothing to do with the code.
+#
+# Installing this toolchain is all rustup needs from you. The C toolchain the
+# grammars require is a separate manual step — see `docs/wasm-toolchain.md`.
+[toolchain]
+channel = "1.95.0"
+targets = ["wasm32-wasip2"]
+components = ["clippy", "rustfmt"]

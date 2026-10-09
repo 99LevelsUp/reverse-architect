@@ -1,0 +1,60 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+File go/consumer.go
+  Loc = 14  [metrics Measured Heuristic @ go/consumer.go:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ go/consumer.go:whole]
+  Anchor = "comment 1 29 Drží už jen výslednou částku."  [external Measured Heuristic @ go/consumer.go:4-4]
+  Anchor = "comment 1 36 Použije model ze sousedního souboru."  [external Measured Heuristic @ go/consumer.go:10-10]
+  Anchor = "comment 1 37 GoBuildReport sestaví výkaz z částky."  [external Measured Heuristic @ go/consumer.go:9-9]
+  Anchor = "comment 1 42 GoReport je výkaz shrnující jednu fakturu."  [external Measured Heuristic @ go/consumer.go:3-3]
+File go/model.go
+  Loc = 13  [metrics Measured Heuristic @ go/model.go:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ go/model.go:whole]
+  Anchor = "comment 1 30 Záporné hodnoty jsou neplatné."  [external Measured Heuristic @ go/model.go:4-4]
+  Anchor = "comment 1 31 GoInvoice je faktura s částkou."  [external Measured Heuristic @ go/model.go:3-3]
+  Anchor = "comment 1 31 Nikdy nevrací zápornou hodnotu."  [external Measured Heuristic @ go/model.go:10-10]
+  Anchor = "comment 1 39 GoComputeTotal spočítá celkovou částku."  [external Measured Heuristic @ go/model.go:9-9]
+Symbol sym:go:go#GoBuildReport(int64)
+  SymbolName = "GoBuildReport"  [go Measured Heuristic @ go/consumer.go:11-14]
+  SymbolKind = "function"  [go Measured Heuristic @ go/consumer.go:11-14]
+  SymbolSignature = "func GoBuildReport(amount int64) GoReport"  [go Measured Heuristic @ go/consumer.go:11-14]
+Symbol sym:go:go#GoComputeTotal(GoInvoice)
+  SymbolName = "GoComputeTotal"  [go Measured Heuristic @ go/model.go:11-13]
+  SymbolKind = "function"  [go Measured Heuristic @ go/model.go:11-13]
+  SymbolSignature = "func GoComputeTotal(invoice GoInvoice) int64"  [go Measured Heuristic @ go/model.go:11-13]
+Symbol sym:go:go#GoInvoice
+  SymbolName = "GoInvoice"  [go Measured Heuristic @ go/model.go:5-7]
+  SymbolKind = "struct"  [go Measured Heuristic @ go/model.go:5-7]
+  SymbolSignature = "GoInvoice struct"  [go Measured Heuristic @ go/model.go:5-7]
+Symbol sym:go:go#GoInvoice.Amount
+  SymbolName = "Amount"  [go Measured Heuristic @ go/model.go:6-6]
+  SymbolKind = "field"  [go Measured Heuristic @ go/model.go:6-6]
+  SymbolContainer = "GoInvoice"  [go Measured Heuristic @ go/model.go:6-6]
+  SymbolSignature = "Amount int64"  [go Measured Heuristic @ go/model.go:6-6]
+Symbol sym:go:go#GoReport
+  SymbolName = "GoReport"  [go Measured Heuristic @ go/consumer.go:5-7]
+  SymbolKind = "struct"  [go Measured Heuristic @ go/consumer.go:5-7]
+  SymbolSignature = "GoReport struct"  [go Measured Heuristic @ go/consumer.go:5-7]
+Symbol sym:go:go#GoReport.Total
+  SymbolName = "Total"  [go Measured Heuristic @ go/consumer.go:6-6]
+  SymbolKind = "field"  [go Measured Heuristic @ go/consumer.go:6-6]
+  SymbolContainer = "GoReport"  [go Measured Heuristic @ go/consumer.go:6-6]
+  SymbolSignature = "Total int64"  [go Measured Heuristic @ go/consumer.go:6-6]
+--- edges ---
+Contains go -> go/consumer.go  [filetree Measured Heuristic @ go/consumer.go:whole]
+Contains go -> go/model.go  [filetree Measured Heuristic @ go/model.go:whole]
+Declares go/consumer.go -> sym:go:go#GoBuildReport(int64)  [go Measured Heuristic @ go/consumer.go:11-14]
+Declares go/consumer.go -> sym:go:go#GoReport  [go Measured Heuristic @ go/consumer.go:5-7]
+Declares go/consumer.go -> sym:go:go#GoReport.Total  [go Measured Heuristic @ go/consumer.go:6-6]
+Declares go/model.go -> sym:go:go#GoComputeTotal(GoInvoice)  [go Measured Heuristic @ go/model.go:11-13]
+Declares go/model.go -> sym:go:go#GoInvoice  [go Measured Heuristic @ go/model.go:5-7]
+Declares go/model.go -> sym:go:go#GoInvoice.Amount  [go Measured Heuristic @ go/model.go:6-6]
+Calls sym:go:go#GoBuildReport(int64) -> sym:go:go#GoComputeTotal(GoInvoice)  [go Measured Heuristic @ go/consumer.go:13-13]
+Instantiates sym:go:go#GoBuildReport(int64) -> sym:go:go#GoInvoice  [go Measured Heuristic @ go/consumer.go:12-12]
+Instantiates sym:go:go#GoBuildReport(int64) -> sym:go:go#GoReport  [go Measured Heuristic @ go/consumer.go:13-13]
+References sym:go:go#GoComputeTotal(GoInvoice) -> sym:go:go#GoInvoice  [go Measured Heuristic @ go/model.go:11-11]
+HasMember sym:go:go#GoInvoice -> sym:go:go#GoInvoice.Amount  [go Measured Heuristic @ go/model.go:6-6]
+HasMember sym:go:go#GoReport -> sym:go:go#GoReport.Total  [go Measured Heuristic @ go/consumer.go:6-6]

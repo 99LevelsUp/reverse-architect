@@ -1,0 +1,113 @@
+---
+source: src/render/mermaid.rs
+expression: diagram(&edges).unwrap()
+---
+```mermaid
+flowchart TD
+    n0["big"]
+    n1["big/f00.rs"]
+    n2["big/f01.rs"]
+    n3["big/f02.rs"]
+    n4["big/f03.rs"]
+    n5["big/f04.rs"]
+    n6["big/f05.rs"]
+    n7["big/f06.rs"]
+    n8["big/f07.rs"]
+    n9["big/f08.rs"]
+    n10["big/f09.rs"]
+    n11["big/f10.rs"]
+    n12["big/f11.rs"]
+    n13["big/f12.rs"]
+    n14["big/f13.rs"]
+    n15["big/f14.rs"]
+    n16["big/f15.rs"]
+    n17["big/f16.rs"]
+    n18["big/f17.rs"]
+    n19["big/f18.rs"]
+    n20["big/f19.rs"]
+    n21["big/f20.rs"]
+    n22["big/f21.rs"]
+    n23["big/f22.rs"]
+    n24["big/f23.rs"]
+    n25["big/f24.rs"]
+    n26["big/f25.rs"]
+    n27["big/f26.rs"]
+    n28["big/f27.rs"]
+    n29["big/f28.rs"]
+    n0 --> n1
+    n0 --> n2
+    n0 --> n3
+    n0 --> n4
+    n0 --> n5
+    n0 --> n6
+    n0 --> n7
+    n0 --> n8
+    n0 --> n9
+    n0 --> n10
+    n0 --> n11
+    n0 --> n12
+    n0 --> n13
+    n0 --> n14
+    n0 --> n15
+    n0 --> n16
+    n0 --> n17
+    n0 --> n18
+    n0 --> n19
+    n0 --> n20
+    n0 --> n21
+    n0 --> n22
+    n0 --> n23
+    n0 --> n24
+    n0 --> n25
+    n0 --> n26
+    n0 --> n27
+    n0 --> n28
+    n0 --> n29
+```
+
+```mermaid
+flowchart TD
+    n0["big"]
+    n1["big/f29.rs"]
+    n2["big/f30.rs"]
+    n3["big/f31.rs"]
+    n4["big/f32.rs"]
+    n5["big/f33.rs"]
+    n6["big/f34.rs"]
+    n7["big/f35.rs"]
+    n8["big/f36.rs"]
+    n9["big/f37.rs"]
+    n10["big/f38.rs"]
+    n11["big/f39.rs"]
+    n12["big/f40.rs"]
+    n13["big/f41.rs"]
+    n14["big/f42.rs"]
+    n15["big/f43.rs"]
+    n16["big/f44.rs"]
+    n17["big/f45.rs"]
+    n18["big/f46.rs"]
+    n19["big/f47.rs"]
+    n20["big/f48.rs"]
+    n21["big/f49.rs"]
+    n0 --> n1
+    n0 --> n2
+    n0 --> n3
+    n0 --> n4
+    n0 --> n5
+    n0 --> n6
+    n0 --> n7
+    n0 --> n8
+    n0 --> n9
+    n0 --> n10
+    n0 --> n11
+    n0 --> n12
+    n0 --> n13
+    n0 --> n14
+    n0 --> n15
+    n0 --> n16
+    n0 --> n17
+    n0 --> n18
+    n0 --> n19
+    n0 --> n20
+    n0 --> n21
+```

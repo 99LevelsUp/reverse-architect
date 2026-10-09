@@ -1,0 +1,80 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+Module java/demo
+  Loc = 41  [metrics Derived Heuristic @ java/demo:whole]
+File java/demo/JavaInvoice.java
+  Loc = 21  [metrics Measured Heuristic @ java/demo/JavaInvoice.java:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ java/demo/JavaInvoice.java:whole]
+File java/demo/JavaReport.java
+  Loc = 20  [metrics Measured Heuristic @ java/demo/JavaReport.java:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ java/demo/JavaReport.java:whole]
+Symbol sym:java:demo#JavaInvoice
+  SymbolName = "JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:7-21]
+  SymbolKind = "class"  [java Measured Heuristic @ java/demo/JavaInvoice.java:7-21]
+  SymbolSignature = "public class JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:7-21]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaInvoice.java:7-21]
+  DocComment = "Faktura s částkou.\nZáporné hodnoty jsou neplatné."  [java Measured Heuristic @ java/demo/JavaInvoice.java:3-6]
+Symbol sym:java:demo#JavaInvoice.JavaInvoice(long)
+  SymbolName = "JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+  SymbolKind = "constructor"  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+  SymbolContainer = "JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+  SymbolSignature = "public JavaInvoice(long amount)"  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+Symbol sym:java:demo#JavaInvoice.amount
+  SymbolName = "amount"  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+  SymbolKind = "field"  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+  SymbolContainer = "JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+  SymbolSignature = "private final long amount;"  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+  SymbolVisibility = "private"  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+Symbol sym:java:demo#JavaInvoice.total()
+  SymbolName = "total"  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+  SymbolKind = "method"  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+  SymbolContainer = "JavaInvoice"  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+  SymbolSignature = "public long total()"  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+  DocComment = "Spočítá celkovou částku.\nNikdy nevrací zápornou hodnotu."  [java Measured Heuristic @ java/demo/JavaInvoice.java:14-17]
+Symbol sym:java:demo#JavaReport
+  SymbolName = "JavaReport"  [java Measured Heuristic @ java/demo/JavaReport.java:7-20]
+  SymbolKind = "class"  [java Measured Heuristic @ java/demo/JavaReport.java:7-20]
+  SymbolSignature = "public class JavaReport extends JavaInvoice"  [java Measured Heuristic @ java/demo/JavaReport.java:7-20]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaReport.java:7-20]
+  DocComment = "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku."  [java Measured Heuristic @ java/demo/JavaReport.java:3-6]
+Symbol sym:java:demo#JavaReport.JavaReport(long)
+  SymbolName = "JavaReport"  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+  SymbolKind = "constructor"  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+  SymbolContainer = "JavaReport"  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+  SymbolSignature = "public JavaReport(long total)"  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+Symbol sym:java:demo#JavaReport.build(long)
+  SymbolName = "build"  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+  SymbolKind = "method"  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+  SymbolContainer = "JavaReport"  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+  SymbolSignature = "public static JavaReport build(long amount)"  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+  SymbolVisibility = "public"  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [java Measured Heuristic @ java/demo/JavaReport.java:12-15]
+--- edges ---
+Contains java -> java/demo  [filetree Measured Heuristic @ java/demo:whole]
+Contains java/demo -> java/demo/JavaInvoice.java  [filetree Measured Heuristic @ java/demo/JavaInvoice.java:whole]
+Contains java/demo -> java/demo/JavaReport.java  [filetree Measured Heuristic @ java/demo/JavaReport.java:whole]
+Declares java/demo/JavaInvoice.java -> sym:java:demo#JavaInvoice  [java Measured Heuristic @ java/demo/JavaInvoice.java:7-21]
+Declares java/demo/JavaInvoice.java -> sym:java:demo#JavaInvoice.JavaInvoice(long)  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+Declares java/demo/JavaInvoice.java -> sym:java:demo#JavaInvoice.amount  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+Declares java/demo/JavaInvoice.java -> sym:java:demo#JavaInvoice.total()  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+Declares java/demo/JavaReport.java -> sym:java:demo#JavaReport  [java Measured Heuristic @ java/demo/JavaReport.java:7-20]
+Declares java/demo/JavaReport.java -> sym:java:demo#JavaReport.JavaReport(long)  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+Declares java/demo/JavaReport.java -> sym:java:demo#JavaReport.build(long)  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+HasMember sym:java:demo#JavaInvoice -> sym:java:demo#JavaInvoice.JavaInvoice(long)  [java Measured Heuristic @ java/demo/JavaInvoice.java:10-12]
+HasMember sym:java:demo#JavaInvoice -> sym:java:demo#JavaInvoice.amount  [java Measured Heuristic @ java/demo/JavaInvoice.java:8-8]
+HasMember sym:java:demo#JavaInvoice -> sym:java:demo#JavaInvoice.total()  [java Measured Heuristic @ java/demo/JavaInvoice.java:18-20]
+Extends sym:java:demo#JavaReport -> sym:java:demo#JavaInvoice  [java Measured Heuristic @ java/demo/JavaReport.java:7-7]
+References sym:java:demo#JavaReport -> sym:java:demo#JavaInvoice  [java Measured Heuristic @ java/demo/JavaReport.java:7-7]
+HasMember sym:java:demo#JavaReport -> sym:java:demo#JavaReport.JavaReport(long)  [java Measured Heuristic @ java/demo/JavaReport.java:8-10]
+HasMember sym:java:demo#JavaReport -> sym:java:demo#JavaReport.build(long)  [java Measured Heuristic @ java/demo/JavaReport.java:16-19]
+References sym:java:demo#JavaReport.build(long) -> sym:java:demo#JavaInvoice  [java Measured Heuristic @ java/demo/JavaReport.java:17-17]
+Instantiates sym:java:demo#JavaReport.build(long) -> sym:java:demo#JavaInvoice  [java Measured Heuristic @ java/demo/JavaReport.java:17-17]
+Calls sym:java:demo#JavaReport.build(long) -> sym:java:demo#JavaInvoice.total()  [java Measured Heuristic @ java/demo/JavaReport.java:18-18]
+References sym:java:demo#JavaReport.build(long) -> sym:java:demo#JavaReport  [java Measured Heuristic @ java/demo/JavaReport.java:16-16]
+Instantiates sym:java:demo#JavaReport.build(long) -> sym:java:demo#JavaReport  [java Measured Heuristic @ java/demo/JavaReport.java:18-18]

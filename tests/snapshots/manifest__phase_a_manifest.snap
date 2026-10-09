@@ -1,0 +1,334 @@
+---
+source: tests/manifest.rs
+expression: to_json_pretty(&manifest)
+---
+{
+  "schema_version": 10,
+  "strings": [
+    ".",
+    "README.md",
+    "src",
+    "src/extract",
+    "src/extract/git.rs",
+    "src/lib.rs"
+  ],
+  "documents": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "guiding_question": "What is this repository, and how is it shaped at the top level?",
+      "path": "overview.md",
+      "chunks": [
+        {
+          "id": "overview#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "overview#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "overview#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "module-structure",
+      "title": "Module structure",
+      "guiding_question": "How is the code split into modules, and what does each module contain?",
+      "path": "module-structure.md",
+      "chunks": [
+        {
+          "id": "module-structure#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "module-structure#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "module-structure#diagram",
+          "heading": "Diagram"
+        },
+        {
+          "id": "module-structure#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "dependencies",
+      "title": "Dependencies",
+      "guiding_question": "What external code does this repository depend on, and how?",
+      "path": "dependencies.md",
+      "chunks": [
+        {
+          "id": "dependencies#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "dependencies#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "dependencies#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "entry-points",
+      "title": "Entry points",
+      "guiding_question": "Where does execution start, and how is this code entered?",
+      "path": "entry-points.md",
+      "chunks": [
+        {
+          "id": "entry-points#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "entry-points#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "entry-points#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    },
+    {
+      "id": "test-coverage",
+      "title": "Test coverage",
+      "guiding_question": "Which sources have a test by convention, and how far does extraction reach?",
+      "path": "test-coverage.md",
+      "chunks": [
+        {
+          "id": "test-coverage#problem",
+          "heading": "Problem"
+        },
+        {
+          "id": "test-coverage#mechanism",
+          "heading": "Mechanism"
+        },
+        {
+          "id": "test-coverage#in-this-repository",
+          "heading": "In this repository"
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "key_id": 0,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 3,
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "coverage",
+          "value": "rust: 0 of 2 source files carry tree-sitter structural facts; 2 have only metrics + file tree",
+          "provenance": {
+            "file_id": 0,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 1,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 1,
+          "provenance": {
+            "file_id": 1,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 2,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 2,
+          "provenance": {
+            "file_id": 2,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 3,
+      "kind": "module",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 1,
+          "provenance": {
+            "file_id": 3,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 4,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 1,
+          "provenance": {
+            "file_id": 4,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 4,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    },
+    {
+      "key_id": 5,
+      "kind": "file",
+      "facts": [
+        {
+          "kind": "loc",
+          "value": 1,
+          "provenance": {
+            "file_id": 5,
+            "line": null,
+            "extractor": "metrics",
+            "tier": "measured",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        },
+        {
+          "kind": "test_by_convention",
+          "value": "test by convention not found",
+          "provenance": {
+            "file_id": 5,
+            "line": null,
+            "extractor": "test-pairing",
+            "tier": "derived",
+            "resolution": "heuristic"
+          },
+          "dissent": []
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from_id": 0,
+      "to_id": 1,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 1,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 0,
+      "to_id": 2,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 2,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 2,
+      "to_id": 3,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 3,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 2,
+      "to_id": 5,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 5,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    },
+    {
+      "from_id": 3,
+      "to_id": 4,
+      "kind": "contains",
+      "provenance": {
+        "file_id": 4,
+        "line": null,
+        "extractor": "filetree",
+        "tier": "measured",
+        "resolution": "heuristic"
+      },
+      "dissent": []
+    }
+  ]
+}

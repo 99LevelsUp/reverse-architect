@@ -1,0 +1,78 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: "slice_where(&graph, |p| p.file.starts_with(prefix))"
+---
+--- facts ---
+Module rust/src
+  Loc = 25  [metrics Derived Heuristic @ rust/src:whole]
+File rust/src/consumer.rs
+  Loc = 12  [metrics Measured Heuristic @ rust/src/consumer.rs:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ rust/src/consumer.rs:whole]
+File rust/src/model.rs
+  Loc = 13  [metrics Measured Heuristic @ rust/src/model.rs:whole]
+  TestByConvention = "test by convention not found"  [test-pairing Derived Heuristic @ rust/src/model.rs:whole]
+Symbol sym:rust:crate::consumer#RustReport
+  SymbolName = "RustReport"  [rust Measured Heuristic @ rust/src/consumer.rs:5-7]
+  SymbolKind = "struct"  [rust Measured Heuristic @ rust/src/consumer.rs:5-7]
+  SymbolSignature = "pub struct RustReport"  [rust Measured Heuristic @ rust/src/consumer.rs:5-7]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/consumer.rs:5-7]
+  DocComment = "Výkaz shrnující jednu fakturu.\nDrží už jen výslednou částku."  [rust Measured Heuristic @ rust/src/consumer.rs:3-4]
+Symbol sym:rust:crate::consumer#RustReport.total
+  SymbolName = "total"  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+  SymbolKind = "field"  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+  SymbolContainer = "RustReport"  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+  SymbolSignature = "pub total: i64"  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+Symbol sym:rust:crate::consumer#rust_build_report(i64)
+  SymbolName = "rust_build_report"  [rust Measured Heuristic @ rust/src/consumer.rs:11-16]
+  SymbolKind = "function"  [rust Measured Heuristic @ rust/src/consumer.rs:11-16]
+  SymbolSignature = "pub fn rust_build_report(amount: i64) -> RustReport"  [rust Measured Heuristic @ rust/src/consumer.rs:11-16]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/consumer.rs:11-16]
+  DocComment = "Sestaví výkaz z částky.\nPoužije model ze sousedního souboru."  [rust Measured Heuristic @ rust/src/consumer.rs:9-10]
+Symbol sym:rust:crate::model#RustInvoice
+  SymbolName = "RustInvoice"  [rust Measured Heuristic @ rust/src/model.rs:3-5]
+  SymbolKind = "struct"  [rust Measured Heuristic @ rust/src/model.rs:3-5]
+  SymbolSignature = "pub struct RustInvoice"  [rust Measured Heuristic @ rust/src/model.rs:3-5]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/model.rs:3-5]
+  DocComment = "Faktura s částkou v haléřích.\nZáporné hodnoty jsou neplatné."  [rust Measured Heuristic @ rust/src/model.rs:1-2]
+Symbol sym:rust:crate::model#RustInvoice.amount
+  SymbolName = "amount"  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+  SymbolKind = "field"  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+  SymbolContainer = "RustInvoice"  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+  SymbolSignature = "pub amount: i64"  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+Symbol sym:rust:crate::model#RustInvoice.new(i64)
+  SymbolName = "new"  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+  SymbolKind = "method"  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+  SymbolContainer = "RustInvoice"  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+  SymbolSignature = "pub fn new(amount: i64) -> RustInvoice"  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+Symbol sym:rust:crate::model#rust_compute_total(&RustInvoice)
+  SymbolName = "rust_compute_total"  [rust Measured Heuristic @ rust/src/model.rs:15-17]
+  SymbolKind = "function"  [rust Measured Heuristic @ rust/src/model.rs:15-17]
+  SymbolSignature = "pub fn rust_compute_total(invoice: &RustInvoice) -> i64"  [rust Measured Heuristic @ rust/src/model.rs:15-17]
+  SymbolVisibility = "pub"  [rust Measured Heuristic @ rust/src/model.rs:15-17]
+  DocComment = "Spočítá celkovou částku faktury.\nNikdy nevrací zápornou hodnotu."  [rust Measured Heuristic @ rust/src/model.rs:13-14]
+--- edges ---
+Contains rust -> rust/src  [filetree Measured Heuristic @ rust/src:whole]
+Contains rust/src -> rust/src/consumer.rs  [filetree Measured Heuristic @ rust/src/consumer.rs:whole]
+Contains rust/src -> rust/src/model.rs  [filetree Measured Heuristic @ rust/src/model.rs:whole]
+Imports rust/src/consumer.rs -> rust/src/model.rs  [rust Measured Heuristic @ rust/src/consumer.rs:1-1]
+Declares rust/src/consumer.rs -> sym:rust:crate::consumer#RustReport  [rust Measured Heuristic @ rust/src/consumer.rs:5-7]
+Declares rust/src/consumer.rs -> sym:rust:crate::consumer#RustReport.total  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+Declares rust/src/consumer.rs -> sym:rust:crate::consumer#rust_build_report(i64)  [rust Measured Heuristic @ rust/src/consumer.rs:11-16]
+Declares rust/src/model.rs -> sym:rust:crate::model#RustInvoice  [rust Measured Heuristic @ rust/src/model.rs:3-5]
+References rust/src/model.rs -> sym:rust:crate::model#RustInvoice  [rust Measured Heuristic @ rust/src/model.rs:7-7]
+Declares rust/src/model.rs -> sym:rust:crate::model#RustInvoice.amount  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+Declares rust/src/model.rs -> sym:rust:crate::model#RustInvoice.new(i64)  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+Declares rust/src/model.rs -> sym:rust:crate::model#rust_compute_total(&RustInvoice)  [rust Measured Heuristic @ rust/src/model.rs:15-17]
+HasMember sym:rust:crate::consumer#RustReport -> sym:rust:crate::consumer#RustReport.total  [rust Measured Heuristic @ rust/src/consumer.rs:6-6]
+References sym:rust:crate::consumer#rust_build_report(i64) -> sym:rust:crate::consumer#RustReport  [rust Measured Heuristic @ rust/src/consumer.rs:11-11]
+Instantiates sym:rust:crate::consumer#rust_build_report(i64) -> sym:rust:crate::consumer#RustReport  [rust Measured Heuristic @ rust/src/consumer.rs:13-13]
+Calls sym:rust:crate::consumer#rust_build_report(i64) -> sym:rust:crate::model#RustInvoice.new(i64)  [rust Measured Heuristic @ rust/src/consumer.rs:12-12]
+Calls sym:rust:crate::consumer#rust_build_report(i64) -> sym:rust:crate::model#rust_compute_total(&RustInvoice)  [rust Measured Heuristic @ rust/src/consumer.rs:14-14]
+HasMember sym:rust:crate::model#RustInvoice -> sym:rust:crate::model#RustInvoice.amount  [rust Measured Heuristic @ rust/src/model.rs:4-4]
+HasMember sym:rust:crate::model#RustInvoice -> sym:rust:crate::model#RustInvoice.new(i64)  [rust Measured Heuristic @ rust/src/model.rs:8-10]
+References sym:rust:crate::model#RustInvoice.new(i64) -> sym:rust:crate::model#RustInvoice  [rust Measured Heuristic @ rust/src/model.rs:8-8]
+Instantiates sym:rust:crate::model#RustInvoice.new(i64) -> sym:rust:crate::model#RustInvoice  [rust Measured Heuristic @ rust/src/model.rs:9-9]
+References sym:rust:crate::model#rust_compute_total(&RustInvoice) -> sym:rust:crate::model#RustInvoice  [rust Measured Heuristic @ rust/src/model.rs:15-15]

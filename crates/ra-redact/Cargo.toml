@@ -1,0 +1,9 @@
+[package]
+name = "ra-redact"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The secret-redaction filter reverse-architect and its language plugins share."
+
+[dependencies]
+regex = "1.12.4"

@@ -1,0 +1,512 @@
+{
+  "commit": "<ref-revision>",
+  "index_sha256": "ecf3efd4f01daf21c1838b5ffe70ec682ba7446730f50d766e83293ac6139c84",
+  "origins": [
+    {
+      "component": "csharp",
+      "component_sha256": "800518666c3fcc9992326b82e1961a0a0f1fec7bed731936fb792b25a49bda03",
+      "contract": "0.2",
+      "language": "csharp",
+      "rules": {
+        "arity": {
+          "confirmed": 0,
+          "disputed_refuted": 228966,
+          "evaluated": 237016,
+          "judged": 264071,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 27055,
+          "would_remove_confirmed": 8050
+        },
+        "base-spelling": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "declared-receiver": {
+          "confirmed": 86406,
+          "disputed_refuted": 45607,
+          "evaluated": 146328,
+          "judged": 160871,
+          "may_delete": true,
+          "proposal": "removed-confirmed",
+          "refuted": 8499,
+          "revision": 2,
+          "unmapped": 14543,
+          "would_remove_confirmed": 5816
+        },
+        "implicit-this": {
+          "confirmed": 61841,
+          "disputed_refuted": 0,
+          "evaluated": 61974,
+          "judged": 65825,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 133,
+          "revision": 1,
+          "unmapped": 3851,
+          "would_remove_confirmed": 0
+        },
+        "namespace-visibility": {
+          "confirmed": 0,
+          "disputed_refuted": 24639,
+          "evaluated": 24656,
+          "judged": 45815,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 21159,
+          "would_remove_confirmed": 17
+        },
+        "role-mismatch": {
+          "confirmed": 0,
+          "disputed_refuted": 9310,
+          "evaluated": 9310,
+          "judged": 9545,
+          "may_delete": true,
+          "proposal": "proposed",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 235,
+          "would_remove_confirmed": 0
+        },
+        "static-receiver": {
+          "confirmed": 70042,
+          "disputed_refuted": 322,
+          "evaluated": 70524,
+          "judged": 73642,
+          "may_delete": true,
+          "proposal": "removed-confirmed",
+          "refuted": 132,
+          "revision": 2,
+          "unmapped": 3118,
+          "would_remove_confirmed": 28
+        }
+      },
+      "sites": {
+        "external": 116082,
+        "no_document": 156,
+        "resolved": 421427,
+        "total": 642462,
+        "unmapped": 82411,
+        "unverified_document": 22386
+      }
+    },
+    {
+      "component": "ecmascript",
+      "component_sha256": "c6005a41980635eb18da0a44a3e20817587f81048925bd2951e405a51959985f",
+      "contract": "0.2",
+      "language": "javascript",
+      "rules": {
+        "arity": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "base-spelling": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "declared-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "implicit-this": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "namespace-visibility": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "role-mismatch": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "static-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        }
+      },
+      "sites": {
+        "external": 0,
+        "no_document": 259034,
+        "resolved": 0,
+        "total": 259034,
+        "unmapped": 0,
+        "unverified_document": 0
+      }
+    },
+    {
+      "component": "python",
+      "component_sha256": "d862c5eb0e2e88ff834ccee929852b7d5edae33f0ec6a2bd14a17f79cd259a11",
+      "contract": "0.2",
+      "language": "python",
+      "rules": {
+        "arity": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "base-spelling": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "declared-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "implicit-this": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "namespace-visibility": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "role-mismatch": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "static-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        }
+      },
+      "sites": {
+        "external": 0,
+        "no_document": 479,
+        "resolved": 0,
+        "total": 479,
+        "unmapped": 0,
+        "unverified_document": 0
+      }
+    },
+    {
+      "component": "sql",
+      "component_sha256": "c0804517a3f66b52a95449a936ee41f7f73b58660428cdd3787c607603c43c25",
+      "contract": "0.1",
+      "language": "sql",
+      "rules": {
+        "arity": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "base-spelling": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "declared-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "implicit-this": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "namespace-visibility": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "role-mismatch": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "static-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        }
+      },
+      "sites": {
+        "external": 0,
+        "no_document": 104,
+        "resolved": 0,
+        "total": 104,
+        "unmapped": 0,
+        "unverified_document": 0
+      }
+    },
+    {
+      "component": "ecmascript",
+      "component_sha256": "c6005a41980635eb18da0a44a3e20817587f81048925bd2951e405a51959985f",
+      "contract": "0.2",
+      "language": "typescript",
+      "rules": {
+        "arity": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "base-spelling": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "declared-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "implicit-this": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "namespace-visibility": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": false,
+          "proposal": "never-deletes",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "role-mismatch": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 1,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        },
+        "static-receiver": {
+          "confirmed": 0,
+          "disputed_refuted": 0,
+          "evaluated": 0,
+          "judged": 0,
+          "may_delete": true,
+          "proposal": "too-few-evaluated",
+          "refuted": 0,
+          "revision": 2,
+          "unmapped": 0,
+          "would_remove_confirmed": 0
+        }
+      },
+      "sites": {
+        "external": 0,
+        "no_document": 42603,
+        "resolved": 0,
+        "total": 42603,
+        "unmapped": 0,
+        "unverified_document": 0
+      }
+    }
+  ],
+  "resolver": "role-mismatch@1,declared-receiver@2,static-receiver@2,implicit-this@1,arity@2,namespace-visibility@2,base-spelling@1;rights=09612b07b5ecb5a5",
+  "schema": 1,
+  "thresholds": {
+    "max_unmapped_percent": 20,
+    "min_evaluated_sites": 100
+  }
+}

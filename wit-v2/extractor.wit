@@ -1,0 +1,354 @@
+package ra:plugin@0.2.0;
+
+// The contract a reverse-architect language plugin is built against, version
+// 0.2.
+//
+// Everything `wit/extractor.wit` (0.1.0) says about what a plugin is, what it
+// is given and what the host does with what it returns holds here unchanged.
+// 0.1.0 stays frozen beside this file and the host loads both: it tries this
+// world first and 0.1 second, so a plugin built against 0.1 keeps working and
+// simply reports usages without the context below (plan A, KTD3).
+//
+// What 0.2 adds is what a language can say about a usage without type
+// inference, so the host's one shared resolver can sift name candidates for
+// every plugin alike (R3, R4):
+//
+// - `usages` returns one record per file: the file's lexical scopes that can
+//   carry imports (the file itself and every namespace in it, each with its
+//   own using directives), and the sites, each of which may name the
+//   innermost such scope and carry what the syntax says about its receiver.
+// - A usage has a column, and its line is then the line of the used NAME, so
+//   two calls on one line (`sb.Append(a).Append(b)`) are two positions and a
+//   call in a chain that spans lines sits on the line it is written on.
+// - A `place` can say where the name of the declaration it is about is
+//   written, so two declarations on one line can be told apart.
+//
+// Extending a record is an incompatible type change in the component model,
+// and only a patch `@0.1.x` counts as compatible, so these changes are a new
+// minor version rather than an edit of 0.1.0.
+//
+// Every context field is optional: a plugin fills what its language's syntax
+// states and leaves the rest `none`, and a site without context is resolved
+// as under 0.1. The host's rules decide over what a plugin reports, so a wrong
+// field makes them back the wrong candidate; leave a field `none` rather than
+// guess. `docs/plugins.md` describes what the host does with each part.
+//
+// Lines and columns are 1-based. A column counts characters (Unicode scalar
+// values) from the start of its line, so it means the same on every platform
+// whatever the encoding a reader converts it to.
+
+interface types {
+    /// Which lines of the file a statement was read from, inclusive.
+    variant span {
+        whole,
+        line(u32),
+        range(tuple<u32, u32>),
+    }
+
+    /// One point in the file.
+    record position {
+        line: u32,
+        column: u32,
+    }
+
+    /// Where in the file a statement was read.
+    record place {
+        span: span,
+        /// Where the name of the declaration this statement is about is
+        /// written — the identifier itself, not the start of the declaration,
+        /// which an attribute or a modifier may precede. `none` for a
+        /// statement that is not about a declaration, and from a plugin that
+        /// does not say.
+        name: option<position>,
+    }
+
+    variant value {
+        text(string),
+        int(s64),
+        flag(bool),
+    }
+
+    record fact {
+        kind: string,
+        value: value,
+        place: place,
+    }
+
+    record edge {
+        source: string,
+        target: string,
+        kind: string,
+        place: place,
+    }
+
+    /// A declaration and everything hung off it. Created as one group: if the
+    /// key is already held by a node of another kind, the whole group is
+    /// dropped rather than its facts attached to the wrong node.
+    //
+    // The group should carry the `declares` edge from its file: the host
+    // never infers it, and a file whose symbols arrive without one is reported
+    // as declaring nothing. The `symbol_kind` fact decides what a usage can
+    // resolve to: `function`, `method`, `constructor` and `procedure` are
+    // called; `class`, `struct`, `interface`, `trait`, `enum`, `record`,
+    // `type`, `table`, `view` and `trigger` are referenced and get their own
+    // card. Any other kind is kept and shown, and nothing resolves to it.
+    record symbol {
+        key: string,
+        facts: list<fact>,
+        edges: list<edge>,
+    }
+
+    record keyed-fact {
+        node: string,
+        fact: fact,
+    }
+
+    enum relation-kind {
+        extends,
+        implements,
+        /// The syntax does not say (a C# base list): the host decides from
+        /// the target's declared kind — an interface is implemented, anything
+        /// else is extended.
+        by-target-kind,
+    }
+
+    /// A type relation named by spelling. Both sides are candidate keys, most
+    /// specific first; the host keeps the first that exists after every file
+    /// has been read, and falls back to the one repository type of that name
+    /// in the same language family when none does.
+    record relation {
+        sources: list<string>,
+        targets: list<string>,
+        kind: relation-kind,
+        place: place,
+    }
+
+    /// One change, applied in the order returned.
+    variant op {
+        /// A fact on a node the plugin did not create (a file's own doc comment).
+        fact(keyed-fact),
+        symbol(symbol),
+        /// An edge between existing nodes; dropped if either end does not exist.
+        edge(edge),
+        relation(relation),
+    }
+
+    enum usage-kind {
+        /// `f(…)`, `x.m(…)` — resolves against callables.
+        call,
+        /// A call that may also be a construction (`Foo()` in Python, a tuple
+        /// struct in Rust): callables first, types if no callable matches.
+        call-or-construct,
+        /// `new T(…)`, a struct or composite literal — resolves against types.
+        construct,
+        /// A type named in a type position — resolves against types.
+        reference,
+    }
+
+    /// One using (import) directive, as the syntax writes it.
+    record using-directive {
+        /// The namespace or type it names, whitespace removed (`System.Text`,
+        /// `System.Math`, `global::System.IO`).
+        target: string,
+        /// `using Alias = Target;` — the alias it introduces.
+        alias: option<string>,
+        /// `using static Target;` — the members of a type, not a namespace.
+        is-static: bool,
+        /// `global using Target;` — in force in every file of the project, not
+        /// only in this one.
+        is-global: bool,
+    }
+
+    /// A lexical scope that can carry using directives: the file itself, and
+    /// every namespace declared in it.
+    record scope {
+        /// The namespace this scope declares, qualified by the namespaces
+        /// around it (`A.B.C` for `namespace C` inside `namespace A.B`). Empty
+        /// for the file itself.
+        namespace: string,
+        /// The lines it spans, inclusive. A file-scoped `namespace N;` spans
+        /// from its own line to the end of the file.
+        lines: tuple<u32, u32>,
+        /// Index of the enclosing scope in `file-usages.scopes`; `none` for
+        /// the file itself, which is always index 0.
+        parent: option<u32>,
+        /// The directives written directly in this scope, in source order. A
+        /// directive is in force here and in every scope nested inside.
+        usings: list<using-directive>,
+    }
+
+    /// What a call is made on, as far as the syntax shows it.
+    variant receiver {
+        /// Nothing: a bare `foo()`. Said explicitly, because it is what lets
+        /// the host look for the callee on the caller's own type, and a site
+        /// without context cannot tell `foo()` from `obj.foo()`. Constructions
+        /// and type references have no receiver either and say `none` too —
+        /// the usage kind tells the two apart.
+        none,
+        /// A name or a dotted path of names, whitespace removed, whose first
+        /// name the file does not declare as a value: `this`, `base`,
+        /// `this.sb`, a type (`Foo`, `Foo<int>`), a namespace-qualified path
+        /// (`System.IO.File`, `global::N`), or a name declared elsewhere — an
+        /// inherited field, the other half of a `partial` type. The host may
+        /// read it as a type.
+        name(string),
+        /// A name or a dotted path of names, whitespace removed, whose first
+        /// name the file declares as a value in scope at the call: a local, a
+        /// parameter (a lambda's included), a field or property of an
+        /// enclosing type, a pattern or catch variable (`sb`, `Worker`,
+        /// `items.First`). Said whether or not the declaration states a type
+        /// — `declared-type` carries the type when it does — because a value
+        /// named like a type (`var Worker = Load(); Worker.Run()`) shadows
+        /// the type, and the host must never read it as one.
+        value(string),
+        /// A built-in type spelled as its keyword: `string` in
+        /// `string.IsNullOrEmpty(x)`. Such a call cannot reach a declaration
+        /// in the repository.
+        keyword(string),
+        /// Any other expression — a call result (`a.B().C()`), a
+        /// construction (`new T().U()`), a conditional access, a literal, an
+        /// index. Its text is not passed: it can run to any length, and says
+        /// nothing about the target a name would.
+        expression,
+    }
+
+    /// The type a receiver is declared with, as the file itself states it.
+    record declared-type {
+        /// As written, generic arguments dropped (`StringBuilder`,
+        /// `System.Text.StringBuilder`, `List`, `string`).
+        name: string,
+        /// The type is a built-in type spelled as its keyword (`string`,
+        /// `int`): a call on such a receiver cannot reach a declaration in
+        /// the repository.
+        keyword: bool,
+    }
+
+    /// What the syntax says about one usage site. Every part is read from the
+    /// one file the plugin is given — no inference, no other file.
+    record site-context {
+        /// Index of the innermost scope around the site in
+        /// `file-usages.scopes`.
+        scope: u32,
+        /// For a call, what it is made on; `none` for a bare call and for
+        /// every other usage kind.
+        receiver: receiver,
+        /// The receiver's declared type, when the file declares it: a
+        /// parameter, a local variable with an explicit type or initialized
+        /// with `new T(…)`, a field or property of the enclosing type, a
+        /// primary-constructor parameter, a catch or pattern variable — or a
+        /// receiver that is itself `new T(…)`. `none` when the declaration
+        /// states no type (`var x = Load()`, a target-typed `new()`, an
+        /// untyped lambda parameter: these shadow an outer declaration all
+        /// the same) and when the file does not declare the receiver at all.
+        declared-type: option<declared-type>,
+        /// Arguments written at a call or a construction, named ones
+        /// included. `none` for a type reference.
+        argument-count: option<u32>,
+        /// For a construction or a type reference written qualified, what
+        /// precedes the name, generic arguments dropped (`System.Text` in
+        /// `new System.Text.StringBuilder()`). `none` for a simple name and
+        /// for a call, whose receiver says it.
+        qualifier: option<string>,
+    }
+
+    record usage {
+        /// The simple name: a qualified spelling reduced to its last segment.
+        name: string,
+        kind: usage-kind,
+        /// The line of the used name itself when `column` is present; the
+        /// line the usage starts on when it is not, which is all 0.1 said.
+        line: u32,
+        /// The column of the used name's first character. Two uses on one
+        /// line are two sites only when the plugin says where each is.
+        column: option<u32>,
+        /// `none` from a plugin that does not read context for this language:
+        /// the host then treats the site as 0.1 did.
+        context: option<site-context>,
+    }
+
+    /// Everything one file uses, for the host to resolve.
+    record file-usages {
+        /// The file's scopes, the file itself first. May be empty when no
+        /// site carries context.
+        scopes: list<scope>,
+        /// In tree order: the first site of a repeated relation anchors it.
+        usages: list<usage>,
+    }
+
+    record language {
+        /// The reporting name coverage uses (`typescript`, `csharp`).
+        name: string,
+        /// Extensions without the dot (`ts`, `tsx`).
+        extensions: list<string>,
+    }
+
+    record manifest {
+        /// A stable id: lowercase letters, digits and `-`. It names the cache
+        /// phases and appears in every fact's provenance.
+        id: string,
+        version: string,
+        languages: list<language>,
+        /// How far the plugin's scalar facts outrank another extractor's on
+        /// the same node (KTD22). The bundled language plugins use 30.
+        trust-rank: u8,
+        /// Ids of plugins that must run before this one.
+        depends-on: list<string>,
+    }
+
+    /// What the operator configured for this run.
+    record config {
+        /// Extra token prefixes the plugin must treat as credentials in text it
+        /// quotes (signatures, doc comments). The host redacts again anyway.
+        secret-prefixes: list<string>,
+    }
+
+    /// The core's closed role sets. They are the one place this interface uses
+    /// enums rather than strings: they are the core's vocabulary, not the
+    /// plugin's.
+    enum structural-role { container, leaf, definition, %package, external, opaque }
+    enum link-role { containment, declaration, dependency, opaque }
+    enum cardinality { additive, scalar }
+
+    record node-kind-decl {
+        name: string,
+        role: structural-role,
+        /// The card kind (declared below) its nodes get a card under, if any.
+        card: option<string>,
+    }
+    record edge-kind-decl { name: string, role: link-role }
+    record fact-kind-decl { name: string, cardinality: cardinality }
+
+    /// Kinds this plugin adds to the corpus, all under one namespace.
+    record vocabulary {
+        namespace: string,
+        card-kinds: list<string>,
+        node-kinds: list<node-kind-decl>,
+        edge-kinds: list<edge-kind-decl>,
+        fact-kinds: list<fact-kind-decl>,
+    }
+}
+
+/// What the host offers a plugin. Answered from a snapshot frozen before the
+/// walk, so an answer can never depend on how far the walk has got.
+interface host {
+    /// Whether a file or directory with this repository-relative key exists
+    /// (`/`-separated, no leading `./`). How a plugin resolves an import.
+    path-exists: func(key: string) -> bool;
+}
+
+interface extractor {
+    use types.{manifest, vocabulary, config, op, file-usages};
+
+    describe: func() -> manifest;
+    /// Called once per run, before any file.
+    declare: func() -> option<vocabulary>;
+    declarations: func(path: string, source: list<u8>, config: config) -> list<op>;
+    /// One parse per file serves both the scopes and the sites: the host
+    /// budgets fuel per call from the file's size, not per pass.
+    usages: func(path: string, source: list<u8>) -> file-usages;
+}
+
+world language-plugin {
+    import host;
+    export extractor;
+}

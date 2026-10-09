@@ -1,0 +1,167 @@
+---
+source: tests/card.rs
+expression: combined
+---
+===== cards/type/csharp/Orbit.Geo/GeoSolver.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: type
+---
+
+# GeoSolver
+
+**public static class** · in [Geo](../../../module/Geo.md) · 13 lines · `Geo/GeoSolver.cs:3-15`
+
+- Identity: `sym:csharp:Orbit.Geo#GeoSolver`
+- Detail: [detail](../../../detail/type/csharp/Orbit.Geo/GeoSolver.md)
+
+## Purpose
+
+Static helper: static members only — 4 methods. (from the structure)
+
+## Role
+
+Used by 1 in 1 module, chiefly [CleanServer](../Orbit.Server/CleanServer.md).
+
+## Keywords
+
+solve, found, geo, solver, tables, typ, clean
+
+===== cards/detail/type/csharp/Orbit.Geo/GeoSolver.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: detail
+of: type
+---
+
+# GeoSolver
+
+**public static class** · in [Geo](../../../../module/Geo.md) · 13 lines · `Geo/GeoSolver.cs:3-15` · card: [GeoSolver](../../../../type/csharp/Orbit.Geo/GeoSolver.md)
+
+## Signature
+
+```text
+public static class GeoSolver
+```
+
+## API
+
+**Methods**
+
+- `public void CleanTyp()` · `Geo/GeoSolver.cs:5-8`
+- `public void FoundTables()` · `Geo/GeoSolver.cs:10`
+- `public int Solve(int n)` · `Geo/GeoSolver.cs:12`
+- `public int Solve(string s)` · `Geo/GeoSolver.cs:14`
+
+## Referenced by
+
+- declares [Geo/GeoSolver.cs](../../../../file/Geo/GeoSolver.cs.md) (heuristic) — `Geo/GeoSolver.cs:3-15`
+- calls `CleanServer.Run(GeoSolver)` (heuristic, rules-backed) via `FoundTables()` — `Server/CleanServer.cs:7:20, 8:20, 9:20`
+- references `CleanServer.Run(GeoSolver)` (heuristic, name only) — `Server/CleanServer.cs:5:25`
+
+## Maybe also
+
+Relations that may hold too, through a name match the rules did not settle: the name fits more than one declaration, or a rule disputed the one it fits. Each line is one place in the source and says why; at most one of its candidates is meant, and possibly none of them.
+
+- `CleanServer.Run(GeoSolver)` calls 1 of 2 candidates: `GeoSolver.Solve(int)`, `GeoSolver.Solve(string)` (heuristic, ambiguous: several declarations share the name) — `Server/CleanServer.cs:10:13`
+
+## Collaboration
+
+```mermaid
+flowchart LR
+    self["GeoSolver"]
+    style self stroke-width:3px
+    u0["CleanServer"]
+    u0 -->|calls| self
+```
+
+## Test pairing
+
+- test by convention not found — for the file `Geo/GeoSolver.cs` (derived)
+
+===== cards/type/csharp/Orbit.Server/CleanServer.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: type
+---
+
+# CleanServer
+
+**public class** · in [Server](../../../module/Server.md) · 10 lines · `Server/CleanServer.cs:3-12`
+
+- Identity: `sym:csharp:Orbit.Server#CleanServer`
+- Detail: [detail](../../../detail/type/csharp/Orbit.Server/CleanServer.md)
+
+## Purpose
+
+`class`: 1 method. (from the structure)
+
+## Role
+
+No other type or file in this repository was seen using `CleanServer`.
+It uses 1 other, chiefly [GeoSolver](../Orbit.Geo/GeoSolver.md) (calls 3 · references 1 (2 ambiguous)).
+
+## Keywords
+
+run, server, clean
+
+===== cards/detail/type/csharp/Orbit.Server/CleanServer.md =====
+---
+schema: 6
+tool: reverse-architect
+kind: detail
+of: type
+---
+
+# CleanServer
+
+**public class** · in [Server](../../../../module/Server.md) · 10 lines · `Server/CleanServer.cs:3-12` · card: [CleanServer](../../../../type/csharp/Orbit.Server/CleanServer.md)
+
+## Signature
+
+```text
+public class CleanServer
+```
+
+## API
+
+**Methods**
+
+- `public void Run(GeoSolver solver)` · `Server/CleanServer.cs:5-11`
+  - uses [GeoSolver](../../../../type/csharp/Orbit.Geo/GeoSolver.md)
+
+## Relations
+
+- calls `GeoSolver.FoundTables()` (heuristic, rules-backed) via `Run(GeoSolver)` — `Server/CleanServer.cs:7:20, 8:20, 9:20`
+- references [GeoSolver](../../../../type/csharp/Orbit.Geo/GeoSolver.md) (heuristic, name only) via `Run(GeoSolver)` — `Server/CleanServer.cs:5:25`
+
+## Referenced by
+
+- declares [Server/CleanServer.cs](../../../../file/Server/CleanServer.cs.md) (heuristic) — `Server/CleanServer.cs:3-12`
+
+## Maybe also
+
+Relations that may hold too, through a name match the rules did not settle: the name fits more than one declaration, or a rule disputed the one it fits. Each line is one place in the source and says why; at most one of its candidates is meant, and possibly none of them.
+
+- `Run(GeoSolver)` calls 1 of 2 candidates: `GeoSolver.Solve(int)`, `GeoSolver.Solve(string)` (heuristic, ambiguous: several declarations share the name) — `Server/CleanServer.cs:10:13`
+
+## Collaboration
+
+```mermaid
+flowchart LR
+    self["CleanServer"]
+    style self stroke-width:3px
+    d0["GeoSolver"]
+    self -->|calls| d0
+```
+
+## Test pairing
+
+- test by convention not found — for the file `Server/CleanServer.cs` (derived)
+
+## Notes
+
+- in `Run`: Solve: 2 candidates — ambiguous: a Maybe also claim where it leaves this card's own type or file

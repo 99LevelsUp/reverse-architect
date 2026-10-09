@@ -1,0 +1,417 @@
+---
+source: tests/six_grammar_baseline.rs
+expression: json
+---
+{
+  "schema_version": 6,
+  "repo_revision": "[oid]",
+  "languages": [
+    {
+      "language": "csharp",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "go",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "java",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "javascript",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "python",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "rust",
+      "files": 2,
+      "structural": 2,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    },
+    {
+      "language": "typescript",
+      "files": 4,
+      "structural": 4,
+      "resolved": 0,
+      "contracts": [
+        "0.2"
+      ]
+    }
+  ],
+  "unclassified_files": 3,
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "language": null,
+      "extractors": [
+        "filetree",
+        "manifest-deps",
+        "metrics"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "no grammar covers this file type"
+    },
+    {
+      "path": "cs/Consumer.cs",
+      "language": "csharp",
+      "extractors": [
+        "csharp",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "cs/Model.cs",
+      "language": "csharp",
+      "extractors": [
+        "csharp",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "go.mod",
+      "language": null,
+      "extractors": [
+        "filetree",
+        "manifest-deps"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "no grammar covers this file type"
+    },
+    {
+      "path": "go/consumer.go",
+      "language": "go",
+      "extractors": [
+        "external",
+        "filetree",
+        "go",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "go/model.go",
+      "language": "go",
+      "extractors": [
+        "external",
+        "filetree",
+        "go",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "java/demo/JavaInvoice.java",
+      "language": "java",
+      "extractors": [
+        "filetree",
+        "java",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "java/demo/JavaReport.java",
+      "language": "java",
+      "extractors": [
+        "filetree",
+        "java",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "js/consumer.js",
+      "language": "javascript",
+      "extractors": [
+        "ecmascript",
+        "external",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "js/model.js",
+      "language": "javascript",
+      "extractors": [
+        "ecmascript",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "package.json",
+      "language": null,
+      "extractors": [
+        "filetree",
+        "manifest-deps",
+        "metrics"
+      ],
+      "structural": false,
+      "resolution": "heuristic",
+      "not_structural_because": "no grammar covers this file type"
+    },
+    {
+      "path": "py/consumer.py",
+      "language": "python",
+      "extractors": [
+        "filetree",
+        "metrics",
+        "python",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "py/model.py",
+      "language": "python",
+      "extractors": [
+        "filetree",
+        "metrics",
+        "python",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "rust/src/consumer.rs",
+      "language": "rust",
+      "extractors": [
+        "filetree",
+        "metrics",
+        "rust",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "rust/src/model.rs",
+      "language": "rust",
+      "extractors": [
+        "filetree",
+        "metrics",
+        "rust",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "ts/consumer.ts",
+      "language": "typescript",
+      "extractors": [
+        "ecmascript",
+        "external",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "ts/model.ts",
+      "language": "typescript",
+      "extractors": [
+        "ecmascript",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "tsx/consumer.tsx",
+      "language": "typescript",
+      "extractors": [
+        "ecmascript",
+        "external",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    },
+    {
+      "path": "tsx/model.tsx",
+      "language": "typescript",
+      "extractors": [
+        "ecmascript",
+        "filetree",
+        "metrics",
+        "test-pairing"
+      ],
+      "structural": true,
+      "resolution": "heuristic"
+    }
+  ],
+  "modules": [
+    {
+      "path": ".",
+      "files": 19,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "cs",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "go",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "java",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "java/demo",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "js",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "py",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "rust",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "rust/src",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "ts",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    },
+    {
+      "path": "tsx",
+      "files": 2,
+      "resolved": 0,
+      "fully_resolved": false
+    }
+  ],
+  "noise": {
+    "edges_by_rung": {
+      "resolved_by_index": 0,
+      "rules_backed": 2,
+      "name_only": 37,
+      "ambiguous": 0
+    },
+    "card_rows": {
+      "duplicate_rows": {
+        "before_filter": 0,
+        "after_filter": 0
+      },
+      "reversed_rows": {
+        "before_filter": 5,
+        "after_filter": 0
+      }
+    },
+    "deleted_by_rule": {},
+    "over_cap_sites": 0,
+    "plugins_by_contract": {
+      "0.1": 1,
+      "0.2": 6
+    }
+  },
+  "enum_decisions": {
+    "verified": 0,
+    "unverified": 0,
+    "comparisons": 0,
+    "unmatched": 0
+  },
+  "anchors": {
+    "kept": 13,
+    "dropped_by_cap": 0,
+    "withheld": {}
+  },
+  "db_accesses": {
+    "reads": 0,
+    "writes": 0,
+    "calls": 0,
+    "mentions": 0
+  }
+}

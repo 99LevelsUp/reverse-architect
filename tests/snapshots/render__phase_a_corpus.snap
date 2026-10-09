@@ -1,0 +1,129 @@
+---
+source: tests/render.rs
+expression: combined
+---
+===== index.md =====
+# Architecture corpus
+
+This corpus was generated deterministically from the source's file enumeration — no inference, no LLM.
+
+## Views
+
+- [Overview](overview.md)
+- [Module structure](module-structure.md)
+- [Dependencies](dependencies.md)
+- [Entry points](entry-points.md)
+- [Test coverage](test-coverage.md)
+
+===== overview.md =====
+# Overview
+
+**Guiding question:** What is this repository, and how is it shaped at the top level?
+
+## Problem
+
+A newcomer needs a truthful first picture of a repository — what it contains and how it is shaped — before trusting any deeper claim. Guessed overviews mislead; this one is built only from the files the source enumerates.
+
+## Mechanism
+
+The overview counts the enumerated files and modules, lists the top-level entries and ranks the modules that hold the most files. Every number is derived deterministically from the file enumeration this run was given — the git index at HEAD where there is a repository, the tree itself where there is not — with no history, no inference and no LLM.
+
+## In this repository
+
+- 3 tracked files across 2 modules.
+- Top-level entries: README.md, src.
+- Largest modules: `src` (2 files), `src/extract` (1 file).
+- Extraction coverage: rust: 0 of 2 source files carry tree-sitter structural facts; 2 have only metrics + file tree.
+
+
+===== module-structure.md =====
+# Module structure
+
+**Guiding question:** How is the code split into modules, and what does each module contain?
+
+## Problem
+
+To navigate or change a codebase you must know how it is partitioned into modules and what each holds. Without that map, every change risks landing in the wrong place.
+
+## Mechanism
+
+Enumerated directories become modules; each module's contents are the files and sub-modules the enumeration records beneath it. The structure is read from the file tree, never assumed.
+
+## Diagram
+
+```mermaid
+flowchart TD
+    n0["."]
+    n1["README.md"]
+    n2["src"]
+    n3["src/extract"]
+    n4["src/extract/git.rs"]
+    n5["src/lib.rs"]
+    n0 --> n1
+    n0 --> n2
+    n2 --> n3
+    n2 --> n5
+    n3 --> n4
+```
+
+## In this repository
+
+- `src` — 2 entries, 2 files
+  - `src/extract` — 1 file
+
+
+===== dependencies.md =====
+# Dependencies
+
+**Guiding question:** What external code does this repository depend on, and how?
+
+## Problem
+
+Every dependency is a promise the codebase cannot keep on its own — a surface for bugs, licensing, and supply-chain risk. To reason about a repository you must know what it pulls in, and whether each is needed to ship or only to build and test.
+
+## Mechanism
+
+Dependencies are read from the ecosystem manifests the enumeration contains — `Cargo.toml`, `package.json`, `go.mod`, `*.csproj`. Each is tagged with the scope it was declared under (normal vs. dev) and the manifest that declares it. Nothing is inferred from source; a dependency no enumerated manifest names is never listed.
+
+## In this repository
+
+> No facts were found for this view.
+
+
+===== entry-points.md =====
+# Entry points
+
+**Guiding question:** Where does execution start, and how is this code entered?
+
+## Problem
+
+To read a program you need a way in — the point where control first lands. Missing the real entry points sends a reader down the wrong path; claiming there are none where the floor simply cannot see them is worse, because it reads as a fact.
+
+## Mechanism
+
+Entry points come from two honest sources: language-level starts the grammar can see (a Rust/Go/C# `main`, a Python `__main__` guard, a C# top-level program) and manifest declarations (a Cargo `[[bin]]`/`[lib]`, a `package.json` `main`/`bin`, a `.csproj` `OutputType`). Framework-level entries — web routes, message handlers, scheduled jobs — are outside what a deterministic floor can detect, so their absence here is never asserted as their absence in the code (E9).
+
+## In this repository
+
+- No language-level or manifest-declared entry point was detected — a library or a framework-driven project may expose none of these directly.
+- Framework-level entry points — web routes, message handlers, scheduled jobs, dependency-injected services — are invisible to the deterministic floor; this list is what the code and manifests declare, not a proof that no other entry exists.
+
+
+===== test-coverage.md =====
+# Test coverage
+
+**Guiding question:** Which sources have a test by convention, and how far does extraction reach?
+
+## Problem
+
+Tests are evidence a piece of code was meant to hold a contract. Knowing which sources have a paired test — and being honest about the limits of a name-based check — tells a reader where the safety net is, without ever pretending a missing match proves a missing test.
+
+## Mechanism
+
+A source is paired with a test when the two share a language and a stem under the ecosystem's naming convention (`foo_test.rs`, `test_foo.py`, `Foo.test.ts`, `FooTests.cs`). The check reads names and the file tree only, never contents — so it can confirm a convention-matching test but never prove one absent, hence "test by convention not found", never "untested". A per-language extraction-coverage line reports how many sources carry tree-sitter structural facts versus only metrics and the file tree.
+
+## In this repository
+
+- Extraction coverage: rust: 0 of 2 source files carry tree-sitter structural facts; 2 have only metrics + file tree.
+- `src/extract/git.rs`: test by convention not found.
+- `src/lib.rs`: test by convention not found.
