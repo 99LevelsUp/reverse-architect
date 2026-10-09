@@ -435,6 +435,8 @@ def not_claimed(info: ExperimentInfo) -> list[str]:
         "být nerozhodný.",
         "Hlavní mediány s hodnotou stropu u běhů ukončených stropem jsou srovnávací konvence, "
         "ne skutečná spotřeba.",
+        "Otázky (položky druhu otazka) se v této navigační zprávě nehodnotí; jejich odpovědi "
+        "hodnotí answers.py (podpříkazy hodnot-odpovedi a zprava).",
     ]
 
 

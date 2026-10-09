@@ -279,6 +279,14 @@ class ReportQuestionsTest(unittest.TestCase):
         self.assertIn("| Q | bez karet | 3 | 2 | 1 (strop kroků) | 0 | ano |", text)
         self.assertNotIn("## Otázky", render_markdown(build_report(info(), results())))
 
+    def test_the_navigation_report_says_questions_are_judged_by_answers_py(self):
+        statements = build_report(info(), results())["not_claimed"]
+        [sentence] = [s for s in statements if s.startswith("Otázky")]
+        self.assertIn("nehodnotí", sentence)
+        self.assertIn("answers.py", sentence)
+        self.assertIn("zprava", sentence)
+        self.assertIn(sentence, render_markdown(build_report(info(), results())))
+
     def test_the_answer_text_is_in_the_run_json_and_only_there(self):
         run_ = RunResult(order=1, case_id="Q", variant=REF, attempt=1, state="answered",
                          answer_text="Odpověď.")

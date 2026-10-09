@@ -15,8 +15,8 @@ import review
 from card_check import (LABEL_ABSENT, LABEL_CONTAINS, LABEL_PRESENT, LABEL_UNKNOWN, MODE_WHOLE,
                         Measurement, Plan, UnitResult, write_measurement)
 from judge import KIND_FACT, KIND_FORBIDDEN
-from tests.test_card_check import (EV, EVMN, EVN, REV, CheckCase, Rule, a1_types, claim,
-                                   fact, make_catalog, place, question_json)
+from tests.test_card_check import (EV, EVMN, EVN, REV, CheckCase, Rule, ScriptedJudge, a1_types,
+                                   claim, fact, make_catalog, place, question_json, selection)
 
 PLACE = {"soubor": "src/Acme/ViewA.cs", "clen": "ViewA.Run()", "typ": None, "radky": [10, 20]}
 
@@ -375,6 +375,112 @@ class RealCheckTest(CheckCase):
             replace(u, document_text=(u.document_text or "") + "\nNová věta.")
             if u.document_text else u for u in loaded.units))
         self.assertTrue(review.build_review([rewritten], decisions, 3).rows)
+
+
+class SampledTest(ReviewCase):
+    """What was drawn into the owner's sample is remembered (a report needs the list)."""
+
+    def test_a_drawn_unit_without_a_decision_is_missing_until_the_owner_decides(self):
+        units = [make_unit(n) for n in range(3)]
+        path = write_units(self.tmp, units)
+        self.assertEqual(review.review_state(path, self.state).missing, ())
+        plan = review.build_review([review.load_measurement(path)], {}, 7)
+        self.assertEqual(review.record_sampled(self.state, plan), 3)
+        before = review.review_state(path, self.state)
+        self.assertEqual(set(before.missing), {u.id for u in units})
+        review_file = self.write_review(plan)
+        self.fill(review_file, {1: "vyjadruje", 2: "vyjadruje"})
+        review.ingest_review(review_file, self.state)
+        after = review.review_state(path, self.state)
+        self.assertEqual(after.missing, (units[2].id,))
+
+    def test_disputed_rows_are_not_recorded_as_sampled_and_the_list_accumulates(self):
+        disputed = make_unit(1, disputed=True)
+        plan = self.review_of([disputed, make_unit(2)])
+        self.assertEqual(review.record_sampled(self.state, plan), 1)
+        self.assertEqual(len(review.load_sampled(self.state)), 1)
+        other = review.build_review([self.measurement([make_unit(5)], name="m2.json", mid="m2")],
+                                    {}, 7)
+        review.record_sampled(self.state, other)
+        self.assertEqual(len(review.load_sampled(self.state)), 2)
+        raw = json.loads(review.sampled_path(self.state).read_text("utf-8"))
+        self.assertEqual(next(iter(raw)), "format_version")
+
+    def test_nothing_is_written_when_nothing_was_drawn(self):
+        plan = self.review_of([make_unit(1, disputed=True)])
+        self.assertEqual(review.record_sampled(self.state, plan), 0)
+        self.assertFalse(review.sampled_path(self.state).exists())
+
+
+class AnswerMeasurementTest(CheckCase):
+    """`review_state` over a measurement of an agent's answers keeps variant, run and no answer."""
+
+    ANSWER = "Při chybějícím dokumentu se `EditorViewModelNew.RunNew()` tiše vrátí."
+
+    def measurement(self):
+        catalog = make_catalog(question_json(
+            [fact("f1", "Tichý návrat, když chybí dokument",
+                  [place(EVMN, "EditorViewModelNew.RunNew()", radky=20)])],
+            [claim("z1", "Změna řádku gridu se ukládá okamžitě",
+                   [place(EVN, "EditorViewNew.OnCellChanged()", radky="42-60")])]))
+        runs = [card_check.AnswerRun("Q1", "A", 1, self.ANSWER),
+                card_check.AnswerRun("Q1", "A", 2, None, "běh skončil bez závěrečné zprávy"),
+                card_check.AnswerRun("Q1", "B", 3, "Nevím, nic o tom není.")]
+        corpus = {"revision": REV, "source": card_check.ANSWER_PATH, "label": "odpovědi",
+                  "tree_fingerprint": None, "pokus": "p1", "role": "podpora", "odpovedi": "x",
+                  "varianty": []}
+        judge = ScriptedJudge([Rule("Tichý návrat", "tiše vrátí", "VYJADRUJE")])
+        measured = card_check.run_answer_check(catalog, runs, "podpora", corpus, {}, selection(),
+                                               judge, self.cache)
+        path = self.tmp / "answers" / "measurement.json"
+        write_measurement(path, measured)
+        return measured, path
+
+    def test_a_run_without_an_answer_keeps_its_state_variant_and_run(self):
+        measured, path = self.measurement()
+        reviewed = review.review_state(path, self.state)
+        facts = {r.run: r for r in reviewed.results.facts}
+        self.assertEqual(facts[2].status, card_check.FACT_NO_ANSWER)
+        self.assertEqual(facts[2].reasons, ("běh skončil bez závěrečné zprávy",))
+        self.assertEqual((facts[1].status, facts[1].variant), (card_check.FACT_PRESENT, "A"))
+        self.assertEqual((facts[2].variant, facts[3].variant, facts[3].run), ("A", "B", 3))
+        claims = {r.run: r for r in reviewed.results.claims}
+        self.assertEqual(claims[2].status, card_check.CLAIM_NO_ANSWER)
+        self.assertEqual((claims[2].variant, claims[2].run), ("A", 2))
+        self.assertEqual(reviewed.missing, ())
+
+    def test_the_results_derived_again_equal_the_measurements_own(self):
+        measured, path = self.measurement()
+        reviewed = review.review_state(path, self.state)
+        own = measured.results()
+        self.assertEqual([r.to_json() for r in reviewed.results.facts],
+                         [r.to_json() for r in own.facts])
+        self.assertEqual([r.to_json() for r in reviewed.results.claims],
+                         [r.to_json() for r in own.claims])
+
+    def test_the_units_keep_variant_and_run(self):
+        measured, path = self.measurement()
+        loaded = review.load_measurement(path)
+        self.assertEqual([(u.variant, u.run) for u in loaded.units],
+                         [(u.variant, u.run) for u in measured.units])
+        self.assertTrue(all(u.run is not None for u in loaded.units))
+        self.assertIn("pokus", loaded.header["corpus"])
+
+
+class CardUnitFieldsTest(CheckCase):
+    def test_the_size_and_the_owner_card_survive_the_file(self):
+        catalog = make_catalog(question_json(
+            [fact("f1", "Tichý návrat, když chybí dokument",
+                  [place(EVMN, "EditorViewModelNew.RunNew()", radky=20)])]))
+        measured, _ = self.check(catalog, [])
+        path = self.tmp / "m" / "measurement.json"
+        write_measurement(path, measured)
+        loaded = review.load_measurement(path)
+        card = next(u for u in loaded.units if u.slot == "karta")
+        size = (self.tmp / "corpus" / card.document_path).stat().st_size
+        self.assertEqual((card.document_bytes, card.owner_card), (size, True))
+        self.assertEqual(loaded.header["judge"]["id"], "j1")
+        self.assertEqual(loaded.header["items"][0]["id"], "Q1")
 
 
 class LoadMeasurementTest(ReviewCase):

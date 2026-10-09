@@ -137,14 +137,14 @@ class ArgumentsTest(AnswersCase):
             seen.append((args.navic, str(args.source_repo)))
             return 0
 
-        extra = answers.Subcommand("zprava", "zkušební podpříkaz", configure, command)
+        extra = answers.Subcommand("zkusebni", "zkušební podpříkaz", configure, command)
         with mock.patch.object(answers, "SUBCOMMANDS", (*answers.SUBCOMMANDS, extra)):
-            self.assertEqual(self.run_main(["zprava", "--source-repo", "x", "--navic", "1"])[0],
+            self.assertEqual(self.run_main(["zkusebni", "--source-repo", "x", "--navic", "1"])[0],
                              0)
-            self.assertEqual(self.run_main(["zprava", "--navic", "1"])[0], 2)  # common argument
+            self.assertEqual(self.run_main(["zkusebni", "--navic", "1"])[0], 2)  # common argument
         self.assertEqual(seen, [("1", "x")])
         self.assertEqual([c.name for c in answers.SUBCOMMANDS],
-                         ["kontrola-karet", "kontrola", "hodnot-odpovedi"])
+                         ["kontrola-karet", "kontrola", "hodnot-odpovedi", "zprava"])
 
     def test_the_parser_names_the_required_arguments(self):
         parser = answers.build_parser()
@@ -293,6 +293,26 @@ class ReviewCommandTest(AnswersCase):
             "--mereni", str(measurement), "--vystup", str(again)))
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(again.read_text(encoding="utf-8"))["radky"], [])
+
+    def test_the_drawn_sample_is_remembered_and_waits_for_the_owner(self):
+        measurement = self.finished_measurement()
+        self.assertEqual(review.review_state(measurement, self.state).missing, ())
+        target = self.tmp / "kontrola.json"
+        code, _, err = self.run_main(self.review_args(
+            "--mereni", str(measurement), "--vystup", str(target), "--seminko", "5"))
+        self.assertEqual(code, 0, err)
+        drawn = review.load_sampled(self.state)
+        self.assertTrue(drawn)
+        self.assertEqual({r["klic"] for r in json.loads(target.read_text("utf-8"))["radky"]
+                          if not r["sporne"]}, set(drawn))
+        waiting = review.review_state(measurement, self.state).missing
+        self.assertTrue(waiting)
+        data = json.loads(target.read_text(encoding="utf-8"))
+        for row in data["radky"]:
+            row["rozhodnuti"] = "vyjadruje" if row["druh"] == "fakt" else "neobsahuje"
+        target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.run_main(self.review_args("--nacti", str(target)))[0], 0)
+        self.assertEqual(review.review_state(measurement, self.state).missing, ())
 
     def test_an_unfinished_measurement_is_code_2(self):
         measurement = self.finished_measurement()

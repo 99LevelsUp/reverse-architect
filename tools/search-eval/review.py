@@ -39,14 +39,15 @@ import os
 import random
 import tempfile
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from card_check import (LABEL_ABSENT, LABEL_CONTAINS, LABEL_NOT_CONTAINS, LABEL_PRESENT,
                         LABEL_UNKNOWN, MEASUREMENT_FORMAT_VERSION, MODE_BOUND, MODE_WHOLE,
                         STATE_NO_BOUND_BLOCK, STATUS_DONE, ClaimPlan, FactPlan, Plan, Results,
-                        UnitResult, derive_results, FACT_PLACE_UNKNOWN, CLAIM_PLACE_UNKNOWN)
+                        UnitResult, derive_results, FACT_PLACE_UNKNOWN, CLAIM_PLACE_UNKNOWN,
+                        FACT_NO_ANSWER, CLAIM_NO_ANSWER)
 from judge import KIND_FACT, KIND_FORBIDDEN
 
 REVIEW_FORMAT_VERSION = 1
@@ -54,6 +55,8 @@ DECISIONS_FORMAT_VERSION = 1
 DECISIONS_FILE = "rozhodnuti.json"
 PROPOSALS_FORMAT_VERSION = 1
 PROPOSALS_SUFFIX = ".navrhy.json"
+SAMPLED_FORMAT_VERSION = 1
+SAMPLED_FILE = "vylosovano.json"
 
 DECIDED_BY_OWNER = "vlastník"
 
@@ -139,6 +142,9 @@ class LoadedMeasurement:
     corpus: dict[str, Any]
     units: tuple[UnitResult, ...]
     results: dict[str, Any] | None
+    # Every top-level key of the file except `units` and `results` (the judge, the prompt
+    # version, the items and an answer check's `pokus`), for the report that compares inputs.
+    header: dict[str, Any] = field(default_factory=dict)
 
 
 def unit_from_json(data: dict[str, Any]) -> UnitResult:
@@ -156,7 +162,9 @@ def unit_from_json(data: dict[str, Any]) -> UnitResult:
             decided_by=data["decided_by"], question_text=data.get("question_text"),
             claim_text=data.get("claim_text"), document_path=data.get("document_path"),
             document_text=data.get("document_text"),
-            places=tuple(data.get("places") or ()))
+            places=tuple(data.get("places") or ()), variant=data.get("variant"),
+            run=data.get("run"), document_bytes=data.get("document_bytes"),
+            owner_card=data.get("owner_card"))
     except (KeyError, TypeError) as exc:
         raise ReviewError(f"Jednotka v měření je neúplná (chybí {exc}).") from None
 
@@ -180,8 +188,9 @@ def load_measurement(path: str | os.PathLike[str]) -> LoadedMeasurement:
         raise ReviewError(f"Měření {file} je poškozené (chybí id nebo jednotky).")
     units = tuple(unit_from_json(u) for u in data["units"])
     corpus = data.get("corpus") if isinstance(data.get("corpus"), dict) else {}
+    header = {k: v for k, v in data.items() if k not in ("units", "results")}
     return LoadedMeasurement(id=data["id"], path=file, status=data["status"], corpus=corpus,
-                             units=units, results=data.get("results"))
+                             units=units, results=data.get("results"), header=header)
 
 
 # --- stored decisions --------------------------------------------------------------------
@@ -548,8 +557,9 @@ class ReviewedMeasurement:
 
     `units` carry the final labels (`decided_by` names the owner where a
     decision overwrote the model's label), `results` are derived from them,
-    `missing` are the ids of the units that are still disputed and have no
-    decision: while there are any, the report must not be made.
+    `missing` are the ids of the units that still wait for the owner: disputed
+    without a decision, or drawn into a sample (`record_sampled`) without one;
+    while there are any, the report must not be made.
     """
 
     id: str
@@ -560,18 +570,74 @@ class ReviewedMeasurement:
 
 
 def _plan_from_results(results: dict[str, Any], units: dict[str, UnitResult]) -> Plan:
+    """The plan the results were derived from, as far as `derive_results` needs it.
+
+    An agent's answers keep their `variant` and `run`, and a run without an answer keeps
+    `no_answer` (its status `chybí, bez odpovědi` carries the reason), so deriving the
+    results again changes nothing but the labels a decision overwrote.
+    """
     facts = tuple(FactPlan(
         question_id=r["question_id"], fact_id=r["fact_id"], role=r["role"],
         unverified=tuple(r["reasons"]) if r["status"] == FACT_PLACE_UNKNOWN else (),
-        documents=tuple(r["documents"]), unit_ids=tuple(r["unit_ids"]))
+        documents=tuple(r["documents"]), unit_ids=tuple(r["unit_ids"]),
+        variant=r.get("variant"), run=r.get("run"),
+        no_answer=_no_answer_reason(r, FACT_NO_ANSWER))
         for r in results["facts"])
     claims = tuple(ClaimPlan(
         question_id=r["question_id"], claim_id=r["claim_id"],
         fact_ids=tuple(r.get("fact_ids") or ()),
         unverified=tuple(r["reasons"]) if r["status"] == CLAIM_PLACE_UNKNOWN else (),
         documents=tuple(dict.fromkeys(units[u].document for u in r["unit_ids"])),
-        unit_ids=tuple(r["unit_ids"])) for r in results["claims"])
+        unit_ids=tuple(r["unit_ids"]), variant=r.get("variant"), run=r.get("run"),
+        no_answer=_no_answer_reason(r, CLAIM_NO_ANSWER)) for r in results["claims"])
     return Plan(questions=(), facts=facts, claims=claims, units=())
+
+
+def _no_answer_reason(result: dict[str, Any], status: str) -> str | None:
+    """Why a run has no answer: the reason a result of that status carries, or None."""
+    if result["status"] != status:
+        return None
+    reasons = result.get("reasons") or ()
+    return reasons[0] if reasons else "bez odpovědi"
+
+
+# --- the sampled units -------------------------------------------------------------------
+
+def sampled_path(state_dir: str | os.PathLike[str]) -> Path:
+    return Path(state_dir) / SAMPLED_FILE
+
+
+def load_sampled(state_dir: str | os.PathLike[str]) -> dict[str, dict[str, Any]]:
+    """The keys of the undisputed units the owner was asked to check (empty when none yet)."""
+    path = sampled_path(state_dir)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ReviewError(f"Seznam vylosovaných jednotek {path} nejde načíst: {exc}") from None
+    if (not isinstance(data, dict) or data.get("format_version") != SAMPLED_FORMAT_VERSION
+            or not isinstance(data.get("vylosovano"), dict)):
+        raise ReviewError(f"Seznam vylosovaných jednotek {path} nemá podporovaný formát.")
+    return data["vylosovano"]
+
+
+def record_sampled(state_dir: str | os.PathLike[str], plan: Review) -> int:
+    """Remember the sampled rows of a review file, so a report can tell what was drawn.
+
+    The sample is drawn at random from the units still undecided, so it cannot be drawn
+    again afterwards: the keys of the drawn rows are stored (added to those of earlier
+    review files; a key is never removed). Returns how many rows were recorded.
+    """
+    stored = load_sampled(state_dir)
+    drawn = [row for row in plan.rows if not row.disputed]
+    for row in drawn:
+        stored[row.key] = {"mereni": row.measurement_id, "jednotky": list(row.unit_ids)}
+    if drawn:
+        _write_json_atomic(sampled_path(state_dir), {
+            "format_version": SAMPLED_FORMAT_VERSION, "seminko": plan.seed,
+            "vylosovano": stored})
+    return len(drawn)
 
 
 def review_state(measurement: str | os.PathLike[str] | LoadedMeasurement,
@@ -582,11 +648,16 @@ def review_state(measurement: str | os.PathLike[str] | LoadedMeasurement,
     if loaded.results is None:
         raise ReviewError(f"Měření {loaded.path} nemá výsledky.")
     decisions = load_decisions(state_dir)
+    sampled = load_sampled(state_dir)
     final: list[UnitResult] = []
     decided: list[str] = []
+    undecided_sample: set[str] = set()
     for unit in loaded.units:
         if _reviewable(unit):
-            record = decisions.get(decision_key(unit))
+            key = decision_key(unit)
+            record = decisions.get(key)
+            if record is None and key in sampled:
+                undecided_sample.add(unit.id)
             if record is not None:
                 if record.get("druh") != unit.kind or record.get("stitek") not in _allowed(
                         unit.kind).values():
@@ -596,7 +667,7 @@ def review_state(measurement: str | os.PathLike[str] | LoadedMeasurement,
                                           or DECIDED_BY_OWNER)
                 decided.append(unit.id)
         final.append(unit)
-    missing = tuple(u.id for u in final if u.open_dispute)
+    missing = tuple(u.id for u in final if u.open_dispute or u.id in undecided_sample)
     results = derive_results(_plan_from_results(loaded.results, {u.id: u for u in final}), final)
     return ReviewedMeasurement(id=loaded.id, units=tuple(final), results=results,
                                missing=missing, decided=tuple(decided))

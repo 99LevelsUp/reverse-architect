@@ -62,7 +62,10 @@ its facts are `chybí, bez odpovědi` (counted as missing, kept apart) and its
 claims `bez odpovědi`. Units, fact plans and results carry the `variant` and the
 `run` (the order in the experiment) of the answer, so a later report counts the
 presence `k/3` per variant; they are left out of the JSON when unset, so the
-card check's output is unchanged.
+card check's output is unchanged. A unit of a corpus document also records the size in bytes of
+the document's file (`document_bytes`) and whether it is the card that owns one of the unit's
+places (`owner_card`), and a measurement over a corpus with a receipt records the receipt's
+RA build (`ucenka`): the report of the answers (`answers_report.py`) states them.
 """
 from __future__ import annotations
 
@@ -79,7 +82,8 @@ from anchors import (LEVEL_ANSWER, PRESELECT_THRESHOLD_BYTES, BoundBlock, Parsed
                      bound_blocks, citation_binds, needs_preselection, parse_answer,
                      parse_document)
 from catalog import Catalog, Fact, ForbiddenClaim, Place, Question
-from corpus import CorpusDoc, CorpusIndex, check_commit
+from corpus import IDENTITY_FROM_RECEIPT, CorpusDoc, CorpusIndex, check_commit
+from prepare import receipt_path
 from judge import (KIND_FACT, KIND_FORBIDDEN, PROMPT_VERSION, Assessment, JudgeCache,
                    JudgeCacheError, JudgeRunner, JudgeSelection, JudgeUnit, assess)
 
@@ -179,6 +183,10 @@ class UnitResult:
     # An agent's answer (not a corpus document): the variant and the run it came from.
     variant: str | None = None
     run: int | None = None
+    # The report's sizes (U8), only for a corpus document: the size in bytes of its file, and
+    # whether it is the card that owns one of the unit's places (`corpus.PlaceDocuments.owner_card`).
+    document_bytes: int | None = None
+    owner_card: bool | None = None
 
     @property
     def open_dispute(self) -> bool:
@@ -222,6 +230,10 @@ class UnitResult:
             "places": list(self.places),
         }
         out.update(_origin_json(self.variant, self.run))
+        if self.document_bytes is not None:
+            out["document_bytes"] = self.document_bytes
+        if self.owner_card is not None:
+            out["owner_card"] = self.owner_card
         return out
 
 
@@ -462,6 +474,17 @@ class _Planner:
         """Whether the document goes to the judge as bound blocks (`anchors.needs_preselection`)."""
         return needs_preselection(parsed.level, parsed.size_bytes)
 
+    def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
+        """The size of the document's file in bytes (what the report counts), None if unknown."""
+        try:
+            return (self.index.corpus / doc.path).stat().st_size
+        except OSError:
+            return parsed.size_bytes
+
+    def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
+        """Whether `doc` is the card that owns one of the places."""
+        return any(self.locate(p).owner_card == doc.id for p in places)
+
     def unit(self, question: Question, kind: str, claim_id: str, claim_text: str,
              role: str | None, doc: CorpusDoc, places: Sequence[Place],
              whole_flow: bool) -> PlannedUnit:
@@ -496,7 +519,8 @@ class _Planner:
             state=STATE_PENDING if blocks else STATE_NO_BOUND_BLOCK, note=note,
             question_text=question.dotaz, claim_text=claim_text, document_path=doc.path,
             document_text=None if preselect else self._texts.get(doc.id),
-            places=tuple(_place_json(p) for p in places))
+            places=tuple(_place_json(p) for p in places),
+            document_bytes=self.file_bytes(doc, parsed), owner_card=self.owns(doc, places))
         return PlannedUnit(record=record, claim_text=claim_text, question_text=question.dotaz,
                            blocks=blocks, places=tuple(places), parsed=parsed)
 
@@ -608,6 +632,12 @@ class _AnswerPlanner(_Planner):
     def preselects(self, parsed: ParsedDocument) -> bool:
         # An answer is small and goes whole, like a map; an oversized one as bound blocks.
         return parsed.size_bytes > PRESELECT_THRESHOLD_BYTES
+
+    def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
+        return None  # an answer is not a corpus document
+
+    def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
+        return None
 
 
 def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) -> Plan:
@@ -785,6 +815,24 @@ def corpus_identity_json(index: CorpusIndex) -> dict[str, Any]:
             "tree_fingerprint": identity.tree_fingerprint}
 
 
+def _receipt_extra(index: CorpusIndex) -> dict[str, Any]:
+    """The build of the corpus from the runner's receipt (`ucenka`), when one lies beside it.
+
+    The report names which RA build made the corpus; a corpus without a receipt has no
+    such key and the report says the build is unknown. It is not part of the measurement's id.
+    """
+    if index.identity.source != IDENTITY_FROM_RECEIPT:
+        return {}
+    try:
+        data = json.loads(receipt_path(index.corpus).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    keep = ("base_revision", "tree_fingerprint", "ra_version", "options", "corpus_fingerprint")
+    return {"ucenka": {k: data.get(k) for k in keep}}
+
+
 def _items_json(plan: Plan) -> tuple[dict[str, Any], ...]:
     return tuple({"id": q.id, "commit": q.commit, "otisk_potvrzeni": q.otisk_potvrzeni,
                   "kontrolni": q.kontrolni} for q in plan.questions)
@@ -853,7 +901,7 @@ def run_card_check(catalog: Catalog, index: CorpusIndex, selection: JudgeSelecti
     """
     plan = build_plan(catalog, index)
     return _run_plan(plan, corpus_identity_json(index), selection, runner, cache, save=save,
-                     progress=progress)
+                     progress=progress, extra=_receipt_extra(index))
 
 
 def run_answer_check(catalog: Catalog, runs: Sequence[AnswerRun], role: str,

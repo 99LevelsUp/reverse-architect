@@ -4,7 +4,8 @@
 
 The tool has subcommands. `kontrola-karet` is the card check (`card_check.py`),
 `hodnot-odpovedi` judges the agent's free answers to questions (KTD10), `kontrola`
-is the owner's review; `zprava` and `kalibrace` are added by later units. Adding a subcommand takes three steps:
+is the owner's review, `zprava` the report of the answers (`answers_report.py`); `kalibrace`
+is added by a later unit. Adding a subcommand takes three steps:
 
 1. write `configure_<name>(parser)` (its own arguments) and
    `command_<name>(args, services) -> int` (the work; it raises the errors
@@ -37,6 +38,8 @@ from typing import Any, Callable, Sequence
 # Allow `python tools/search-eval/answers.py` from anywhere: the modules sit beside it.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import answers_report  # noqa: E402
+import calibration  # noqa: E402
 import card_check  # noqa: E402
 import report  # noqa: E402
 import review  # noqa: E402
@@ -424,6 +427,7 @@ def command_review(args: argparse.Namespace, services: Services) -> int:
     loaded = [review.load_measurement(path) for path in args.mereni]
     plan = review.build_review(loaded, review.load_decisions(state), args.seminko)
     json_path, md_path = review.write_review(plan, args.vystup)
+    review.record_sampled(state, plan)
     print(f"Kontrola vlastníka: {len(plan.rows)} řádků, z toho {plan.disputed_count} sporných; "
           f"semínko {plan.seed}.")
     for label, (total, drawn) in sorted(plan.sample_sizes.items()):
@@ -431,6 +435,63 @@ def command_review(args: argparse.Namespace, services: Services) -> int:
     print(f"K vyplnění: {json_path}")
     print(f"Ke čtení: {md_path}")
     return EXIT_DONE
+
+
+# --- zprava ----------------------------------------------------------------------------
+
+def configure_answers_report(parser: argparse.ArgumentParser) -> None:
+    req = parser.add_argument_group("povinné")
+    req.add_argument("--mereni", required=True, action="append", type=Path,
+                     metavar="MEASUREMENT.JSON",
+                     help="hotové měření (kontrola karet nebo hodnocení odpovědí); lze opakovat, "
+                          "každé měření je jeden korpus (nebo jeden pokus)")
+    req.add_argument("--vystup", required=True, type=Path, metavar="ADRESÁŘ",
+                     help="adresář, do kterého se zapíše answers-report.json a answers-report.md; "
+                          "musí ležet mimo repozitáře")
+    req.add_argument("--stav", required=True, type=Path,
+                     help="stavový adresář s rozhodnutími vlastníka (rozhodnuti.json); "
+                          "musí ležet mimo repozitáře")
+    req.add_argument("--kalibrace", required=True, type=Path, metavar="ADRESÁŘ",
+                     help="adresář s výsledky kalibrace hodnotitele (JSON); zpráva uvede kalibraci "
+                          "pro dvojici hodnotitel + verze promptu, nebo že chybí")
+    parser.add_argument("--sada-kalibrace", type=Path, metavar="SADA.JSON",
+                        help="sada vět kalibrace; s ní se hledá jen kalibrace nad touto sadou "
+                             "(bez ní kterákoli sada téže dvojice)")
+
+
+def command_answers_report(args: argparse.Namespace, services: Services) -> int:
+    # The output path is checked first: nothing is read or written for a path inside a repository.
+    output = _checked_output_dir(args.source_repo, args.vystup)
+    state = _checked_state_dir(args.source_repo, args.stav)
+    fingerprint = None
+    if args.sada_kalibrace is not None:
+        try:
+            fingerprint = calibration.load_set(args.sada_kalibrace).fingerprint
+        except calibration.CalibrationSetError as exc:
+            raise InputError(str(exc)) from None
+    data = answers_report.build_report(args.mereni, state, args.kalibrace,
+                                       set_fingerprint=fingerprint)
+    json_path, md_path = answers_report.write_report(output, data)
+    print(f"Zpráva odpovědí: {len(data['vstupy'])} měření, {len(data['korpusy'])} korpusů.")
+    if data["zalozni_hodnotitel"]:
+        print("Pozor: posoudil záložní hodnotitel stejné rodiny jako agent.")
+    if not data["kalibrace"]["nalezena"]:
+        print("Kalibrace pro tohoto hodnotitele a verzi promptu chybí (zpráva to uvádí).")
+    print(f"JSON: {json_path}")
+    print(f"Markdown: {md_path}")
+    return EXIT_DONE
+
+
+def _checked_output_dir(source_repo: Path, output: Path) -> Path:
+    """The output directory, canonical, refused under a protected root and when it is a file."""
+    try:
+        roots = protected_roots(repo_toplevel(source_repo))
+        target = Path(ensure_outside(output, roots, "Výstupní adresář"))
+    except PrepareError as exc:
+        raise InputError(str(exc)) from None
+    if target.exists() and not target.is_dir():
+        raise InputError(f"Výstupní adresář {output} existuje a není adresář.")
+    return target
 
 
 SUBCOMMANDS: tuple[Subcommand, ...] = (
@@ -444,6 +505,10 @@ SUBCOMMANDS: tuple[Subcommand, ...] = (
                "ohodnotí volné odpovědi agenta na otázky z pokusu run.py proti faktům "
                "a zakázaným tvrzením katalogu",
                configure_answers, command_answers),
+    Subcommand("zprava",
+               "zpráva odpovědí: fakta a zakázaná tvrzení po otázkách, cestách a korpusech "
+               "z hotových měření s rozhodnutími vlastníka",
+               configure_answers_report, command_answers_report),
 )
 
 
@@ -467,7 +532,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_INPUT_ERRORS = (InputError, review.ReviewError, CatalogError, CorpusError, JudgeFileError, PrepareError)
+_INPUT_ERRORS = (InputError, review.ReviewError, answers_report.ReportError, CatalogError,
+                 CorpusError, JudgeFileError, PrepareError)
 _INFRASTRUCTURE_ERRORS = (JudgeUnavailableError, AgentRunError, JudgeCacheError)
 
 
