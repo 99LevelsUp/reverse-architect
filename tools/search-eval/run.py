@@ -2,6 +2,10 @@
 
     python tools/search-eval/run.py --help
 
+Catalog items of kind `otazka` are read and checked in preparation but are
+not part of this experiment yet: the schedule, prompts and report take only
+the items of kind `chyba`.
+
 Flow (High-Level Technical Design of the plan):
 
 1. **Inputs.** The catalog, the two variants and every path are validated
@@ -69,7 +73,7 @@ from agents.base import (CONFIG_DIR_NAME, AgentAdapter, AgentRunError, Cap,  # n
 from agents.claude_code import (CREDENTIALS_FILE, ClaudeCodeAdapter,  # noqa: E402
                                 ClaudeCodeSettings)
 from audit import audit_run  # noqa: E402
-from catalog import Case, Catalog, CatalogError, load_catalog  # noqa: E402
+from catalog import Case, Catalog, CatalogError, Question, load_catalog  # noqa: E402
 from preflight import (InfrastructureError, PreflightResult, PreflightTarget,  # noqa: E402
                        require_ok, results_json, run_preflight)
 from prepare import (PrepareError, canonical_path, ensure_outside,  # noqa: E402
@@ -287,9 +291,16 @@ class ScheduleEntry:
     repetition: int
 
 
-def build_schedule(case_ids: Sequence[str], variant_names: Sequence[str],
+def build_schedule(cases: Sequence[str | Case | Question], variant_names: Sequence[str],
                    seed: int) -> list[ScheduleEntry]:
-    """case × variant × 3 in catalog and variant order, shuffled by `random.Random(seed)`."""
+    """case × variant × 3 in catalog and variant order, shuffled by `random.Random(seed)`.
+
+    Items are case ids or catalog items. Only items of kind `chyba` are
+    scheduled: questions are not part of the navigation schedule (a later
+    unit adds them to the experiment), so they are left out here.
+    """
+    case_ids = [c if isinstance(c, str) else c.id for c in cases
+                if isinstance(c, str) or c.druh == Case.druh]
     entries = [ScheduleEntry(c, v, r) for c in case_ids for v in variant_names
                for r in range(1, RUNS_PER_VARIANT + 1)]
     random.Random(seed).shuffle(entries)
@@ -378,9 +389,13 @@ def run_experiment(config: ExperimentConfig, *, prepare_only: bool = False,
 
 def _load_catalog(config: ExperimentConfig) -> Catalog:
     try:
-        return load_catalog(config.catalog_path)
+        catalog = load_catalog(config.catalog_path)
     except CatalogError as exc:
         raise ConfigError(str(exc)) from None
+    if not catalog.cases:
+        raise ConfigError("Katalog nemá žádnou položku druhu „chyba“: navigační pokus nemá co "
+                          "měřit (otázky do pokusu přidá pozdější jednotka).")
+    return catalog
 
 
 class _Experiment:
@@ -469,7 +484,7 @@ class _Experiment:
         self._write_prompts()
         cases = {c.id: c for c in self.catalog.cases}
         names = [v.name for v in self.config.variants]
-        planned = build_schedule([c.id for c in self.catalog.cases], names, self.config.seed)
+        planned = build_schedule(self.catalog.items, names, self.config.seed)
         queue: deque[tuple[ScheduleEntry, int | None]] = deque((e, None) for e in planned)
         attempts: Counter[tuple[str, str]] = Counter()
         replacements: Counter[tuple[str, str]] = Counter()
@@ -763,14 +778,15 @@ def dry_run(config: ExperimentConfig) -> str:
     validate_variants(config.variants)
     catalog = _load_catalog(config)
     resolve_paths(config)
-    cells = len(catalog.cases) * len(config.variants)
+    cases = catalog.cases
+    cells = len(cases) * len(config.variants)
     planned = cells * RUNS_PER_VARIANT
     cap = config.cap
     lines = [
         "Suchý běh: agent se nespustí a nic se nezapíše.",
-        f"Případy: {len(catalog.cases)}; varianty: "
+        f"Případy: {len(cases)}; varianty: "
         + ", ".join(f"„{v.name}“" for v in config.variants) + ".",
-        f"Běhů v rozvrhu: {planned} ({len(catalog.cases)} případy × {len(config.variants)} "
+        f"Běhů v rozvrhu: {planned} ({len(cases)} případy × {len(config.variants)} "
         f"varianty × {RUNS_PER_VARIANT}); se všemi náhradami zkažených běhů nejvýš "
         f"{planned + cells * MAX_REPLACEMENTS}.",
         f"Kontrola nástroje: {len(config.variants)} běhy před pokusem.",
@@ -778,6 +794,9 @@ def dry_run(config: ExperimentConfig) -> str:
         f"tokeny {cap.tokens}.",
         f"Model: {config.model}; semínko: {config.seed}; souběh 1.",
     ]
+    if catalog.questions:
+        lines.insert(2, f"Otázky v katalogu: {len(catalog.questions)}; do navigačního pokusu "
+                        "nejdou.")
     return "\n".join(lines)
 
 

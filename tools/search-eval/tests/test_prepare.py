@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import prepare
-from catalog import parse_catalog
+from catalog import confirmation_fingerprint, parse_catalog
 from prepare import PrepareError
 
 FAKE_RA = [sys.executable, str(Path(__file__).resolve().parent / "fake_ra.py")]
@@ -281,6 +281,79 @@ class CaseCheckTest(GitRepoFixture):
             make_case("later", "Src/Placeholder/LoadAction.cs", "LoadAction.RenamedLater", self.fix))
         problems = prepare.find_case_problems(self.repo, cat, tree)
         self.assertEqual(len(problems), 2)
+
+    # -- questions: no fix commit, only the places are checked ------------------
+
+    def question(self, qid: str, *places: dict) -> dict:
+        facts = [{"id": f"f{i}", "text": "Ukázkový fakt.", "role": "misto", "mista": [p]}
+                 for i, p in enumerate(places, 1)]
+        question = {
+            "druh": "otazka", "id": qid, "dotaz": "Ukázková otázka?",
+            "ramcova_odpoved": "Ukázková odpověď.", "commit": self.base,
+            "fakta_potvrzena": True, "pseudonymizace_potvrzena": True,
+            "kontrolni": False, "fakta": facts, "zakazana_tvrzeni": []}
+        question["otisk_potvrzeni"] = confirmation_fingerprint(facts, [])
+        return question
+
+    def question_catalog(self, *questions: dict):
+        return parse_catalog({"format_version": 2, "base_revision": self.base,
+                              "cases": list(questions)})
+
+    def test_question_without_a_fix_commit_passes_when_its_places_exist(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-ok",
+            {"soubor": "Src/Placeholder/LoadAction.cs", "clen": "LoadAction.Reload",
+             "radky": 4},
+            {"soubor": "Src/Placeholder/Scheduler.cs", "typ": "Scheduler", "radky": "1-1"}))
+        self.assertEqual(prepare.find_case_problems(self.repo, cat, tree), [])
+        prepare.check_cases(self.repo, cat, tree, self.base)
+
+    def test_question_place_in_a_file_missing_from_the_export_is_refused(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-gone",
+            {"soubor": "Src/Placeholder/NewHelper.cs", "clen": "NewHelper.Added", "radky": 1}))
+        with self.assertRaises(PrepareError) as ctx:
+            prepare.check_cases(self.repo, cat, tree)
+        message = str(ctx.exception)
+        self.assertIn("q-gone", message)
+        self.assertIn("NewHelper.cs", message)
+
+    def test_question_member_not_in_its_file_is_refused(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-member",
+            {"soubor": "Src/Placeholder/LoadAction.cs", "clen": "LoadAction.RenamedLater",
+             "radky": 1}))
+        problems = prepare.find_case_problems(self.repo, cat, tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("RenamedLater", problems[0])
+
+    def test_forbidden_claim_place_in_a_missing_file_is_refused(self):
+        tree = self.export().tree_dir
+        question = self.question(
+            "q-claim", {"soubor": "Src/Placeholder/LoadAction.cs", "typ": "LoadAction",
+                        "radky": 1})
+        question["zakazana_tvrzeni"] = [{"id": "z1", "text": "Nepravda.", "mista": [
+            {"soubor": "Src/Placeholder/Missing.cs", "typ": "Missing", "radky": 1}]}]
+        question["otisk_potvrzeni"] = confirmation_fingerprint(question["fakta"],
+                                                               question["zakazana_tvrzeni"])
+        problems = prepare.find_case_problems(self.repo, self.question_catalog(question), tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("z1", problems[0])
+        self.assertIn("Missing.cs", problems[0])
+
+    def test_mixed_catalog_checks_bugs_by_fix_commit_and_questions_by_places(self):
+        tree = self.export().tree_dir
+        cat = parse_catalog({"format_version": 2, "base_revision": self.base, "cases": [
+            dict(make_case("bug", "Src/Placeholder/LoadAction.cs",
+                           "LoadAction.SetScheduledTasksInvalid", self.pre), druh="chyba"),
+            self.question("q", {"soubor": "Src/Placeholder/Scheduler.cs", "typ": "Scheduler",
+                                "radky": 1})]})
+        problems = prepare.find_case_problems(self.repo, cat, tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("bug", problems[0])
 
 
 class WorktreeProtectionTest(GitRepoFixture):

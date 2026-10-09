@@ -133,6 +133,17 @@ class ReportNumbersTest(unittest.TestCase):
         self.assertEqual(self.data["summary"]["unflagged_cases"],
                          {"win": 1, "loss": 0, "tie": 0, "incomplete": 0})
 
+    def test_items_of_another_kind_stay_out_of_the_navigation_report(self):
+        base = info()
+        mixed = ExperimentInfo(**{**base.__dict__, "cases": (*base.cases,
+                                                             CaseInfo("Q", False, False, "otazka"))})
+        data = build_report(mixed, results())
+        self.assertEqual([c["case_id"] for c in data["cases"]], ["A", "B", "C"])
+        self.assertEqual([c["id"] for c in data["experiment"]["cases"]], ["A", "B", "C"])
+        self.assertEqual(data["summary"], build_report(base, results())["summary"])
+        self.assertNotIn("Případ Q", render_markdown(data))
+        self.assertEqual(data["not_claimed"], build_report(base, results())["not_claimed"])
+
     def test_loss_when_compared_has_fewer_successes(self):
         swapped = [RunResult(**{**r.__dict__, "variant": CMP if r.variant == REF else REF})
                    for r in results() if r.case_id == "A"]

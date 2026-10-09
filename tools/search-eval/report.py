@@ -41,7 +41,7 @@ import json
 import os
 import statistics
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -145,11 +145,17 @@ class VariantInfo:
 
 @dataclass(frozen=True)
 class CaseInfo:
-    """A case's identity and the two flags that set it apart (R1, R13)."""
+    """A case's identity and the two flags that set it apart (R1, R13).
+
+    `druh` is the catalog item kind. This navigation report describes only
+    items of kind `chyba` (the only kind that existed before catalog format 2,
+    hence the default); `build_report` leaves out any other kind.
+    """
 
     id: str
     used_for_card_tuning: bool
     prompt_names_location: bool
+    druh: str = "chyba"
 
     @property
     def flagged(self) -> bool:
@@ -239,6 +245,7 @@ def _difference(compared: Any, reference: Any) -> Any:
 def build_report(info: ExperimentInfo, results: Sequence[RunResult]) -> dict[str, Any]:
     """The whole report as a JSON-ready dict (see the module docstring)."""
     reference, compared = (v.name for v in info.variants)
+    info = replace(info, cases=tuple(c for c in info.cases if c.druh == "chyba"))
     cases = [_case_entry(case, info, results) for case in info.cases]
     by_id = {c["case_id"]: c for c in cases}
     unflagged = [c for c in info.cases if not c.flagged]

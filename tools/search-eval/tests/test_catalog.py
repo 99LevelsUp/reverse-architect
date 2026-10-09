@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 import catalog
-from catalog import CatalogError, load_catalog, parse_catalog
+from catalog import CatalogError, confirmation_fingerprint, load_catalog, parse_catalog
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "catalog.example.json"
 BASE = "a" * 40
@@ -33,10 +33,55 @@ def valid_catalog() -> dict:
     return {"format_version": 1, "base_revision": BASE, "cases": [valid_case()]}
 
 
+def place(file: str = "Src/Placeholder/ViewA.cs", member: str = "ViewA.Check(bool)",
+          lines=12, **extra) -> dict:
+    return {"soubor": file, "clen": member, "radky": lines, **extra}
+
+
+def sealed(question: dict) -> dict:
+    """Set `otisk_potvrzeni` to the fingerprint of the question's current facts and claims."""
+    question["otisk_potvrzeni"] = confirmation_fingerprint(question["fakta"],
+                                                            question["zakazana_tvrzeni"])
+    return question
+
+
+def valid_question(question_id: str = "q-1") -> dict:
+    return sealed({
+        "druh": "otazka",
+        "id": question_id,
+        "dotaz": "Proč se po uložení změní stav modelu ModelB?",
+        "ramcova_odpoved": "Uložení předá práci modelu ModelB, ten zapíše příznak změny.",
+        "commit": BASE,
+        "fakta_potvrzena": True,
+        "pseudonymizace_potvrzena": True,
+        "otisk_potvrzeni": "",
+        "kontrolni": False,
+        "fakta": [
+            {"id": "f1", "text": "Kliknutí spustí příkaz.", "role": "ramcova",
+             "mista": [place(odkazovany_clen="SaveCommand")],
+             "tok": {"krok": 1, "tok": "ulozeni"}},
+            {"id": "f2", "text": "Model zapíše příznak.", "role": "misto",
+             "mista": [place("Src/Placeholder/ModelB.cs", "ModelB.Save(+1)", "52-60")],
+             "tok": {"krok": 2, "tok": "ulozeni"}},
+        ],
+        "zakazana_tvrzeni": [
+            {"id": "z1", "text": "Stav mění přímo pohled.",
+             "mista": [{"soubor": "Src/Placeholder/ViewA.cs", "typ": "ViewA", "radky": 5}],
+             "fakty": ["f1"]},
+        ],
+    })
+
+
+def valid_catalog_2(*items: dict) -> dict:
+    cases = list(items) or [dict(valid_case(), druh="chyba"), valid_question()]
+    return {"format_version": 2, "base_revision": BASE, "cases": cases}
+
+
 class ExampleCatalogTest(unittest.TestCase):
     def test_example_catalog_passes_validation(self):
         cat = load_catalog(EXAMPLE)
         self.assertGreaterEqual(len(cat.cases), 2)
+        self.assertGreaterEqual(len(cat.questions), 1)
         self.assertEqual(len(cat.base_revision), 40)
 
     def test_example_carries_the_ae2_member(self):
@@ -50,8 +95,11 @@ class ExampleCatalogTest(unittest.TestCase):
 
     def test_example_marks_itself_as_synthetic(self):
         # The example must not look like a real case: every prompt says it is one.
-        for case in load_catalog(EXAMPLE).cases:
+        cat = load_catalog(EXAMPLE)
+        for case in cat.cases:
             self.assertIn("Ukázkové zadání", case.prompt)
+        for question in cat.questions:
+            self.assertIn("Ukázkové zadání", question.dotaz)
 
 
 class ValidationTest(unittest.TestCase):
@@ -126,9 +174,10 @@ class ValidationTest(unittest.TestCase):
         self.assertRejected(data, "base_revision")
 
     def test_unknown_format_version_is_rejected(self):
-        data = valid_catalog()
-        data["format_version"] = 2
-        self.assertRejected(data, "format_version")
+        for version in (0, 3, "2", True):
+            data = valid_catalog()
+            data["format_version"] = version
+            self.assertRejected(data, "format_version")
 
     def test_duplicate_case_ids_are_rejected(self):
         data = valid_catalog()
@@ -162,6 +211,208 @@ class ValidationTest(unittest.TestCase):
             ("Src/Placeholder/LoadAction.cs", "LoadAction.SetScheduledTasksInvalid", 42, FIX),
             ("Src/Placeholder/Scheduler.cs", "Scheduler.Reset", 7, "c" * 40),
         ])
+
+
+class FormatTwoTest(unittest.TestCase):
+    def assertRejected(self, data: dict, *fragments: str) -> None:
+        with self.assertRaises(CatalogError) as ctx:
+            parse_catalog(data)
+        message = str(ctx.exception)
+        for fragment in fragments:
+            self.assertIn(fragment, message)
+
+    def question_catalog(self, change=None) -> dict:
+        """A format 2 catalog with one question; `change` edits it, then it is re-sealed."""
+        question = valid_question()
+        if change:
+            change(question)
+            sealed(question)
+        return valid_catalog_2(question)
+
+    def test_format_one_catalog_loads_and_every_item_is_a_bug(self):
+        cat = parse_catalog(valid_catalog())
+        self.assertEqual([c.druh for c in cat.items], ["chyba"])
+        self.assertEqual(len(cat.cases), 1)
+        self.assertEqual(cat.questions, ())
+
+    def test_format_one_item_with_a_kind_field_is_rejected(self):
+        data = valid_catalog()
+        data["cases"][0]["druh"] = "chyba"
+        self.assertRejected(data, "case-1", "druh")
+
+    def test_format_two_loads_bug_and_question_with_their_kinds(self):
+        cat = parse_catalog(valid_catalog_2())
+        self.assertEqual([c.druh for c in cat.items], ["chyba", "otazka"])
+        self.assertEqual([c.id for c in cat.cases], ["case-1"])
+        self.assertEqual([q.id for q in cat.questions], ["q-1"])
+        question = cat.questions[0]
+        self.assertEqual(question.commit, BASE)
+        self.assertEqual([f.id for f in question.fakta], ["f1", "f2"])
+        self.assertEqual(question.fakta[0].mista[0].odkazovany_clen, "SaveCommand")
+        self.assertEqual(question.fakta[0].mista[0].name, "Check")
+        self.assertEqual(question.fakta[0].tok.krok, 1)
+        self.assertEqual(question.fakta[1].mista[0].radky, (52, 60))
+        self.assertEqual(question.zakazana_tvrzeni[0].mista[0].typ, "ViewA")
+        self.assertEqual(question.zakazana_tvrzeni[0].fakty, ("f1",))
+
+    def test_format_two_item_needs_a_known_kind(self):
+        self.assertRejected(valid_catalog_2(valid_case()), "case-1", "druh")
+        self.assertRejected(valid_catalog_2(dict(valid_case(), druh="dotaz")), "case-1", "druh")
+
+    def test_bug_item_of_format_two_keeps_its_format_one_fields(self):
+        item = dict(valid_case(), druh="chyba")
+        del item["prompt_names_location"]
+        self.assertRejected(valid_catalog_2(item), "case-1", "prompt_names_location")
+
+    def test_control_question_loads_and_differs_from_an_acceptance_item(self):
+        control = valid_question("q-control")
+        control["kontrolni"] = True
+        cat = parse_catalog(valid_catalog_2(valid_question("q-acceptance"), control))
+        flags = {q.id: q.kontrolni for q in cat.questions}
+        self.assertEqual(flags, {"q-acceptance": False, "q-control": True})
+
+    def test_fact_without_a_place_is_rejected_naming_item_and_fact(self):
+        def empty(q):
+            q["fakta"][1]["mista"] = []
+        self.assertRejected(self.question_catalog(empty), "q-1", "f2", "mista")
+
+        def missing(q):
+            del q["fakta"][1]["mista"]
+        self.assertRejected(self.question_catalog(missing), "q-1", "f2", "mista")
+
+    def test_forbidden_claim_without_a_place_is_rejected(self):
+        def change(q):
+            q["zakazana_tvrzeni"][0]["mista"] = []
+        self.assertRejected(self.question_catalog(change), "q-1", "z1", "mista")
+
+    def test_unknown_role_is_rejected(self):
+        def change(q):
+            q["fakta"][0]["role"] = "vyvojar"
+        self.assertRejected(self.question_catalog(change), "q-1", "f1", "role")
+
+    def test_whole_flow_not_covering_every_step_is_rejected(self):
+        def change(q):
+            q["fakta"].append({"id": "f3", "text": "Celý tok.", "role": "ramcova",
+                               "mista": [place(odkazovany_clen="SaveCommand")],
+                               "tok": {"cely_tok": "ulozeni"}})
+        self.assertRejected(self.question_catalog(change), "q-1", "f3", "ulozeni", "kroku 2")
+
+    def test_whole_flow_covering_every_step_is_accepted(self):
+        def change(q):
+            q["fakta"].append({"id": "f3", "text": "Celý tok.", "role": "ramcova",
+                               "mista": [place(), place("Src/Placeholder/ModelB.cs",
+                                                        "ModelB.Save(+1)", "52-60")],
+                               "tok": {"cely_tok": "ulozeni"}})
+        cat = parse_catalog(self.question_catalog(change))
+        self.assertTrue(cat.questions[0].fakta[2].tok.whole)
+
+    def test_whole_flow_of_a_flow_without_steps_is_rejected(self):
+        def change(q):
+            q["fakta"][0]["tok"] = {"cely_tok": "jiny"}
+        self.assertRejected(self.question_catalog(change), "q-1", "f1", "jiny")
+
+    def test_malformed_flow_reference_is_rejected(self):
+        for bad in ({"krok": 0, "tok": "t"}, {"krok": 1}, {"cely_tok": "t", "krok": 1}, "t"):
+            def change(q, bad=bad):
+                q["fakta"][0]["tok"] = bad
+            self.assertRejected(self.question_catalog(change), "q-1", "f1", "tok")
+
+    def test_absolute_path_or_parent_segment_in_a_place_is_rejected(self):
+        for bad in ("/abs/file.cs", "C:/abs/file.cs", "../outside.cs", "Src/../../x.cs"):
+            def change(q, bad=bad):
+                q["fakta"][0]["mista"][0]["soubor"] = bad
+            self.assertRejected(self.question_catalog(change), "q-1", "f1", "soubor")
+
+    def test_absolute_path_in_a_forbidden_claim_place_is_rejected(self):
+        def change(q):
+            q["zakazana_tvrzeni"][0]["mista"][0]["soubor"] = "/abs/ViewA.cs"
+        self.assertRejected(self.question_catalog(change), "q-1", "z1", "soubor")
+
+    def test_backslashes_in_a_place_are_normalized(self):
+        def change(q):
+            q["fakta"][0]["mista"][0]["soubor"] = "Src\\Placeholder\\ViewA.cs"
+        cat = parse_catalog(self.question_catalog(change))
+        self.assertEqual(cat.questions[0].fakta[0].mista[0].soubor, "Src/Placeholder/ViewA.cs")
+
+    def test_place_needs_exactly_one_of_member_and_type(self):
+        def both(q):
+            q["fakta"][0]["mista"][0]["typ"] = "ViewA"
+        self.assertRejected(self.question_catalog(both), "q-1", "f1", "clen")
+
+        def neither(q):
+            del q["fakta"][0]["mista"][0]["clen"]
+        self.assertRejected(self.question_catalog(neither), "q-1", "f1", "clen")
+
+    def test_lines_accept_a_number_or_a_text_range_only(self):
+        for bad in (0, -3, "9-2", "x", [4, 9], True, 1.5):
+            def change(q, bad=bad):
+                q["fakta"][0]["mista"][0]["radky"] = bad
+            self.assertRejected(self.question_catalog(change), "q-1", "f1", "radky")
+
+    def test_forbidden_claim_pointing_to_a_missing_fact_is_rejected(self):
+        def change(q):
+            q["zakazana_tvrzeni"][0]["fakty"] = ["f1", "f9"]
+        self.assertRejected(self.question_catalog(change), "q-1", "z1", "f9")
+
+    def test_forbidden_claim_may_omit_facts(self):
+        def change(q):
+            del q["zakazana_tvrzeni"][0]["fakty"]
+        cat = parse_catalog(self.question_catalog(change))
+        self.assertEqual(cat.questions[0].zakazana_tvrzeni[0].fakty, ())
+
+    def test_duplicate_fact_ids_are_rejected(self):
+        def change(q):
+            q["fakta"][1]["id"] = "f1"
+        self.assertRejected(self.question_catalog(change), "q-1", "f1", "id")
+
+    def test_question_with_another_commit_than_the_base_revision_is_rejected(self):
+        def change(q):
+            q["commit"] = "c" * 40
+        self.assertRejected(self.question_catalog(change), "q-1", "commit", "base_revision")
+
+    def test_unconfirmed_facts_are_rejected_for_measurement(self):
+        for value in (False, "ano"):
+            def change(q, value=value):
+                q["fakta_potvrzena"] = value
+            self.assertRejected(self.question_catalog(change), "q-1", "fakta_potvrzena")
+        data = valid_catalog_2(valid_question())
+        del data["cases"][0]["fakta_potvrzena"]
+        self.assertRejected(data, "q-1", "fakta_potvrzena")
+
+    def test_unconfirmed_pseudonymization_is_rejected_for_measurement(self):
+        def change(q):
+            q["pseudonymizace_potvrzena"] = False
+        self.assertRejected(self.question_catalog(change), "q-1", "pseudonymizace_potvrzena")
+
+    def test_changed_fact_text_without_a_new_confirmation_is_rejected(self):
+        data = valid_catalog_2(valid_question())
+        data["cases"][0]["fakta"][0]["text"] = "Kliknutí spustí jiný příkaz."
+        self.assertRejected(data, "q-1", "otisk_potvrzeni")
+
+    def test_changed_forbidden_claim_without_a_new_confirmation_is_rejected(self):
+        data = valid_catalog_2(valid_question())
+        data["cases"][0]["zakazana_tvrzeni"][0]["text"] = "Jiné tvrzení."
+        self.assertRejected(data, "q-1", "otisk_potvrzeni")
+
+    def test_malformed_fingerprint_is_rejected(self):
+        data = valid_catalog_2(valid_question())
+        data["cases"][0]["otisk_potvrzeni"] = "abc"
+        self.assertRejected(data, "q-1", "otisk_potvrzeni")
+
+    def test_fingerprint_follows_the_documented_definition(self):
+        import hashlib
+        canonical = '{"fakta":[{"id":"f1","text":"č"}],"zakazana_tvrzeni":[{"id":"z1"}]}'
+        self.assertEqual(confirmation_fingerprint([{"id": "f1", "text": "č"}], [{"id": "z1"}]),
+                         hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    def test_fingerprint_ignores_key_order_but_not_content(self):
+        a = confirmation_fingerprint([{"id": "f1", "text": "x"}], [])
+        self.assertEqual(a, confirmation_fingerprint([{"text": "x", "id": "f1"}], []))
+        self.assertNotEqual(a, confirmation_fingerprint([{"id": "f1", "text": "y"}], []))
+
+    def test_question_ids_share_the_namespace_with_bug_cases(self):
+        data = valid_catalog_2(dict(valid_case("same"), druh="chyba"), valid_question("same"))
+        self.assertRejected(data, "same", "id")
 
 
 class MemberNameTest(unittest.TestCase):

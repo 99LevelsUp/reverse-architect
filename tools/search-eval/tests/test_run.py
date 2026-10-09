@@ -22,6 +22,7 @@ from agents import claude_code
 from agents.base import (AgentEvent, Cap, CapHit, RunRecord, TokenUsage)
 from agents.claude_code import (ClaudeCodeAdapter, ClaudeCodeSettings,
                                 claude_infrastructure_problem)
+from catalog import confirmation_fingerprint
 from run import (ConfigError, ExperimentStopped, VariantSpec, build_schedule, run_experiment)
 from tests.experiment_fixture import (FAKE_AGENT, Experiment, answer_run, auth_error_run,
                                       correct_answer, fake_agent_env, is_preflight,
@@ -126,6 +127,64 @@ class ScheduleTest(ExperimentTestCase):
                          "Korpus varianty s kartami: generování",
                          "Kontrola nástroje (bez karet)", "Kontrola nástroje (s kartami)"):
             self.assertIn(expected, steps)
+
+
+class MixedCatalogTest(ExperimentTestCase):
+    """Questions are read and checked, but the navigation experiment runs only bugs."""
+
+    def write_mixed(self, keep_bugs=True):
+        w = self.world
+        data = json.loads(w.catalog.read_text(encoding="utf-8"))
+        bugs = [dict(c, druh="chyba") for c in data["cases"]] if keep_bugs else []
+        facts = [{"id": "f1", "text": "Ukázkový fakt.", "role": "misto",
+                  "mista": [{"soubor": "Src/Placeholder/LoadAction.cs",
+                             "clen": "LoadAction.Reload", "radky": 4}]}]
+        question = {"druh": "otazka", "id": "ukazka-otazka", "dotaz": "Ukázková otázka?",
+                    "ramcova_odpoved": "Ukázková odpověď.", "commit": w.base,
+                    "fakta_potvrzena": True, "pseudonymizace_potvrzena": True,
+                    "kontrolni": False, "fakta": facts, "zakazana_tvrzeni": [],
+                    "otisk_potvrzeni": confirmation_fingerprint(facts, [])}
+        data.update(format_version=2, cases=[*bugs[:1], question, *bugs[1:]])
+        w.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_schedule_leaves_out_questions(self):
+        self.write_mixed()
+        catalog = run._load_catalog(self.world.config())
+        self.assertEqual([c.druh for c in catalog.items], ["chyba", "chyba", "otazka"])
+        planned = build_schedule(catalog.items, ["bez karet", "s kartami"], 7)
+        self.assertEqual(planned, build_schedule(["ukazka-a", "ukazka-b"],
+                                                 ["bez karet", "s kartami"], 7))
+        self.assertNotIn("ukazka-otazka", {e.case_id for e in planned})
+
+    def test_experiment_over_a_mixed_catalog_runs_and_reports_only_bugs(self):
+        self.write_mixed()
+        adapter, outcome = self.run_scripted(self.honest)
+        self.assertEqual(len(adapter.requests), 2 + 12)
+        report = json.loads((outcome.directory / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual([c["case_id"] for c in report["cases"]], ["ukazka-a", "ukazka-b"])
+        self.assertEqual([c["id"] for c in report["experiment"]["cases"]],
+                         ["ukazka-a", "ukazka-b"])
+        self.assertEqual(len(list((outcome.directory / "prompts").glob("*.txt"))), 4)
+        self.assertNotIn("ukazka-otazka", (outcome.directory / "report.md").read_text(
+            encoding="utf-8"))
+
+    def test_question_with_a_missing_place_stops_the_preparation(self):
+        self.write_mixed()
+        data = json.loads(self.world.catalog.read_text(encoding="utf-8"))
+        question = next(c for c in data["cases"] if c["druh"] == "otazka")
+        question["fakta"][0]["mista"][0]["soubor"] = "Src/Placeholder/Missing.cs"
+        question["otisk_potvrzeni"] = confirmation_fingerprint(question["fakta"], [])
+        self.world.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(ExperimentStopped) as ctx:
+            self.run_scripted(self.honest)
+        self.assertEqual(ctx.exception.exit_code, 2)
+        self.assertIn("ukazka-otazka", str(ctx.exception))
+
+    def test_catalog_with_only_questions_has_nothing_to_measure(self):
+        self.write_mixed(keep_bugs=False)
+        with self.assertRaises(ConfigError) as ctx:
+            run._load_catalog(self.world.config())
+        self.assertIn("chyba", str(ctx.exception))
 
 
 class PrepareOnlyTest(ExperimentTestCase):
