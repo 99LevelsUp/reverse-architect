@@ -25,6 +25,8 @@ AE4 (`NoLeakTest`) runs one case through the real Claude Code adapter with
 cache and configuration directories, and then looks for the two markers
 everywhere they must not be.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -38,14 +40,17 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+import answers
+import card_check
 import run
 from agents import claude_code
 from agents.base import CAP_STEPS, CONFIG_DIR_NAME, Cap, RunRequest
 from agents.claude_code import ClaudeCodeAdapter, ClaudeCodeSettings, parse_lines
 from agents.scripted import ScriptedAdapter, load_transcript
 from run import run_experiment
-from tests.experiment_fixture import (FAKE_AGENT, Experiment, fake_agent_env, is_preflight,
-                                      preflight_run)
+from tests.experiment_fixture import (FAKE_AGENT, QUESTION_ID, Experiment, fake_agent_env,
+                                      free_answer_run, is_preflight, preflight_run)
+from tests.test_card_check import Rule, ScriptedJudge
 
 TESTS = Path(__file__).resolve().parent
 E2E = TESTS / "fixtures" / "e2e"
@@ -115,6 +120,12 @@ EXPECTED_DIFFERENCE = {
 }
 
 
+# A free answer to the question the mixed catalog adds: it cites the place of its one fact
+# (`LoadAction.Reload`, line 13 of the base revision).
+QUESTION_ANSWER = ("Metoda `LoadAction.Reload` jen zavolá `Src/Placeholder/LoadAction.cs:13` "
+                   "a nic dalšího nedělá.")
+
+
 def values_for(case_id, corpus="/korpus"):
     file, member = ANSWERS[case_id]
     return {"__FILE__": file, "__MEMBER__": member, "__CORPUS__": str(corpus)}
@@ -176,15 +187,21 @@ class StoredTranscriptTest(unittest.TestCase):
 class ExperimentOverTestRepoTest(unittest.TestCase):
     """AE6: six clean runs per complete case, known metrics, failures, replacements."""
 
+    with_question = False  # a subclass adds a question to the same catalog
+
     @classmethod
     def setUpClass(cls):
         cls.world = Experiment(cases=3, fixture=E2E, values=MARKERS)
+        if cls.with_question:
+            cls.world.add_questions(line=13)
         cls.addClassCleanup(cls.world.cleanup)
         attempts = Counter()
 
         def play(request):
             if is_preflight(request):
                 return preflight_run(request)
+            if cls.world.is_question(request):
+                return free_answer_run(QUESTION_ANSWER)
             case = cls.world.case_of(request)
             variant = "s kartami" if request.with_cards else "bez karet"
             attempts[(case, variant)] += 1
@@ -199,8 +216,10 @@ class ExperimentOverTestRepoTest(unittest.TestCase):
         cls.report = cls.outcome.report
         cls.cases = {c["case_id"]: c for c in cls.report["cases"]}
         runs = cls.outcome.directory / "runs"
-        cls.results = [json.loads(p.read_text(encoding="utf-8"))
-                       for p in sorted(runs.glob("*.result.json"))]
+        everything = [json.loads(p.read_text(encoding="utf-8"))
+                      for p in sorted(runs.glob("*.result.json"))]
+        cls.results = [r for r in everything if r["case_id"] in ANSWERS]
+        cls.question_results = [r for r in everything if r["case_id"] not in ANSWERS]
 
     def variant(self, case_id, name):
         return next(v for v in self.cases[case_id]["variants"] if v["variant"] == name)
@@ -288,7 +307,8 @@ class ExperimentOverTestRepoTest(unittest.TestCase):
 
     def test_only_runs_with_cards_get_the_corpus(self):
         checks = [r for r in self.adapter.requests if is_preflight(r)]
-        runs = [r for r in self.adapter.requests if not is_preflight(r)]
+        runs = [r for r in self.adapter.requests
+                if not is_preflight(r) and not self.world.is_question(r)]
         self.assertEqual(len(checks), 2)
         corpus = os.path.realpath(self.world.root / "corpus")
         self.assertEqual({str(r.corpus_dir) for r in runs if r.with_cards}, {corpus})
@@ -300,6 +320,64 @@ class ExperimentOverTestRepoTest(unittest.TestCase):
         text = (self.outcome.directory / "report.md").read_text(encoding="utf-8")
         for expected in ("neznámý", "strop kroků", "neplatná odpověď", "jiné místo"):
             self.assertIn(expected, text)
+
+
+class MixedExperimentOverTestRepoTest(ExperimentOverTestRepoTest):
+    """The same experiment with a question in the catalog (KTD10).
+
+    Every inherited test runs again on the bugs and must see the same hand-computed
+    numbers: a question changes the schedule, not how a case is scored. The new tests
+    cover what the question adds, up to `answers.py hodnot-odpovedi` over the finished
+    experiment directory."""
+
+    with_question = True
+
+    def test_the_question_runs_are_stored_whole_and_not_scored(self):
+        self.assertEqual(len(self.question_results), 6)
+        for result in self.question_results:
+            with self.subTest(order=result["order"]):
+                self.assertEqual((result["case_id"], result["state"], result["reason"],
+                                  result["answer_text"], result["answer"]),
+                                 (QUESTION_ID, "answered", None, QUESTION_ANSWER, None))
+        self.assertEqual({r["variant"] for r in self.question_results},
+                         {"bez karet", "s kartami"})
+        self.assertEqual([c["case_id"] for c in self.report["cases"]],
+                         ["ukazka-a", "ukazka-b", "ukazka-c"])
+        question = self.report["questions"][0]
+        self.assertEqual([(v["stored_runs"], v["answered"]) for v in question["variants"]],
+                         [(3, 3), (3, 3)])
+
+    def test_the_answers_of_the_experiment_are_judged(self):
+        state = self.world.root / "state"
+        judges = self.world.root / "judges.json"
+        judges.write_text(json.dumps({"format_version": 1, "hodnotitele": [
+            {"id": "j1", "rodina": "openai", "model": "alias", "prikaz": ["cli-neni"],
+             "vystup": "claude-json"}]}), encoding="utf-8")
+        runner = ScriptedJudge([Rule("Ukázkový fakt", "jen zavolá", "VYJADRUJE")])
+        # The scripted adapter replays Claude Code transcripts; production does not know it.
+        families = mock.patch.dict(answers.AGENT_FAMILIES, {"scripted": "claude"})
+        with contextlib.redirect_stdout(io.StringIO()), families:
+            code = answers.main(["hodnot-odpovedi", str(self.outcome.directory),
+                                 "--source-repo", str(self.world.repo),
+                                 "--katalog", str(self.world.catalog),
+                                 "--hodnotitele", str(judges), "--stav", str(state)],
+                                runner=runner)
+        self.assertEqual(code, 0)
+        path = card_check.measurement_path(state / "odpovedi" / self.outcome.directory.name)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual((data["status"], data["agent_family"], data["pokus"]["role"]),
+                         ("hotovo", "claude", "vyvojar"))
+        self.assertFalse(data["pokus"]["nedokonceny"])
+        facts = data["results"]["facts"]
+        self.assertEqual({(f["variant"], f["status"]) for f in facts},
+                         {("bez karet", card_check.FACT_PRESENT),
+                          ("s kartami", card_check.FACT_PRESENT)})
+        self.assertEqual(sorted(f["run"] for f in facts),
+                         sorted(r["order"] for r in self.question_results))
+        self.assertEqual([v["korpus"] is not None for v in data["corpus"]["varianty"]],
+                         [False, True])
+        # the same answer text is judged once, the other runs come from the cache
+        self.assertEqual(len(runner.calls), 3)
 
 
 def _contains(path, markers):

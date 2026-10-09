@@ -6,6 +6,7 @@ started.
 """
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
@@ -15,8 +16,11 @@ from unittest import mock
 
 import answers
 import card_check
+import report
 import review
+import run
 from agents.judge_cli import JudgeInfrastructureError
+from catalog import parse_catalog
 from tests.test_card_check import (EVMN, EXT, OTHER_REV, REV, Rule, ScriptedJudge, a1_types,
                                    build_corpus, catalog_json, claim, fact, place,
                                    question_json)
@@ -139,7 +143,8 @@ class ArgumentsTest(AnswersCase):
                              0)
             self.assertEqual(self.run_main(["zprava", "--navic", "1"])[0], 2)  # common argument
         self.assertEqual(seen, [("1", "x")])
-        self.assertEqual([c.name for c in answers.SUBCOMMANDS], ["kontrola-karet", "kontrola"])
+        self.assertEqual([c.name for c in answers.SUBCOMMANDS],
+                         ["kontrola-karet", "kontrola", "hodnot-odpovedi"])
 
     def test_the_parser_names_the_required_arguments(self):
         parser = answers.build_parser()
@@ -244,10 +249,6 @@ class CardCheckCommandTest(AnswersCase):
             self.assertEqual(self.run_main(self.args(), ScriptedJudge(RULES))[0], 0)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ReviewCommandTest(AnswersCase):
     """`answers.py kontrola`: the file to check and loading it back."""
 
@@ -328,3 +329,410 @@ class ReviewCommandTest(AnswersCase):
             "--nacti", "x.json", **{"--stav": str(REPO / "tmp-stav")}))
         self.assertEqual(code, 2)
         self.assertIn("Stavový adresář", err)
+
+
+# --- hodnot-odpovedi (KTD10) --------------------------------------------------------------------
+
+EVMN_TEXT = "src/Acme/EditorViewModelNew.cs"
+SILENT_WITH_TYPE = "Metoda `EditorViewModelNew.RunNew()` se při chybějícím dokumentu tiše vrátí."
+SILENT_WITHOUT_TYPE = "Při chybějícím dokumentu se editor tiše vrátí a nic neuloží."
+SILENT_WITH_ANCHOR = f"Při chybějícím dokumentu se editor tiše vrátí (`{EVMN_TEXT}:10-45`)."
+SILENT_WRONG_ANCHOR = "Při chybějícím dokumentu se editor tiše vrátí (`src/Acme/Other.cs:10-45`)."
+EXTERNAL = "Externí kontrola zavolá externí registr (`ExternalCheck.Run()`)."
+GRID = "Změna řádku gridu se ukládá okamžitě, píše `EditorViewNew.OnCellChanged()`."
+
+
+def answer_question():
+    """A question with a framework fact (`ramcova`), a place fact (`misto`) and a claim."""
+    return question_json(
+        [fact("f1", "Tichý návrat, když chybí dokument",
+              [place(EVMN, "EditorViewModelNew.RunNew()", radky=20)]),
+         fact("f2", "Externí kontrola ověří dokument",
+              [place(EXT, "ExternalCheck.Run()", radky="30-35")], role="misto")],
+        [claim("z1", "Změna řádku gridu se ukládá okamžitě",
+               [place("src/Acme/EditorViewNew.cs", "EditorViewNew.OnCellChanged()",
+                      radky="42-60")], fakty=["f1"])], qid="Q1")
+
+
+ANSWER_RULES = [Rule("Tichý návrat", "tiše vrátí", "VYJADRUJE"),
+                Rule("Externí kontrola", "externí registr", "VYJADRUJE"),
+                Rule("řádku gridu", "Změna řádku gridu", "OBSAHUJE")]
+
+# The attempt directory's name decides where the measurement goes.
+ATTEMPT = "pokus-20261002-120000-seed7"
+
+
+def receipt(revision=REV):
+    return {"base_revision": revision, "tree_fingerprint": "t" * 8, "ra_version": "0.0.0",
+            "options": [], "corpus_fingerprint": "c" * 8, "generation_seconds": 1.5}
+
+
+class AnswerCheckCase(AnswersCase):
+    """An experiment directory written by hand, the way `run.py` writes it, and the command."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog = self.write_json("catalog.json", catalog_json(answer_question()))
+        self.question = parse_catalog(catalog_json(answer_question())).questions[0]
+
+    def attempt(self, runs, *, status="completed", role="podpora", adapter="claude-code",
+                revision=REV, variants=("A", "B"), question=None):
+        """Write the attempt; `runs` are (order, variant, state, answer_text, reason) rows."""
+        directory = self.tmp / "out" / ATTEMPT
+        (directory / "runs").mkdir(parents=True, exist_ok=True)
+        question = question or self.question
+        template = run.prompt_template("Zdroje.", role, "otazka")
+        digest = hashlib.sha256(run.build_prompt(template, question).encode("utf-8")).hexdigest()
+        data = {"format_version": report.REPORT_FORMAT_VERSION,
+                "experiment": {"id": ATTEMPT, "status": status, "role": role, "adapter": adapter,
+                               "base_revision": revision, "tree_fingerprint": "t" * 8,
+                               "variants": [{"name": name, "corpus_dir": None,
+                                             "corpus_receipt": receipt(revision),
+                                             "prompt_template": "",
+                                             "question_prompt_template": template,
+                                             "prompt_sha256": {question.id: digest}}
+                                            for name in variants]},
+                "questions": [{"question_id": question.id, "variants": []}]}
+        (directory / "report.json").write_text(json.dumps(data), encoding="utf-8")
+        for order, variant, state, text, reason in runs:
+            row = {"order": order, "case_id": question.id, "variant": variant, "attempt": 1,
+                   "state": state, "reason": reason, "answer_text": text}
+            (directory / "runs" / f"{order:03d}.result.json").write_text(
+                json.dumps(row, ensure_ascii=False), encoding="utf-8")
+        return directory
+
+    def command(self, directory, *extra, **replace):
+        values = {"--source-repo": str(REPO), "--katalog": str(self.catalog),
+                  "--hodnotitele": str(self.judges), "--stav": str(self.state)}
+        values.update(replace)
+        argv = ["hodnot-odpovedi", str(directory)]
+        for key, value in values.items():
+            argv += [key, value]
+        return argv + list(extra)
+
+    def measurement_file(self):
+        return card_check.measurement_path(self.state / "odpovedi" / ATTEMPT)
+
+    def load(self):
+        return json.loads(self.measurement_file().read_text(encoding="utf-8"))
+
+    @staticmethod
+    def answered(order, variant, text):
+        return (order, variant, "answered", text, None)
+
+    @staticmethod
+    def unanswered(order, variant, reason="no_answer"):
+        return (order, variant, "unanswered", None, reason)
+
+    @staticmethod
+    def facts(data, fact_id):
+        return [r for r in data["results"]["facts"] if r["fact_id"] == fact_id]
+
+
+class AnswerBindingTest(AnswerCheckCase):
+    def test_an_answer_without_a_citation_that_names_the_type_binds(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        code, out, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        [f1] = self.facts(data, "f1")
+        self.assertEqual((f1["status"], f1["role"], f1["variant"], f1["run"]),
+                         (card_check.FACT_PRESENT, "podpora", "A", 1))
+        unit = next(u for u in data["units"] if u["claim_id"] == "f1")
+        self.assertEqual((unit["state"], unit["mode"], unit["binding"]["via"]),
+                         (card_check.STATE_ASSESSED, card_check.MODE_WHOLE, "jmeno"))
+        self.assertEqual((unit["document_path"], unit["document"]), ("odpověď agenta",
+                                                                      "odpoved:001"))
+        self.assertEqual(unit["document_text"], SILENT_WITH_TYPE)
+
+    def test_an_answer_that_does_not_name_it_and_states_the_fact_is_disputed_without_binding(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITHOUT_TYPE)])
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        unit = next(u for u in data["units"] if u["claim_id"] == "f1")
+        self.assertEqual(unit["state"], card_check.STATE_UNBOUND_FACT)
+        self.assertTrue(unit["disputed"])
+        self.assertEqual((unit["model_label"], unit["final_label"]),
+                         (card_check.LABEL_PRESENT, card_check.LABEL_UNKNOWN))
+        [f1] = self.facts(data, "f1")
+        self.assertEqual(f1["status"], card_check.FACT_DISPUTED)
+        self.assertEqual(f1["disputed_units"], [unit["id"]])
+
+    def test_a_cited_anchor_binds_by_the_anchor_and_a_wrong_one_does_not(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_ANCHOR),
+                                  self.answered(2, "B", SILENT_WRONG_ANCHOR)])
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        by_run = {r["run"]: r for r in self.facts(data, "f1")}
+        self.assertEqual(by_run[1]["status"], card_check.FACT_PRESENT)
+        self.assertEqual(by_run[2]["status"], card_check.FACT_DISPUTED)
+        unit = next(u for u in data["units"] if u["claim_id"] == "f1" and u["run"] == 1)
+        self.assertEqual((unit["binding"]["via"], unit["binding"]["anchor"]),
+                         ("kotva", f"{EVMN_TEXT}:10-45"))
+
+    def test_a_forbidden_claim_in_the_answer_puts_the_fact_in_conflict(self):
+        directory = self.attempt([self.answered(1, "A", f"{SILENT_WITH_TYPE}\n\n{GRID}")])
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        [f1] = self.facts(data, "f1")
+        self.assertEqual(f1["status"], card_check.FACT_CONFLICT)
+        [claim_result] = data["results"]["claims"]
+        self.assertEqual((claim_result["status"], claim_result["variant"], claim_result["run"]),
+                         (card_check.CLAIM_FOUND, "A", 1))
+
+
+class AnswerRoleTest(AnswerCheckCase):
+    def test_support_judges_only_framework_facts_and_the_claims(self):
+        directory = self.attempt([self.answered(1, "A", f"{SILENT_WITH_TYPE}\n\n{EXTERNAL}")])
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        self.assertEqual({(r["fact_id"], r["role"]) for r in data["results"]["facts"]},
+                         {("f1", "podpora")})
+        self.assertEqual(len(runner.calls_for("Externí kontrola")), 0)
+        self.assertEqual(len(data["results"]["claims"]), 1)
+        self.assertEqual(data["pokus"]["role"], "podpora")
+
+    def test_developer_judges_every_fact(self):
+        directory = self.attempt([self.answered(1, "A", f"{SILENT_WITH_TYPE}\n\n{EXTERNAL}")],
+                                 role="vyvojar")
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        self.assertEqual({(r["fact_id"], r["role"]): r["status"] for r in data["results"]["facts"]},
+                         {("f1", "vyvojar"): card_check.FACT_PRESENT,
+                          ("f2", "vyvojar"): card_check.FACT_PRESENT})
+
+
+class AnswerWithoutAnswerTest(AnswerCheckCase):
+    def test_runs_without_an_answer_count_as_missing_and_are_listed_apart(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE),
+                                  self.unanswered(2, "A", "cap_steps"),
+                                  self.unanswered(3, "B")])
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, out, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        by_run = {r["run"]: r for r in self.facts(data, "f1")}
+        self.assertEqual({k: v["status"] for k, v in by_run.items()},
+                         {1: card_check.FACT_PRESENT, 2: card_check.FACT_NO_ANSWER,
+                          3: card_check.FACT_NO_ANSWER})
+        self.assertEqual(by_run[2]["reasons"], ["běh zastavil strop kroků"])
+        self.assertEqual(by_run[2]["unit_ids"], [])
+        self.assertEqual(data["pokus"]["bez_odpovedi"],
+                         [{"run": 2, "otazka": "Q1", "varianta": "A",
+                           "duvod": "běh zastavil strop kroků"},
+                          {"run": 3, "otazka": "Q1", "varianta": "B",
+                           "duvod": "běh skončil bez závěrečné zprávy"}])
+        self.assertEqual([c["status"] for c in data["results"]["claims"]],
+                         [card_check.CLAIM_ABSENT, card_check.CLAIM_NO_ANSWER,
+                          card_check.CLAIM_NO_ANSWER])
+        # Nothing was asked of the judge for the runs without an answer.
+        self.assertEqual({u["run"] for u in data["units"]}, {1})
+        self.assertIn("2 bez odpovědi", out)
+        self.assertIn(card_check.FACT_NO_ANSWER, out)
+
+    def test_only_the_first_three_stored_runs_of_a_variant_count(self):
+        runs = [self.answered(n, "A", SILENT_WITH_TYPE) for n in (1, 2, 3, 4)]
+        directory = self.attempt(runs)
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sorted(r["run"] for r in self.facts(self.load(), "f1")), [1, 2, 3])
+
+    def test_spoiled_runs_are_not_judged(self):
+        directory = self.attempt([(1, "A", "spoiled", "zbytek", None),
+                                  self.answered(2, "A", SILENT_WITH_TYPE)])
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+        self.assertEqual([r["run"] for r in self.facts(self.load(), "f1")], [2])
+
+
+class AnswerAttemptStateTest(AnswerCheckCase):
+    def test_an_interrupted_attempt_is_code_2_without_the_switch(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)], status="interrupted")
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 2)
+        self.assertIn("interrupted", err)
+        self.assertIn("--i-nedokonceny", err)
+        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+        self.assertFalse(self.measurement_file().exists())
+
+    def test_the_switch_takes_it_and_the_measurement_says_so(self):
+        for status in ("interrupted", "infrastructure_error"):
+            with self.subTest(status=status):
+                directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)], status=status)
+                code, out, err = self.run_main(self.command(directory, "--i-nedokonceny"),
+                                               ScriptedJudge(ANSWER_RULES))
+                self.assertEqual(code, 0, err)
+                data = self.load()
+                self.assertEqual((data["pokus"]["nedokonceny"], data["pokus"]["stav"]),
+                                 (True, status))
+                self.assertIn(status, out)
+
+    def test_a_completed_attempt_is_not_marked(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        self.assertEqual(self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))[0], 0)
+        data = self.load()
+        self.assertFalse(data["pokus"]["nedokonceny"])
+        self.assertEqual(data["pokus"]["rodina_agenta"], "claude")
+        self.assertEqual(data["agent_family"], "claude")
+
+
+class AnswerShapeTest(AnswerCheckCase):
+    def test_the_measurement_has_the_shape_of_the_card_check(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE),
+                                  self.answered(2, "B", SILENT_WITHOUT_TYPE)])
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 0, err)
+        data = self.load()
+        self.assertEqual(next(iter(data)), "format_version")
+        self.assertEqual(data["status"], card_check.STATUS_DONE)
+        for key in ("id", "corpus", "items", "judge", "reported_model", "agent_family",
+                    "prompt_version", "units", "results"):
+            self.assertIn(key, data)
+        self.assertEqual(data["items"], [{"id": "Q1", "commit": REV,
+                                          "otisk_potvrzeni": self.question.otisk_potvrzeni,
+                                          "kontrolni": False}])
+        self.assertEqual(data["corpus"]["source"], "odpověď agenta")
+        self.assertEqual([v["korpus"]["corpus_fingerprint"] for v in data["corpus"]["varianty"]],
+                         ["c" * 8, "c" * 8])
+        self.assertNotIn("corpus_dir", json.dumps(data))
+        self.assertNotIn("cli-ktery-se-nespusti", json.dumps(data))
+        for unit in data["units"]:
+            self.assertEqual(unit["document_path"], "odpověď agenta")
+            self.assertIn(unit["variant"], ("A", "B"))
+            self.assertEqual(unit["document"], f"odpoved:{unit['run']:03d}")
+        self.assertEqual([r["status"] for r in data["results"]["facts"]],
+                         [card_check.FACT_PRESENT, card_check.FACT_DISPUTED])
+        # the review of the owner reads the measurement as it reads a card check
+        loaded = review.load_measurement(self.measurement_file())
+        self.assertEqual(len(loaded.units), len(data["units"]))
+
+    def test_the_card_check_json_is_unchanged_by_the_new_fields(self):
+        self.assertEqual(self.run_main(self.args(), ScriptedJudge(ANSWER_RULES))[0], 0)
+        data = self.measurement()
+        for unit in data["units"]:
+            self.assertNotIn("variant", unit)
+            self.assertNotIn("run", unit)
+        for result in (*data["results"]["facts"], *data["results"]["claims"]):
+            self.assertNotIn("variant", result)
+            self.assertNotIn("run", result)
+
+    def test_the_measurement_does_not_overwrite_the_card_check_of_the_state_directory(self):
+        self.assertEqual(self.run_main(self.args(), ScriptedJudge(ANSWER_RULES))[0], 0)
+        card_id = self.measurement()["id"]
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        self.assertEqual(self.run_main(self.command(directory),
+                                       ScriptedJudge(ANSWER_RULES))[0], 0)
+        self.assertEqual(self.measurement()["id"], card_id)
+        self.assertNotEqual(self.load()["id"], card_id)
+
+
+class AnswerFailureTest(AnswerCheckCase):
+    def test_a_failing_judge_is_code_3_and_the_next_run_continues_from_the_cache(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE),
+                                  self.answered(2, "B", SILENT_WITHOUT_TYPE)], role="vyvojar")
+        first = ScriptedJudge(ANSWER_RULES, fail_after=4)
+        code, _, err = self.run_main(self.command(directory), first)
+        self.assertEqual(code, 3)
+        self.assertIn("nedokončené", err)
+        data = self.load()
+        self.assertEqual((data["status"], data["results"]), ("nedokonceno", None))
+        self.assertEqual(len(first.calls), 4)
+        second = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory), second)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.load()["status"], "hotovo")
+        reference = ScriptedJudge(ANSWER_RULES)
+        self.run_main(self.command(directory, **{"--stav": str(self.tmp / "reference")}),
+                      reference)
+        self.assertEqual(len(second.calls), len(reference.calls) - 4)
+
+    def test_no_judge_available_is_code_3(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+
+        def failing(spec, prompt, siblings):
+            raise JudgeInfrastructureError("scénář: smoke test nejde")
+
+        code, _, err = self.run_main(self.command(directory), failing)
+        self.assertEqual(code, 3)
+        self.assertIn("Žádný hodnotitel", err)
+
+    def test_interrupt_is_130_and_leaves_the_measurement_incomplete(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        runner = ScriptedJudge(ANSWER_RULES, fail_after=1, fail=KeyboardInterrupt())
+        code, _, err = self.run_main(self.command(directory), runner)
+        self.assertEqual(code, 130)
+        self.assertEqual(self.load()["status"], "nedokonceno")
+
+
+class AnswerInputTest(AnswerCheckCase):
+    def refused(self, directory, needle, **replace):
+        runner = ScriptedJudge(ANSWER_RULES)
+        code, _, err = self.run_main(self.command(directory, **replace), runner)
+        self.assertEqual(code, 2, err)
+        self.assertTrue(err.startswith("Chyba vstupu"))
+        self.assertIn(needle, err)
+        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+        self.assertFalse(self.measurement_file().exists())
+
+    def test_not_an_experiment_directory(self):
+        self.refused(self.tmp / "nic", "report.json")
+        broken = self.tmp / "rozbity"
+        broken.mkdir()
+        (broken / "report.json").write_text("{}", encoding="utf-8")
+        self.refused(broken, "není zpráva pokusu")
+
+    def test_an_unknown_adapter_cannot_give_the_agent_family(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)], adapter="scripted")
+        self.refused(directory, "rodina agenta")
+
+    def test_a_question_missing_from_the_catalog(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        other = question_json([fact("f1", "x", [place(EVMN, "EditorViewModelNew.RunNew()")])],
+                              qid="Q9")
+        path = self.write_json("other.json", catalog_json(other))
+        self.refused(directory, "Q1", **{"--katalog": str(path)})
+
+    def test_a_catalog_over_another_revision(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)], revision=OTHER_REV)
+        self.refused(directory, "commitem")
+
+    def test_a_catalog_whose_question_text_changed_since_the_experiment(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        changed = answer_question()
+        changed["dotaz"] = "Úplně jiná otázka?"
+        path = self.write_json("changed.json", catalog_json(changed))
+        self.refused(directory, "neodpovídá zadání", **{"--katalog": str(path)})
+
+    def test_an_attempt_without_a_question_or_a_stored_run(self):
+        directory = self.attempt([])
+        self.refused(directory, "žádný uložený běh otázky")
+
+    def test_the_state_directory_inside_a_repository_is_refused(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        self.refused(directory, "Stavový adresář", **{"--stav": str(REPO / "tmp-stav")})
+        self.assertFalse((REPO / "tmp-stav").exists())
+
+    def test_the_arguments_are_required(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        for name in ("--katalog", "--hodnotitele", "--stav", "--source-repo"):
+            with self.subTest(name):
+                argv = self.command(directory)
+                at = argv.index(name)
+                code, _, err = self.run_main(argv[:at] + argv[at + 2:], ScriptedJudge())
+                self.assertEqual(code, 2)
+                self.assertIn(name, err)
+        self.assertEqual(self.run_main(["hodnot-odpovedi", "--source-repo", str(REPO)])[0], 2)
+        self.assertEqual(self.run_main(["hodnot-odpovedi", "--help"])[0], 0)
+
+
+if __name__ == "__main__":
+    unittest.main()

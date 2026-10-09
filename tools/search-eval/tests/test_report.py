@@ -235,6 +235,60 @@ class ReportContentTest(unittest.TestCase):
         self.assertIn("| A | 0,0855 | neznámý | 0,0855 | neznámý |", render_markdown(data))
 
 
+class ReportQuestionsTest(unittest.TestCase):
+    """Questions are listed apart, with run counts: no score, no place in the tallies."""
+
+    def mixed(self):
+        base = info()
+        questions = ExperimentInfo(**{**base.__dict__, "cases": (
+            *base.cases, CaseInfo("Q", False, False, "otazka"))})
+        extra = [
+            RunResult(order=20, case_id="Q", variant=REF, attempt=1, state="answered",
+                      answer_text="Odpověď."),
+            RunResult(order=21, case_id="Q", variant=REF, attempt=1, state="answered",
+                      answer_text="Další."),
+            RunResult(order=22, case_id="Q", variant=REF, attempt=1, state="unanswered",
+                      reason="cap_steps", cap_hit=STEP_CAP),
+            RunResult(order=23, case_id="Q", variant=CMP, attempt=1, state="spoiled",
+                      spoil_reasons=("path_outside: Read: ../x",)),
+            RunResult(order=24, case_id="Q", variant=CMP, attempt=2, state="answered",
+                      answer_text="Odpověď s kartou."),
+        ]
+        return questions, [*results(), *extra]
+
+    def test_run_counts_per_variant_and_the_tallies_are_unchanged(self):
+        questions, runs = self.mixed()
+        data = build_report(questions, runs)
+        self.assertEqual(data["questions"][0]["note"], "hodnotí answers.py")
+        ref, cmp_ = data["questions"][0]["variants"]
+        self.assertEqual((ref["stored_runs"], ref["answered"], ref["unanswered"],
+                          ref["unanswered_reasons"], ref["complete"]),
+                         (3, 2, 1, ["cap_steps"], True))
+        self.assertEqual((cmp_["stored_runs"], cmp_["answered"], cmp_["spoiled_attempts"],
+                          cmp_["complete"]), (1, 1, 1, False))
+        base = build_report(info(), results())
+        self.assertEqual(data["summary"], base["summary"])
+        self.assertEqual(data["cases"], base["cases"])
+        self.assertEqual(base["questions"], [])
+
+    def test_markdown_has_a_section_only_when_there_is_a_question(self):
+        questions, runs = self.mixed()
+        text = render_markdown(build_report(questions, runs))
+        self.assertIn("## Otázky (volná odpověď)", text)
+        self.assertIn("hodnotí answers.py", text)
+        self.assertIn("| Q | bez karet | 3 | 2 | 1 (strop kroků) | 0 | ano |", text)
+        self.assertNotIn("## Otázky", render_markdown(build_report(info(), results())))
+
+    def test_the_answer_text_is_in_the_run_json_and_only_there(self):
+        run_ = RunResult(order=1, case_id="Q", variant=REF, attempt=1, state="answered",
+                         answer_text="Odpověď.")
+        self.assertEqual(run_.to_json()["answer_text"], "Odpověď.")
+        self.assertIsNone(results()[0].to_json()["answer_text"])
+        questions, runs = self.mixed()
+        self.assertNotIn("Odpověď s kartou", json.dumps(build_report(questions, runs),
+                                                         ensure_ascii=False))
+
+
 class ReportRoleTest(unittest.TestCase):
     def test_role_is_in_the_data_and_the_markdown(self):
         for role, text in (("vyvojar", "čtenář se zdrojáky"),

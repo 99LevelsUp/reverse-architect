@@ -2,9 +2,13 @@
 
     python tools/search-eval/run.py --help
 
-Catalog items of kind `otazka` are read and checked in preparation but are
-not part of this experiment yet: the schedule, prompts and report take only
-the items of kind `chyba`.
+Catalog items are of two kinds. A `chyba` (a solved case) is answered with a
+JSON block naming the cause and scored here. An `otazka` (a question, KTD10) is
+answered in free text, citing places as anchors in backticks (`path:N` or
+`path:N-M`); the run keeps the agent's last top-level message as `answer_text`
+and is not scored here: `answers.py hodnot-odpovedi` judges it later against
+the facts of the question. Both kinds are in the schedule, the prompts and the
+report (questions apart, with run counts only).
 
 Flow (High-Level Technical Design of the plan):
 
@@ -43,17 +47,18 @@ variant has an MCP server.
 
 Role (KTD9, `--role`, mandatory, no default). `vyvojar` is a reader with the
 sources: the agent works in the exported tree (the setting of every earlier
-experiment) and the default pair of variants applies. `podpora` is a reader
-without the sources: the agent's work directory is an empty directory of its
-own (a sibling of the export, named after it) and the corpus is read through
-`--add-dir`; the audit permits only the corpus there. Items of kind `chyba`
-are not measured in this role (they are listed in the report as "v roli podpora
-se neměří"); the catalog needs another kind of item, otherwise the input is
-refused. The default pair has no meaning there ("bez karet" would have nothing
+experiment) and the default pair of variants applies; both kinds of item are
+measured. `podpora` is a reader without the sources: the agent's work
+directory is an empty directory of its own (a sibling of the export, named
+after it) and the corpus is read through `--add-dir`; the audit permits only
+the corpus there. Items of kind `chyba` are not measured in this role (they are
+listed in the report as "v roli podpora se neměří"); the questions are its only
+measured items, so a catalog without one is refused. The default pair has no meaning there ("bez karet" would have nothing
 to read): both variants are given explicitly, each with a corpus.
 
 The prompt is identical across variants word for word except for the
-paragraph about available sources (R6), and is stored verbatim (KTD8 point 5).
+paragraph about available sources (R6), for a question as for a case, and is
+stored verbatim (KTD8 point 5).
 
 Exit codes: 0 done (or dry run / preparation only), 2 invalid input or
 preparation refused, 3 infrastructure error (tool check or a run), 130
@@ -120,6 +125,21 @@ jeden blok JSON v tomto tvaru:
 {{"file": "<cesta k souboru {vztah_cesty}>", \
 "member": "<Typ.Člen>", "hypothesis": "<krátká hypotéza, proč tam je příčina>"}}
 ```
+"""
+
+# The prompt of a question (KTD10): the question, the same paragraph about sources, then a
+# free-text answer that cites places as anchors in backticks. No JSON is asked for.
+QUESTION_PROMPT_TEMPLATE = """Odpovídáš na otázku uživatele systému. Kód neopravuj a nic neměň.
+
+Otázka:
+{zadani_pripadu}
+
+Dostupné zdroje:
+{zdroje}
+
+Odevzdání: odpověz volným textem a skonči. Místa v kódu, o která svou odpověď opíráš, cituj \
+jako kotvy v backticku: `cesta:N` nebo `cesta:N-M`, kde cesta je {vztah_cesty} a N a M jsou \
+čísla řádků. Žádný jiný tvar odpovědi se nevyžaduje, JSON nepiš.
 """
 
 
@@ -364,14 +384,11 @@ class ScheduleEntry:
 
 def build_schedule(cases: Sequence[str | Case | Question], variant_names: Sequence[str],
                    seed: int) -> list[ScheduleEntry]:
-    """case × variant × 3 in catalog and variant order, shuffled by `random.Random(seed)`.
+    """item × variant × 3 in catalog and variant order, shuffled by `random.Random(seed)`.
 
-    Items are case ids or catalog items. Only items of kind `chyba` are
-    scheduled: questions are not part of the navigation schedule (a later
-    unit adds them to the experiment), so they are left out here.
+    Items are ids or catalog items of either kind (a question is scheduled like a case).
     """
-    case_ids = [c if isinstance(c, str) else c.id for c in cases
-                if isinstance(c, str) or c.druh == Case.druh]
+    case_ids = [c if isinstance(c, str) else c.id for c in cases]
     entries = [ScheduleEntry(c, v, r) for c in case_ids for v in variant_names
                for r in range(1, RUNS_PER_VARIANT + 1)]
     random.Random(seed).shuffle(entries)
@@ -397,14 +414,23 @@ def sources_paragraph(corpus: Path | None, role: str) -> str:
     return " ".join(parts)
 
 
-def prompt_template(sources: str, role: str) -> str:
-    """A variant's prompt with the case prompt left as a placeholder (for the report)."""
-    text = PROMPT_TEMPLATE.replace("{zdroje}", sources).replace("{vztah_cesty}", PATH_BASE[role])
+def prompt_template(sources: str, role: str, druh: str = Case.druh) -> str:
+    """A variant's prompt with the item's text left as a placeholder (for the report).
+
+    `druh` is the kind of the item: a case (`chyba`, JSON answer) or a question (`otazka`,
+    free answer with anchors)."""
+    base = QUESTION_PROMPT_TEMPLATE if druh == Question.druh else PROMPT_TEMPLATE
+    text = base.replace("{zdroje}", sources).replace("{vztah_cesty}", PATH_BASE[role])
     return text.replace("{{", "{").replace("}}", "}")
 
 
-def build_prompt(template: str, case: Case) -> str:
-    return template.replace(PROMPT_PLACEHOLDER, case.prompt.strip())
+def item_text(item: Case | Question) -> str:
+    """What the agent is given to work on: a case's prompt or a question's `dotaz`."""
+    return (item.dotaz if isinstance(item, Question) else item.prompt).strip()
+
+
+def build_prompt(template: str, item: Case | Question) -> str:
+    return template.replace(PROMPT_PLACEHOLDER, item_text(item))
 
 
 # --- outcome -----------------------------------------------------------------
@@ -469,10 +495,8 @@ def run_experiment(config: ExperimentConfig, *, prepare_only: bool = False,
 def _load_catalog(config: ExperimentConfig) -> Catalog:
     """The catalog, if the role has something to measure in it.
 
-    What is measured is decided by the role, after the items the role does not
-    measure are set aside: `chyba` items in the developer role (questions join
-    the experiment in a later unit), and in the support role everything but
-    `chyba` items."""
+    What is measured is decided by the role: questions in both, `chyba` items in
+    the developer role only."""
     try:
         catalog = load_catalog(config.catalog_path)
     except CatalogError as exc:
@@ -481,15 +505,17 @@ def _load_catalog(config: ExperimentConfig) -> Catalog:
         if not catalog.questions:
             raise ConfigError("V roli podpora se položky druhu „chyba“ neměří a katalog nemá "
                               "žádnou jinou položku k měření: pokus nemá co měřit.")
-    elif not catalog.cases:
-        raise ConfigError("Katalog nemá žádnou položku druhu „chyba“: navigační pokus nemá co "
-                          "měřit (otázky do pokusu přidá pozdější jednotka).")
+    elif not catalog.cases and not catalog.questions:
+        raise ConfigError("Katalog nemá žádnou položku druhu „chyba“ ani „otazka“: pokus nemá co "
+                          "měřit.")
     return catalog
 
 
-def measured_cases(catalog: Catalog, role: str) -> tuple[Case, ...]:
-    """The `chyba` items the navigation experiment runs in this role (none in the support role)."""
-    return () if role == ROLE_SUPPORT else tuple(catalog.cases)
+def measured_cases(catalog: Catalog, role: str) -> tuple[Case | Question, ...]:
+    """The items the experiment runs in this role: the `chyba` items (none in the support
+    role) and then the questions."""
+    cases = () if role == ROLE_SUPPORT else tuple(catalog.cases)
+    return (*cases, *catalog.questions)
 
 
 def not_measured_cases(catalog: Catalog, role: str) -> tuple[Case, ...]:
@@ -515,6 +541,7 @@ class _Experiment:
         self.export: prepare.ExportResult | None = None
         self.measured = measured_cases(catalog, config.role)
         self.templates: dict[str, str] = {}
+        self.question_templates: dict[str, str] = {}
         self.adapter_name = ""
 
     # -- step 2: preparation ------------------------------------------------
@@ -628,14 +655,18 @@ class _Experiment:
                                     self.directory, 3)
         return ExperimentOutcome(status, self.directory, data)
 
-    def _run_one(self, adapter: AgentAdapter, case: Case, entry: ScheduleEntry, attempt: int,
+    def _template(self, variant: str, item: Case | Question) -> str:
+        return (self.question_templates if isinstance(item, Question)
+                else self.templates)[variant]
+
+    def _run_one(self, adapter: AgentAdapter, case: Case | Question, entry: ScheduleEntry, attempt: int,
                  replaces: int | None) -> RunResult:
         order = len(self.results) + 1
         variant = self._variant(entry.variant)
         transcript = (f"runs/{order:03d}-{slugify(case.id)}-{variant.slug}-{attempt}.jsonl")
         assert self.export is not None
         request = RunRequest(
-            workdir=self._workdir(), prompt=build_prompt(self.templates[variant.name], case),
+            workdir=self._workdir(), prompt=build_prompt(self._template(variant.name, case), case),
             cap=self.config.cap, corpus_dir=self.paths.corpora.get(variant.name),
             transcript_path=self.directory / transcript)
         common = dict(order=order, case_id=case.id, variant=variant.name, attempt=attempt,
@@ -659,7 +690,7 @@ class _Experiment:
         return RunResult(state=outcome.state, reason=outcome.failure_reason,
                          spoil_reasons=tuple(f"{f.kind}: {f.detail}"
                                              for f in outcome.spoil_reasons),
-                         answer=answer, **measured)
+                         answer=answer, answer_text=outcome.answer_text, **measured)
 
     def _workdir(self) -> Path:
         """The agent's work directory: the exported tree, or in the support role an empty one."""
@@ -679,12 +710,14 @@ class _Experiment:
         (self.directory / "runs").mkdir()
         for variant in self.config.variants:
             corpus = self.paths.corpora.get(variant.name)
-            template = prompt_template(sources_paragraph(corpus, self.config.role),
-                                       self.config.role)
-            self.templates[variant.name] = template
+            sources = sources_paragraph(corpus, self.config.role)
+            self.templates[variant.name] = prompt_template(sources, self.config.role)
+            self.question_templates[variant.name] = prompt_template(
+                sources, self.config.role, Question.druh)
             for case in self.measured:
                 name = f"prompts/{slugify(case.id)}--{variant.slug}.txt"
-                write_text_atomic(self.directory / name, build_prompt(template, case))
+                write_text_atomic(self.directory / name,
+                                  build_prompt(self._template(variant.name, case), case))
 
     def _write_schedule(self, planned: Sequence[ScheduleEntry]) -> None:
         self._write_json("schedule.json", {
@@ -719,7 +752,8 @@ class _Experiment:
             seed=self.config.seed, base_revision=self.export.revision,
             tree_fingerprint=self.export.tree_fingerprint,
             variants=(variants[0], variants[1]),
-            cases=tuple(CaseInfo(c.id, c.used_for_card_tuning, c.prompt_names_location)
+            cases=tuple(CaseInfo(c.id, False, False, Question.druh) if isinstance(c, Question)
+                        else CaseInfo(c.id, c.used_for_card_tuning, c.prompt_names_location)
                         for c in self.measured),
             role=self.config.role,
             not_measured=tuple(c.id for c in not_measured_cases(self.catalog, self.config.role)),
@@ -731,15 +765,17 @@ class _Experiment:
         receipt = self.receipts.get(variant.name)
         corpus = self.paths.corpora.get(variant.name)
         template = self.templates.get(variant.name, "")
+        question_template = self.question_templates.get(variant.name, "")
         return VariantInfo(
             name=variant.name,
             corpus_dir=str(corpus) if corpus is not None else None,
             corpus_receipt=_receipt_json(receipt) if receipt is not None else None,
             manifest_schema_version=manifest_schema_version(corpus) if corpus else None,
             card_format=variant.card_format,
-            prompt_template=template,
-            prompt_sha256={c.id: hashlib.sha256(build_prompt(template, c).encode("utf-8"))
-                           .hexdigest() for c in self.measured})
+            prompt_template=template, question_prompt_template=question_template,
+            prompt_sha256={c.id: hashlib.sha256(
+                build_prompt(question_template if isinstance(c, Question) else template, c)
+                .encode("utf-8")).hexdigest() for c in self.measured})
 
     def _preparation_json(self, error: str | None) -> dict[str, Any]:
         return {"error": error,
@@ -924,9 +960,9 @@ def dry_run(config: ExperimentConfig) -> str:
     cap = config.cap
     lines = [
         "Suchý běh: agent se nespustí a nic se nezapíše.",
-        f"Případy: {len(cases)}; varianty: "
+        f"Položky: {len(cases)} (případy a otázky); varianty: "
         + ", ".join(f"„{v.name}“" for v in config.variants) + ".",
-        f"Běhů v rozvrhu: {planned} ({len(cases)} případy × {len(config.variants)} "
+        f"Běhů v rozvrhu: {planned} ({len(cases)} položky × {len(config.variants)} "
         f"varianty × {RUNS_PER_VARIANT}); se všemi náhradami zkažených běhů nejvýš "
         f"{planned + cells * MAX_REPLACEMENTS}.",
         f"Kontrola nástroje: {len(config.variants)} běhy před pokusem.",
@@ -942,8 +978,8 @@ def dry_run(config: ExperimentConfig) -> str:
         lines.insert(2, f"Položky druhu „chyba“ ({', '.join(c.id for c in skipped)}): "
                         f"{report.NOT_MEASURED_IN_SUPPORT}.")
     if catalog.questions:
-        lines.insert(2, f"Otázky v katalogu: {len(catalog.questions)}; do navigačního pokusu "
-                        "nejdou.")
+        lines.insert(2, f"Otázky v katalogu: {len(catalog.questions)} (volná odpověď, "
+                        "neskórují se, hodnotí je answers.py hodnot-odpovedi).")
     return "\n".join(lines)
 
 

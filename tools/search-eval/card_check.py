@@ -48,6 +48,21 @@ Decisions this module implements (the plan's R6-R9, KTD3-KTD5):
 verdicts and, once complete, the results; an interrupted or failed measurement
 is saved with the status `nedokonceno` and continues from the judge's cache on
 the next run.
+
+The same machinery judges an agent's answer to a question (KTD10,
+`build_answer_plan`, `run_answer_check`): the answer of one run is a document
+of its own (`odpoved:<run>`, path "odpověď agenta"), read as a map
+(`anchors.parse_answer`: a block with a cited anchor binds by it, a block
+without one by the name of the type or member) and handed to the judge whole
+(an answer is small; one over the size threshold goes as bound blocks). For
+the experiment's role (`podpora` / `vyvojar`) only the facts that role reads
+are judged (`FACT_ROLE_AUDIENCES`: `ramcova` facts for both, `misto` facts for
+the developer) and every forbidden claim. A run without an answer is not judged:
+its facts are `chybí, bez odpovědi` (counted as missing, kept apart) and its
+claims `bez odpovědi`. Units, fact plans and results carry the `variant` and the
+`run` (the order in the experiment) of the answer, so a later report counts the
+presence `k/3` per variant; they are left out of the JSON when unset, so the
+card check's output is unchanged.
 """
 from __future__ import annotations
 
@@ -60,8 +75,9 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
 from agents.judge_cli import JudgeInfrastructureError
-from anchors import (BoundBlock, ParsedDocument, bound_blocks, citation_binds,
-                     needs_preselection, parse_document)
+from anchors import (LEVEL_ANSWER, PRESELECT_THRESHOLD_BYTES, BoundBlock, ParsedDocument,
+                     bound_blocks, citation_binds, needs_preselection, parse_answer,
+                     parse_document)
 from catalog import Catalog, Fact, ForbiddenClaim, Place, Question
 from corpus import CorpusDoc, CorpusIndex, check_commit
 from judge import (KIND_FACT, KIND_FORBIDDEN, PROMPT_VERSION, Assessment, JudgeCache,
@@ -103,12 +119,18 @@ FACT_MISSING_UNBOUND = "chybí, bez vázaného bloku"
 FACT_CONFLICT = "v rozporu"
 FACT_DISPUTED = "sporné"
 FACT_PLACE_UNKNOWN = "místo nenalezeno v korpusu"
+FACT_NO_ANSWER = "chybí, bez odpovědi"
 
 CLAIM_FOUND = "nalezeno"
 CLAIM_ABSENT = "nenalezeno"
 CLAIM_DISPUTED = "sporné"
 CLAIM_UNBOUND = "bez vázaného bloku"
 CLAIM_PLACE_UNKNOWN = "místo nenalezeno v korpusu"
+CLAIM_NO_ANSWER = "bez odpovědi"
+
+ANSWER_PATH = "odpověď agenta"
+ANSWER_TITLE = "Odpověď agenta"
+ANSWER_SLOT = "odpověď"
 
 FLOW_NOTE = "dokument nemá vázaný blok ke všem místům toku"
 
@@ -154,6 +176,9 @@ class UnitResult:
     document_path: str | None = None
     document_text: str | None = None  # the whole document; only when `mode` is MODE_WHOLE
     places: tuple[dict[str, Any], ...] = ()
+    # An agent's answer (not a corpus document): the variant and the run it came from.
+    variant: str | None = None
+    run: int | None = None
 
     @property
     def open_dispute(self) -> bool:
@@ -167,7 +192,7 @@ class UnitResult:
         return replace(self, final_label=label, decided_by=decided_by)
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "id": self.id,
             "question_id": self.question_id,
             "kind": self.kind,
@@ -196,6 +221,18 @@ class UnitResult:
             "document_text": self.document_text,
             "places": list(self.places),
         }
+        out.update(_origin_json(self.variant, self.run))
+        return out
+
+
+def _origin_json(variant: str | None, run: int | None) -> dict[str, Any]:
+    """`variant` and `run` of an agent's answer, only when set (the card check has none)."""
+    out: dict[str, Any] = {}
+    if variant is not None:
+        out["variant"] = variant
+    if run is not None:
+        out["run"] = run
+    return out
 
 
 @dataclass(frozen=True)
@@ -224,6 +261,9 @@ class FactPlan:
     unverified: tuple[str, ...]
     documents: tuple[str, ...]
     unit_ids: tuple[str, ...]
+    variant: str | None = None
+    run: int | None = None
+    no_answer: str | None = None  # why the run has no answer (an answer plan only)
 
 
 @dataclass(frozen=True)
@@ -236,6 +276,9 @@ class ClaimPlan:
     unverified: tuple[str, ...]
     documents: tuple[str, ...]
     unit_ids: tuple[str, ...]
+    variant: str | None = None
+    run: int | None = None
+    no_answer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -261,9 +304,11 @@ class FactResult:
     disputed_units: tuple[str, ...]
     unit_ids: tuple[str, ...]
     reasons: tuple[str, ...]
+    variant: str | None = None
+    run: int | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "question_id": self.question_id,
             "fact_id": self.fact_id,
             "role": self.role,
@@ -276,6 +321,8 @@ class FactResult:
             "unit_ids": list(self.unit_ids),
             "reasons": list(self.reasons),
         }
+        out.update(_origin_json(self.variant, self.run))
+        return out
 
 
 @dataclass(frozen=True)
@@ -288,9 +335,11 @@ class ClaimResult:
     unit_ids: tuple[str, ...]
     reasons: tuple[str, ...]
     fact_ids: tuple[str, ...] = ()
+    variant: str | None = None
+    run: int | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "question_id": self.question_id,
             "claim_id": self.claim_id,
             "status": self.status,
@@ -300,6 +349,8 @@ class ClaimResult:
             "reasons": list(self.reasons),
             "fact_ids": list(self.fact_ids),
         }
+        out.update(_origin_json(self.variant, self.run))
+        return out
 
 
 @dataclass(frozen=True)
@@ -322,6 +373,7 @@ class Measurement:
     prompt_version: str
     plan: Plan
     units: tuple[UnitResult, ...]
+    extra: dict[str, Any] = field(default_factory=dict)  # more top-level keys (answer check)
 
     def results(self) -> Results:
         return derive_results(self.plan, self.units)
@@ -345,6 +397,7 @@ class Measurement:
                               "claims": [r.to_json() for r in results.claims]}
         else:
             out["results"] = None
+        out.update(self.extra)
         return out
 
 
@@ -405,13 +458,17 @@ class _Planner:
                 known_files=self.index.files)
         return found
 
+    def preselects(self, parsed: ParsedDocument) -> bool:
+        """Whether the document goes to the judge as bound blocks (`anchors.needs_preselection`)."""
+        return needs_preselection(parsed.level, parsed.size_bytes)
+
     def unit(self, question: Question, kind: str, claim_id: str, claim_text: str,
              role: str | None, doc: CorpusDoc, places: Sequence[Place],
              whole_flow: bool) -> PlannedUnit:
         parsed = self.parsed(doc)
         per_place = [bound_blocks(parsed, p) for p in places]
         uncovered = [p for p, found in zip(places, per_place) if not found]
-        preselect = needs_preselection(parsed.level, parsed.size_bytes)
+        preselect = self.preselects(parsed)
         mode = MODE_BOUND if preselect else MODE_WHOLE
         blocks: tuple[str, ...] = ()
         shown: tuple[dict[str, Any], ...] | None = None
@@ -516,6 +573,96 @@ def _plan_claim(planner: _Planner, question: Question, claim: ForbiddenClaim
                       tuple(p.record.id for p in planned)), planned)
 
 
+# --- the plan of an agent's answers (KTD10) --------------------------------------------
+
+@dataclass(frozen=True)
+class AnswerRun:
+    """One stored run of a question: where it came from and its answer (None = no answer).
+
+    `run` is the run's order in the experiment; `reason` says why a run has no answer."""
+
+    question_id: str
+    variant: str
+    run: int
+    text: str | None
+    reason: str | None = None
+
+
+def answer_doc_id(run: int) -> str:
+    return f"odpoved:{run:03d}"
+
+
+class _AnswerPlanner(_Planner):
+    """The planner over answers: no corpus, an answer is read as a map (`parse_answer`)."""
+
+    def __init__(self) -> None:
+        super().__init__(None)  # type: ignore[arg-type]  # no index: documents are the answers
+
+    def add(self, doc: CorpusDoc, text: str) -> None:
+        self._texts[doc.id] = text
+        self._parsed[doc.id] = parse_answer(text, doc_id=doc.id, title=doc.title)
+
+    def parsed(self, doc: CorpusDoc) -> ParsedDocument:
+        return self._parsed[doc.id]
+
+    def preselects(self, parsed: ParsedDocument) -> bool:
+        # An answer is small and goes whole, like a map; an oversized one as bound blocks.
+        return parsed.size_bytes > PRESELECT_THRESHOLD_BYTES
+
+
+def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) -> Plan:
+    """Lay out every unit for the stored runs of the questions, for the experiment's `role`.
+
+    Facts are planned for the role only (`FACT_ROLE_AUDIENCES`); every forbidden claim is
+    planned. A run without an answer gets plans without units (`no_answer`). Nothing is judged.
+    """
+    questions = {q.id: q for q in catalog.questions}
+    planner = _AnswerPlanner()
+    facts: list[FactPlan] = []
+    claims: list[ClaimPlan] = []
+    units: list[PlannedUnit] = []
+    used: dict[str, Question] = {}
+    for item in runs:
+        question = questions[item.question_id]
+        used[question.id] = question
+        doc = CorpusDoc(id=answer_doc_id(item.run), kind=None, level=LEVEL_ANSWER, parent=None,
+                        title=ANSWER_TITLE, path=ANSWER_PATH, header_path=None)
+        answered = item.text is not None
+        if answered:
+            planner.add(doc, item.text)
+        reason = None if answered else (item.reason or "bez odpovědi")
+        origin = dict(variant=item.variant, run=item.run, no_answer=reason)
+
+        def planned_unit(kind: str, claim_id: str, text: str, unit_role: str | None,
+                         places: Sequence[Place], whole_flow: bool) -> PlannedUnit:
+            planned = planner.unit(question, kind, claim_id, text, unit_role, doc, places,
+                                   whole_flow)
+            record = replace(planned.record, slot=ANSWER_SLOT, variant=item.variant, run=item.run)
+            return replace(planned, record=record)
+
+        for fact in question.fakta:
+            if role not in FACT_ROLE_AUDIENCES[fact.role]:
+                continue
+            if not answered:
+                facts.append(FactPlan(question.id, fact.id, role, (), (), (), **origin))
+                continue
+            whole_flow = fact.tok is not None and fact.tok.whole
+            planned = planned_unit(KIND_FACT, fact.id, fact.text, role, fact.mista, whole_flow)
+            facts.append(FactPlan(question.id, fact.id, role, (), (doc.id,), (planned.record.id,),
+                                  **origin))
+            units.append(planned)
+        for claim in question.zakazana_tvrzeni:
+            if not answered:
+                claims.append(ClaimPlan(question.id, claim.id, claim.fakty, (), (), (), **origin))
+                continue
+            planned = planned_unit(KIND_FORBIDDEN, claim.id, claim.text, None, claim.mista, False)
+            claims.append(ClaimPlan(question.id, claim.id, claim.fakty, (), (doc.id,),
+                                    (planned.record.id,), **origin))
+            units.append(planned)
+    return Plan(questions=tuple(used.values()), facts=tuple(facts), claims=tuple(claims),
+                units=tuple(units))
+
+
 # --- judging a unit --------------------------------------------------------------------
 
 def evaluate_unit(planned: PlannedUnit, selection: JudgeSelection, runner: JudgeRunner,
@@ -569,10 +716,12 @@ def _fact_result(fp: FactPlan, plan: Plan, by_id: dict[str, UnitResult]) -> Fact
     def result(status: str, **kwargs: Any) -> FactResult:
         base: dict[str, Any] = dict(other_present=None, documents=fp.documents, present_in=(),
                                     conflicts=(), disputed_units=(), unit_ids=fp.unit_ids,
-                                    reasons=())
+                                    reasons=(), variant=fp.variant, run=fp.run)
         base.update(kwargs)
         return FactResult(fp.question_id, fp.fact_id, fp.role, status, **base)
 
+    if fp.no_answer:
+        return result(FACT_NO_ANSWER, reasons=(fp.no_answer,))
     if fp.unverified:
         return result(FACT_PLACE_UNKNOWN, reasons=fp.unverified)
     units = [by_id[i] for i in fp.unit_ids]
@@ -613,8 +762,10 @@ def _claim_result(cp: ClaimPlan, by_id: dict[str, UnitResult]) -> ClaimResult:
 
     def result(status: str, reasons: tuple[str, ...] = ()) -> ClaimResult:
         return ClaimResult(cp.question_id, cp.claim_id, status, found, disputed, cp.unit_ids,
-                           reasons, cp.fact_ids)
+                           reasons, cp.fact_ids, cp.variant, cp.run)
 
+    if cp.no_answer:
+        return result(CLAIM_NO_ANSWER, (cp.no_answer,))
     if cp.unverified:
         return result(CLAIM_PLACE_UNKNOWN, cp.unverified)
     if found:
@@ -701,12 +852,38 @@ def run_card_check(catalog: Catalog, index: CorpusIndex, selection: JudgeSelecti
     exception then propagates - and finally when the run completes.
     """
     plan = build_plan(catalog, index)
-    corpus = corpus_identity_json(index)
+    return _run_plan(plan, corpus_identity_json(index), selection, runner, cache, save=save,
+                     progress=progress)
+
+
+def run_answer_check(catalog: Catalog, runs: Sequence[AnswerRun], role: str,
+                     corpus: dict[str, Any], extra: dict[str, Any], selection: JudgeSelection,
+                     runner: JudgeRunner, cache: JudgeCache, *,
+                     save: Callable[[Measurement], None] | None = None,
+                     progress: Callable[[int, int, UnitResult], None] | None = None,
+                     ) -> Measurement:
+    """Judge the stored answers of the questions and return the finished measurement.
+
+    `corpus` identifies what was measured (it goes into the measurement's id and its
+    `corpus` key: the experiment and its variants' corpora), `extra` is recorded as more
+    top-level keys. Saving, interruption and the cache work as in `run_card_check`.
+    """
+    plan = build_answer_plan(catalog, runs, role)
+    return _run_plan(plan, corpus, selection, runner, cache, save=save, progress=progress,
+                     extra=extra)
+
+
+def _run_plan(plan: Plan, corpus: dict[str, Any], selection: JudgeSelection,
+              runner: JudgeRunner, cache: JudgeCache, *,
+              save: Callable[[Measurement], None] | None,
+              progress: Callable[[int, int, UnitResult], None] | None,
+              extra: dict[str, Any] | None = None) -> Measurement:
     items = _items_json(plan)
     identity = selection.identity()
     base = dict(id=measurement_id(corpus, items, identity, selection.agent_family),
                 corpus=corpus, items=items, judge=identity, reported_model=selection.smoke_model,
-                agent_family=selection.agent_family, prompt_version=PROMPT_VERSION, plan=plan)
+                agent_family=selection.agent_family, prompt_version=PROMPT_VERSION, plan=plan,
+                extra=extra or {})
     results: list[UnitResult] = [p.record for p in plan.units]
 
     def snapshot(status: str) -> Measurement:

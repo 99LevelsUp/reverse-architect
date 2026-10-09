@@ -22,11 +22,13 @@ from agents import claude_code
 from agents.base import (AgentEvent, Cap, CapHit, RunRecord, TokenUsage)
 from agents.claude_code import (ClaudeCodeAdapter, ClaudeCodeSettings,
                                 claude_infrastructure_problem)
+from agents.scripted import ScriptedRun
 from catalog import confirmation_fingerprint
 from run import (ConfigError, ExperimentStopped, VariantSpec, build_schedule, run_experiment)
-from tests.experiment_fixture import (FAKE_AGENT, Experiment, answer_run, auth_error_run,
-                                      correct_answer, fake_agent_env, is_preflight,
-                                      preflight_run)
+from tests.experiment_fixture import (FAKE_AGENT, FREE_ANSWER, QUESTION_ID, QUESTION_TEXT,
+                                      Experiment, answer_run, assistant, auth_error_run,
+                                      correct_answer, fake_agent_env, free_answer_run, init,
+                                      is_preflight, preflight_run, result)
 from tests.test_prepare import _make_dir_link, _remove_dir_link
 
 CLOCK = datetime(2026, 10, 2, 12, 0, 0)
@@ -50,9 +52,11 @@ class ExperimentTestCase(unittest.TestCase):
         return adapter, outcome
 
     def honest(self, request):
-        """Tool check passes; every run answers its case correctly."""
+        """Tool check passes; every run answers its case correctly, a question in free text."""
         if is_preflight(request):
             return preflight_run(request)
+        if self.world.is_question(request):
+            return free_answer_run()
         return answer_run(*correct_answer(self.world.case_of(request)))
 
     def experiment_dir(self):
@@ -130,7 +134,7 @@ class ScheduleTest(ExperimentTestCase):
 
 
 class MixedCatalogTest(ExperimentTestCase):
-    """Questions are read and checked, but the navigation experiment runs only bugs."""
+    """Questions are part of the experiment: scheduled, prompted and stored like cases, not scored."""
 
     def write_mixed(self, keep_bugs=True):
         w = self.world
@@ -146,27 +150,43 @@ class MixedCatalogTest(ExperimentTestCase):
                     "otisk_potvrzeni": confirmation_fingerprint(facts, [])}
         data.update(format_version=2, cases=[*bugs[:1], question, *bugs[1:]])
         w.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        w.question_prompts = {QUESTION_ID: QUESTION_TEXT}
 
-    def test_schedule_leaves_out_questions(self):
+    def test_schedule_includes_questions_like_cases(self):
         self.write_mixed()
         catalog = run._load_catalog(self.world.config())
         self.assertEqual([c.druh for c in catalog.items], ["chyba", "chyba", "otazka"])
+        self.assertEqual([c.id for c in run.measured_cases(catalog, "vyvojar")],
+                         ["ukazka-a", "ukazka-b", "ukazka-otazka"])
+        self.assertEqual([c.id for c in run.measured_cases(catalog, "podpora")],
+                         ["ukazka-otazka"])
         planned = build_schedule(catalog.items, ["bez karet", "s kartami"], 7)
-        self.assertEqual(planned, build_schedule(["ukazka-a", "ukazka-b"],
+        self.assertEqual(Counter((e.case_id, e.variant) for e in planned),
+                         {(c, v): 3 for c in ("ukazka-a", "ukazka-b", "ukazka-otazka")
+                          for v in ("bez karet", "s kartami")})
+        self.assertEqual(planned, build_schedule(["ukazka-a", "ukazka-b", "ukazka-otazka"],
                                                  ["bez karet", "s kartami"], 7))
-        self.assertNotIn("ukazka-otazka", {e.case_id for e in planned})
 
-    def test_experiment_over_a_mixed_catalog_runs_and_reports_only_bugs(self):
+    def test_experiment_over_a_mixed_catalog_runs_bugs_and_questions(self):
         self.write_mixed()
         adapter, outcome = self.run_scripted(self.honest)
-        self.assertEqual(len(adapter.requests), 2 + 12)
+        self.assertEqual(len(adapter.requests), 2 + 18)
         report = json.loads((outcome.directory / "report.json").read_text(encoding="utf-8"))
+        # The navigation tallies still read only the bugs, with the same numbers as without a question.
         self.assertEqual([c["case_id"] for c in report["cases"]], ["ukazka-a", "ukazka-b"])
         self.assertEqual([c["id"] for c in report["experiment"]["cases"]],
                          ["ukazka-a", "ukazka-b"])
-        self.assertEqual(len(list((outcome.directory / "prompts").glob("*.txt"))), 4)
-        self.assertNotIn("ukazka-otazka", (outcome.directory / "report.md").read_text(
-            encoding="utf-8"))
+        self.assertEqual(report["summary"]["all_cases"],
+                         {"win": 0, "loss": 0, "tie": 2, "incomplete": 0})
+        self.assertEqual(len(list((outcome.directory / "prompts").glob("*.txt"))), 6)
+        question = report["questions"][0]
+        self.assertEqual(question["question_id"], "ukazka-otazka")
+        self.assertEqual([(v["variant"], v["stored_runs"], v["answered"], v["unanswered"])
+                          for v in question["variants"]],
+                         [("bez karet", 3, 3, 0), ("s kartami", 3, 3, 0)])
+        markdown = (outcome.directory / "report.md").read_text(encoding="utf-8")
+        self.assertIn("## Otázky (volná odpověď)", markdown)
+        self.assertNotIn("Případ ukazka-otazka", markdown)
 
     def test_question_with_a_missing_place_stops_the_preparation(self):
         self.write_mixed()
@@ -180,19 +200,22 @@ class MixedCatalogTest(ExperimentTestCase):
         self.assertEqual(ctx.exception.exit_code, 2)
         self.assertIn("ukazka-otazka", str(ctx.exception))
 
-    def test_catalog_with_only_questions_has_nothing_to_measure(self):
+    def test_catalog_with_only_questions_is_measured_in_the_developer_role_too(self):
         self.write_mixed(keep_bugs=False)
-        with self.assertRaises(ConfigError) as ctx:
-            run._load_catalog(self.world.config())
-        self.assertIn("chyba", str(ctx.exception))
+        catalog = run._load_catalog(self.world.config())
+        self.assertEqual(catalog.cases, ())
+        adapter, outcome = self.run_scripted(self.honest)
+        self.assertEqual(len(adapter.requests), 2 + 6)
+        self.assertEqual(outcome.report["cases"], [])
+        self.assertEqual(outcome.report["questions"][0]["variants"][0]["answered"], 3)
 
 
 class SupportRoleTest(ExperimentTestCase):
     """The role of the reader (U12, KTD9): `podpora` has no sources, only a corpus.
 
-    No item is measured in the support role yet (`chyba` items are set aside,
-    questions join the experiment in a later unit), so the tests of what a
-    *measured run* looks like force the runs with `measurable`.
+    `chyba` items are set aside in the support role and the questions are its only
+    measured items; the tests of what a measured *navigation* run looks like force
+    the runs of the bugs with `measurable`.
     """
 
     cases = 1
@@ -276,9 +299,9 @@ class SupportRoleTest(ExperimentTestCase):
 
     def test_tool_check_creates_no_work_directory_with_sources(self):
         adapter, outcome = self.run_scripted(self.honest, self.support_config())
-        checks = adapter.requests
+        checks = [r for r in adapter.requests if is_preflight(r)]
         self.assertEqual(len(checks), 2)
-        self.assertTrue(all(is_preflight(r) for r in checks))
+        self.assertTrue(all(is_preflight(r) for r in adapter.requests[:2]))
         for request in checks:
             with self.subTest(variant=request.workdir.parent.name):
                 self.assertEqual(request.workdir.name, "empty-work")
@@ -290,20 +313,25 @@ class SupportRoleTest(ExperimentTestCase):
 
     # -- what is measured ------------------------------------------------------------
 
-    def test_mixed_catalog_sets_the_bugs_aside_and_lists_them(self):
+    def test_mixed_catalog_sets_the_bugs_aside_and_runs_the_questions(self):
         adapter, outcome = self.run_scripted(self.honest, self.support_config())
         self.assertEqual(outcome.status, "completed")
-        self.assertEqual(len(adapter.requests), 2)  # the tool check only: no run
+        self.assertEqual(len(adapter.requests), 2 + 6)  # the tool check, then the question
         report = json.loads((outcome.directory / "report.json").read_text(encoding="utf-8"))
         experiment = report["experiment"]
         self.assertEqual(experiment["role"], "podpora")
         self.assertEqual(experiment["not_measured"],
                          [{"id": "ukazka-a", "reason": "v roli podpora se neměří"}])
         self.assertEqual((report["cases"], experiment["cases"]), ([], []))
-        self.assertEqual(list((outcome.directory / "runs").iterdir()), [])
-        self.assertEqual(list((outcome.directory / "prompts").iterdir()), [])
+        self.assertEqual([q["question_id"] for q in report["questions"]], [QUESTION_ID])
+        results = [json.loads(p.read_text(encoding="utf-8"))
+                   for p in sorted((outcome.directory / "runs").glob("*.result.json"))]
+        self.assertEqual([(r["case_id"], r["state"], r["answer_text"]) for r in results],
+                         [(QUESTION_ID, "answered", FREE_ANSWER)] * 6)
+        self.assertEqual(len(list((outcome.directory / "prompts").iterdir())), 2)
         schedule = json.loads((outcome.directory / "schedule.json").read_text(encoding="utf-8"))
-        self.assertEqual(schedule["planned"], [])
+        self.assertEqual({p["case_id"] for p in schedule["planned"]}, {QUESTION_ID})
+        self.assertEqual(len(schedule["planned"]), 6)
         markdown = (outcome.directory / "report.md").read_text(encoding="utf-8")
         self.assertIn("ukazka-a: v roli podpora se neměří", markdown)
         self.assertIn("- Role: podpora", markdown)
@@ -358,7 +386,8 @@ class SupportRoleTest(ExperimentTestCase):
         started.assert_not_called()
         self.assertIn("ukazka-a", out.getvalue())
         self.assertIn("v roli podpora se neměří", out.getvalue())
-        self.assertIn("Běhů v rozvrhu: 0", out.getvalue())
+        self.assertIn("Otázky v katalogu: 1", out.getvalue())
+        self.assertIn("Běhů v rozvrhu: 6", out.getvalue())
         self.assertFalse(self.world.output.exists())
         self.assertFalse(self.world.support_workdir.exists())
 
@@ -419,6 +448,128 @@ class SupportRoleTest(ExperimentTestCase):
         with self.assertRaises(ConfigError) as ctx:
             run.resolve_paths(self.support_config())
         self.assertIn("už existuje", str(ctx.exception))
+
+
+class QuestionRunTest(ExperimentTestCase):
+    """A run of a question (KTD10): a free answer, stored whole and not scored."""
+
+    cases = 1
+
+    def setUp(self):
+        super().setUp()
+        self.world.add_questions()
+
+    def question_config(self, **overrides):
+        return self.world.config(**overrides)
+
+    def results(self, outcome, case_id=QUESTION_ID):
+        return [r for r in (json.loads(p.read_text(encoding="utf-8"))
+                            for p in sorted((outcome.directory / "runs").glob("*.result.json")))
+                if r["case_id"] == case_id]
+
+    def play(self, question_run):
+        def play(request):
+            if is_preflight(request):
+                return preflight_run(request)
+            if self.world.is_question(request):
+                return question_run(request)
+            return answer_run(*correct_answer("ukazka-a"))
+        return play
+
+    def test_the_answer_is_stored_whole_and_the_run_is_not_invalid(self):
+        text = ("Dlouhá odpověď.\n\n```json\n{\"file\": \"a.cs\"}\n```\n\n"
+                "Vychází z `Src/Placeholder/LoadAction.cs:4`.")
+        _, outcome = self.run_scripted(self.play(lambda request: free_answer_run(text)))
+        runs = self.results(outcome)
+        self.assertEqual(len(runs), 6)
+        for result in runs:
+            with self.subTest(order=result["order"]):
+                self.assertEqual((result["state"], result["reason"]), ("answered", None))
+                self.assertEqual(result["answer_text"], text)
+                self.assertIsNone(result["answer"])
+        bug = self.results(outcome, "ukazka-a")[0]
+        self.assertEqual(bug["state"], "success")
+        self.assertIsNone(bug["answer_text"])
+
+    def test_a_run_stopped_by_a_cap_is_stored_without_an_answer(self):
+        def too_long(request):
+            return free_answer_run(reads=["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"])
+
+        _, outcome = self.run_scripted(
+            self.play(too_long), self.question_config(
+                cap=Cap(seconds=600, steps=3, tokens=100_000)))
+        runs = self.results(outcome)
+        self.assertEqual(len(runs), 6)
+        for result in runs:
+            self.assertEqual((result["state"], result["reason"], result["answer_text"]),
+                             ("unanswered", "cap_steps", None))
+            self.assertIsNotNone(result["cap_hit"])
+        question = outcome.report["questions"][0]
+        self.assertEqual([(v["answered"], v["unanswered"], v["unanswered_reasons"])
+                          for v in question["variants"]], [(0, 3, ["cap_steps"] * 3)] * 2)
+        markdown = (outcome.directory / "report.md").read_text(encoding="utf-8")
+        self.assertIn("3 (strop kroků, strop kroků, strop kroků)", markdown)
+
+    def test_an_empty_final_message_is_without_an_answer(self):
+        def empty(request):
+            return ScriptedRun((init(["Glob", "Grep", "Read"]),
+                                assistant("final", [{"type": "text", "text": ""}]), result()))
+
+        _, outcome = self.run_scripted(self.play(empty))
+        self.assertEqual({(r["state"], r["reason"], r["answer_text"])
+                          for r in self.results(outcome)}, {("unanswered", "no_answer", None)})
+
+    def test_a_spoiled_question_run_is_replaced_like_a_case(self):
+        w = self.world
+        calls = Counter()
+
+        def stray(request):
+            calls[request.corpus_dir is not None] += 1
+            if calls[request.corpus_dir is not None] == 1:
+                return free_answer_run(reads=[str(w.root / "catalog" / "catalog.json")])
+            return free_answer_run()
+
+        _, outcome = self.run_scripted(self.play(stray))
+        runs = self.results(outcome)
+        self.assertEqual(len(runs), 6 + 2)
+        spoiled = [r for r in runs if r["state"] == "spoiled"]
+        self.assertEqual(len(spoiled), 2)
+        self.assertTrue(all(r["answer_text"] is None for r in spoiled))
+        self.assertEqual([r["replaces"] for r in runs if r["replaces"] is not None],
+                         [r["order"] for r in spoiled])
+
+    def test_prompts_of_the_two_variants_differ_only_in_the_sources_paragraph(self):
+        _, outcome = self.run_scripted(self.honest)
+        prompts = outcome.directory / "prompts"
+        without = (prompts / f"{QUESTION_ID}--bez-karet.txt").read_text(encoding="utf-8")
+        with_cards = (prompts / f"{QUESTION_ID}--s-kartami.txt").read_text(encoding="utf-8")
+
+        def split(text):
+            head, rest = text.split("Dostupné zdroje:\n", 1)
+            sources, tail = rest.split("\n\n", 1)
+            return head, sources, tail
+
+        a, b = split(without), split(with_cards)
+        self.assertEqual((a[0], a[2]), (b[0], b[2]))
+        self.assertNotEqual(a[1], b[1])
+        self.assertIn(QUESTION_TEXT, a[0])
+        self.assertIn("`cesta:N` nebo `cesta:N-M`", a[2])
+        self.assertIn("relativně k pracovnímu adresáři", a[2])
+        self.assertIn("JSON nepiš", a[2])
+        self.assertNotIn("```json", without)
+        corpus = os.path.realpath(self.world.root / "corpus")
+        self.assertIn(corpus.lower(), b[1].lower())
+        # The case prompts are the same texts as before a question was in the catalog.
+        case_prompt = (prompts / "ukazka-a--bez-karet.txt").read_text(encoding="utf-8")
+        self.assertIn("```json", case_prompt)
+        self.assertNotEqual(case_prompt.split("Zadání případu:")[0], a[0])
+
+    def test_the_report_records_both_prompt_templates_and_every_prompt_digest(self):
+        _, outcome = self.run_scripted(self.honest)
+        for variant in outcome.report["experiment"]["variants"]:
+            self.assertIn("Zadání případu:", variant["prompt_template"])
+            self.assertIn("Otázka:", variant["question_prompt_template"])
+            self.assertEqual(sorted(variant["prompt_sha256"]), ["ukazka-a", QUESTION_ID])
 
 
 class PrepareOnlyTest(ExperimentTestCase):
@@ -788,6 +939,32 @@ class ForbiddenToolTest(ExperimentTestCase):
                 self.assertTrue(all(r["spoil_reasons"] == [f"forbidden_tool: {self.TOOL}"]
                                     for r in mine))
         self.assertEqual(outcome.report["cases"][0]["result"], "incomplete")
+
+
+class FreeAnswerFakeAgentTest(ExperimentTestCase):
+    """The real adapter and `fake_agent.py free`: a question's answer survives the whole path."""
+
+    cases = 1
+
+    def test_the_free_answer_of_a_process_is_stored_whole(self):
+        self.world.add_questions(bugs=False)
+        text = "Odpověď podle `Src/Placeholder/LoadAction.cs:4`.\n\nA druhý odstavec."
+
+        def build(config, paths):
+            settings = ClaudeCodeSettings(
+                model=config.model, isolation_root=paths.isolation_root,
+                executable=(sys.executable, FAKE_AGENT, "auto", "free", text),
+                credentials_source=self.world.credentials,
+                keep_apart=(paths.output_root, self.world.catalog.parent))
+            return ClaudeCodeAdapter(settings, parent_env=fake_agent_env())
+
+        outcome = run_experiment(self.world.config(), adapter_factory=build, now=fixed_now)
+        results = [json.loads(p.read_text(encoding="utf-8"))
+                   for p in sorted((outcome.directory / "runs").glob("*.result.json"))]
+        self.assertEqual([(r["case_id"], r["state"], r["answer_text"]) for r in results],
+                         [(QUESTION_ID, "answered", text)] * 6)
+        self.assertEqual(outcome.report["cases"], [])
+        self.assertEqual(outcome.report["questions"][0]["variants"][0]["answered"], 3)
 
 
 class VariantConfigTest(unittest.TestCase):

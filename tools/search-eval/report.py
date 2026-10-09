@@ -46,10 +46,11 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from agents.base import Cap, TokenUsage
-from score import FAILURE, SPOILED, SUCCESS
+from score import ANSWERED, FAILURE, SPOILED, SUCCESS, UNANSWERED
 
 INFRASTRUCTURE = "infrastructure"  # a run state the runner adds to score's three
 CLEAN_STATES = (SUCCESS, FAILURE)
+QUESTION_STATES = (ANSWERED, UNANSWERED)  # a question run is stored, not scored (KTD10)
 
 STATUS_COMPLETED = "completed"
 STATUS_INFRASTRUCTURE = "infrastructure_error"
@@ -68,6 +69,7 @@ ROLE_SUPPORT = "podpora"      # reader without the sources: only the corpus
 ROLE_DEVELOPER = "vyvojar"    # reader with the sources
 ROLES = (ROLE_SUPPORT, ROLE_DEVELOPER)
 NOT_MEASURED_IN_SUPPORT = "v roli podpora se neměří"
+QUESTION_NOTE = "hodnotí answers.py"  # why a question has no verdict in this report
 
 
 # --- inputs ------------------------------------------------------------------
@@ -76,10 +78,12 @@ NOT_MEASURED_IN_SUPPORT = "v roli podpora se neměří"
 class RunResult:
     """One executed attempt as the report reads it.
 
-    `state` is success, failure, spoiled or infrastructure. `reason` is the
-    failure reason (or the infrastructure message); `spoil_reasons` are the
-    audit findings as "kind: detail". `cap_hit` is the cap record as a dict
-    (`kind`, `limit`, `observed`, `overshoot`) or None.
+    `state` is success, failure, spoiled or infrastructure; a run of a question
+    is answered or unanswered (no score). `reason` is the failure reason (the
+    reason a question run has no answer, or the infrastructure message);
+    `spoil_reasons` are the audit findings as "kind: detail". `cap_hit` is the
+    cap record as a dict (`kind`, `limit`, `observed`, `overshoot`) or None.
+    `answer_text` is the agent's last top-level message of an answered question.
     """
 
     order: int
@@ -97,6 +101,7 @@ class RunResult:
     cap_hit: dict[str, Any] | None = None
     result_error: str | None = None
     transcript: str | None = None
+    answer_text: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -106,6 +111,7 @@ class RunResult:
             "answer": self.answer, "tokens": _tokens_json(self.tokens), "steps": self.steps,
             "wall_seconds": round(self.wall_seconds, 3), "cap_hit": self.cap_hit,
             "result_error": self.result_error, "transcript": self.transcript,
+            "answer_text": self.answer_text,
         }
 
 
@@ -146,15 +152,18 @@ class VariantInfo:
     card_format: str | None = None
     prompt_template: str = ""
     prompt_sha256: Mapping[str, str] = field(default_factory=dict)
+    question_prompt_template: str = ""
 
 
 @dataclass(frozen=True)
 class CaseInfo:
     """A case's identity and the two flags that set it apart (R1, R13).
 
-    `druh` is the catalog item kind. This navigation report describes only
+    `druh` is the catalog item kind. The navigation tallies describe only
     items of kind `chyba` (the only kind that existed before catalog format 2,
-    hence the default); `build_report` leaves out any other kind.
+    hence the default); `build_report` lists items of kind `otazka` apart, in
+    `questions`, with run counts and no score: their answers are judged by
+    `answers.py hodnot-odpovedi`.
     """
 
     id: str
@@ -252,6 +261,7 @@ def _difference(compared: Any, reference: Any) -> Any:
 def build_report(info: ExperimentInfo, results: Sequence[RunResult]) -> dict[str, Any]:
     """The whole report as a JSON-ready dict (see the module docstring)."""
     reference, compared = (v.name for v in info.variants)
+    question_ids = [c.id for c in info.cases if c.druh == "otazka"]
     info = replace(info, cases=tuple(c for c in info.cases if c.druh == "chyba"))
     cases = [_case_entry(case, info, results) for case in info.cases]
     by_id = {c["case_id"]: c for c in cases}
@@ -268,6 +278,7 @@ def build_report(info: ExperimentInfo, results: Sequence[RunResult]) -> dict[str
             "prompt_names_location": [c.id for c in info.cases if c.prompt_names_location],
         },
         "cases": cases,
+        "questions": [_question_entry(q, info, results) for q in question_ids],
         "spoiled_attempts": [
             {"order": r.order, "case_id": r.case_id, "variant": r.variant,
              "attempt": r.attempt, "reasons": list(r.spoil_reasons)}
@@ -315,6 +326,7 @@ def _variant_json(v: VariantInfo) -> dict[str, Any]:
         "name": v.name, "corpus_dir": v.corpus_dir, "corpus_receipt": v.corpus_receipt,
         "manifest_schema_version": v.manifest_schema_version, "card_format": v.card_format,
         "prompt_template": v.prompt_template, "prompt_sha256": dict(v.prompt_sha256),
+        "question_prompt_template": v.question_prompt_template,
     }
 
 
@@ -369,6 +381,25 @@ def _variant_entry(case_id: str, variant: str, info: ExperimentInfo,
     }
 
 
+def _question_entry(question_id: str, info: ExperimentInfo,
+                    results: Sequence[RunResult]) -> dict[str, Any]:
+    """Run counts of a question per variant: no score, the answers are judged later."""
+    variants = []
+    for v in info.variants:
+        mine = [r for r in results if r.case_id == question_id and r.variant == v.name]
+        stored = [r for r in mine if r.state in QUESTION_STATES][:RUNS_PER_VARIANT]
+        variants.append({
+            "variant": v.name,
+            "stored_runs": len(stored),
+            "answered": sum(1 for r in stored if r.state == ANSWERED),
+            "unanswered": sum(1 for r in stored if r.state == UNANSWERED),
+            "unanswered_reasons": [r.reason for r in stored if r.state == UNANSWERED],
+            "spoiled_attempts": sum(1 for r in mine if r.state == SPOILED),
+            "complete": len(stored) == RUNS_PER_VARIANT,
+        })
+    return {"question_id": question_id, "note": QUESTION_NOTE, "variants": variants}
+
+
 def _tally(cases: Sequence[Mapping[str, Any]]) -> dict[str, int]:
     tally = {WIN: 0, LOSS: 0, TIE: 0, INCOMPLETE: 0}
     for case in cases:
@@ -411,7 +442,8 @@ def not_claimed(info: ExperimentInfo) -> list[str]:
 
 _RESULT_CS = {WIN: "výhra", LOSS: "prohra", TIE: "remíza", INCOMPLETE: "neúplný"}
 _STATE_CS = {SUCCESS: "úspěch", FAILURE: "neúspěch", SPOILED: "zkažený",
-             INFRASTRUCTURE: "chyba infrastruktury"}
+             INFRASTRUCTURE: "chyba infrastruktury", ANSWERED: "odpověď",
+             UNANSWERED: "bez odpovědi"}
 _STATUS_CS = {
     STATUS_COMPLETED: "dokončen",
     STATUS_INFRASTRUCTURE: "přerušen chybou infrastruktury — výsledky jsou neúplné",
@@ -474,6 +506,7 @@ def render_markdown(data: Mapping[str, Any]) -> str:
             "remíza jsou z pohledu srovnávané varianty. Zpráva nestanoví práh úspěchu.", ""]
     out += _render_summary(data, ref, cmp_)
     out += _render_cases(data, ref, cmp_)
+    out += _render_questions(data)
     out += _render_spoiled(data)
     out += _render_cache(data)
     out += _render_money(data, ref, cmp_)
@@ -552,6 +585,24 @@ def _case_detail(case: Mapping[str, Any]) -> list[str]:
                 f"neúspěchy: {reasons}" + ("" if v["complete"] else " — neúplné")]
     if case["result"] == TIE:
         out += ["- Remíza: rozdíl nákladů je uvedený bez rozhodnutí."]
+    return out + [""]
+
+
+def _render_questions(data: Mapping[str, Any]) -> list[str]:
+    if not data["questions"]:
+        return []
+    out = ["## Otázky (volná odpověď)", "",
+           f"Odpověď na otázku se ukládá celá a neskóruje se ({QUESTION_NOTE}: podpříkaz "
+           "`hodnot-odpovedi`). Tabulka ukazuje jen počty uložených běhů.", ""]
+    rows = []
+    for question in data["questions"]:
+        for v in question["variants"]:
+            reasons = ", ".join(_REASON_CS.get(r, r or "?") for r in v["unanswered_reasons"])
+            rows.append([question["question_id"], v["variant"], v["stored_runs"], v["answered"],
+                         v["unanswered"] if not reasons else f"{v['unanswered']} ({reasons})",
+                         v["spoiled_attempts"], "ano" if v["complete"] else "ne"])
+    out += _table(["otázka", "varianta", "uložené běhy", "s odpovědí", "bez odpovědi",
+                   "zkažené pokusy", "úplné"], rows)
     return out + [""]
 
 
@@ -655,6 +706,9 @@ def _render_metadata(data: Mapping[str, Any]) -> list[str]:
                     f"formát karet: {v['card_format'] or 'neuvedený'}"]
         out += ["- Znění zadání (místo `{zadani_pripadu}` stojí zadání případu):", "",
                 "````text", v["prompt_template"], "````", ""]
+        if v.get("question_prompt_template"):
+            out += ["- Znění zadání otázky (místo `{zadani_pripadu}` stojí text otázky):", "",
+                    "````text", v["question_prompt_template"], "````", ""]
         out += _table(["případ", "otisk zadání (SHA-256)"],
                       [[case_id, digest] for case_id, digest in sorted(v["prompt_sha256"].items())])
         out += [""]

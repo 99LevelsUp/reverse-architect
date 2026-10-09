@@ -2,9 +2,9 @@
 
     python tools/search-eval/answers.py kontrola-karet --help
 
-The tool has subcommands. This unit delivers `kontrola-karet` (the card check:
-`card_check.py`); `hodnot-odpovedi`, `kontrola`, `zprava` and `kalibrace` are
-added by later units. Adding a subcommand takes three steps:
+The tool has subcommands. `kontrola-karet` is the card check (`card_check.py`),
+`hodnot-odpovedi` judges the agent's free answers to questions (KTD10), `kontrola`
+is the owner's review; `zprava` and `kalibrace` are added by later units. Adding a subcommand takes three steps:
 
 1. write `configure_<name>(parser)` (its own arguments) and
    `command_<name>(args, services) -> int` (the work; it raises the errors
@@ -27,19 +27,23 @@ the measurement stays `nedokonceno`).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 # Allow `python tools/search-eval/answers.py` from anywhere: the modules sit beside it.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import card_check  # noqa: E402
+import report  # noqa: E402
 import review  # noqa: E402
+import run as experiment  # noqa: E402
 from agents.base import AgentRunError  # noqa: E402
-from catalog import CatalogError, load_catalog  # noqa: E402
-from corpus import CorpusError, open_corpus  # noqa: E402
+from catalog import CatalogError, Question, load_catalog  # noqa: E402
+from corpus import CorpusError, same_revision, open_corpus  # noqa: E402
 from judge import (CliJudgeRunner, JudgeCache, JudgeCacheError, JudgeFileError,  # noqa: E402
                    JudgeRunner, JudgeUnavailableError, load_judges, select_judge)
 from prepare import PrepareError, ensure_outside, protected_roots, repo_toplevel  # noqa: E402
@@ -50,6 +54,18 @@ EXIT_INFRASTRUCTURE = 3
 EXIT_INTERRUPTED = 130
 
 ISOLATION_DIR = "izolace"
+ANSWERS_DIR = "odpovedi"
+
+# The agent family of each adapter that produced an experiment (the judge is chosen from
+# another family).
+AGENT_FAMILIES = {"claude-code": "claude"}
+# Why a stored run of a question has no answer, as the measurement words it.
+NO_ANSWER_REASONS = {
+    "no_answer": "běh skončil bez závěrečné zprávy",
+    "cap_steps": "běh zastavil strop kroků",
+    "cap_tokens": "běh zastavil strop tokenů",
+    "cap_time": "běh zastavil strop času",
+}
 
 
 class InputError(Exception):
@@ -159,6 +175,220 @@ def _checked_state_dir(source_repo: Path, state: Path) -> Path:
         raise InputError(str(exc)) from None
 
 
+# --- hodnot-odpovedi -------------------------------------------------------------------
+
+def configure_answers(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("pokus", type=Path, metavar="ADRESÁŘ_POKUSU",
+                        help="adresář pokusu z run.py (s report.json a runs/)")
+    req = parser.add_argument_group("povinné")
+    req.add_argument("--katalog", required=True, type=Path,
+                     help="katalog položek (JSON) mimo repozitář; otázky pokusu musí v něm být")
+    req.add_argument("--hodnotitele", required=True, type=Path,
+                     help="soubor hodnotitelů (JSON, formát 1)")
+    req.add_argument("--stav", required=True, type=Path,
+                     help="stavový adresář (cache hodnotitele, měření v podadresáři "
+                          f"{ANSWERS_DIR}/<pokus>/measurement.json); musí ležet mimo repozitáře")
+    parser.add_argument("--i-nedokonceny", action="store_true", dest="i_nedokonceny",
+                        help="přijme i pokus, který nemá stav completed (přerušený nebo zastavený "
+                             "chybou infrastruktury); měření to vyznačí")
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """What the answer check reads of an experiment directory (`report.json`, `runs/`)."""
+
+    directory: Path
+    id: str
+    status: str
+    role: str
+    adapter: str
+    base_revision: str
+    tree_fingerprint: str | None
+    variants: tuple[dict[str, Any], ...]
+    questions: tuple[str, ...]
+    runs: tuple[dict[str, Any], ...]  # the result files of the questions' runs, in order
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise InputError(f"Soubor {path} nejde načíst: {exc}") from None
+    except ValueError as exc:
+        raise InputError(f"Soubor {path} není platný JSON: {exc}") from None
+
+
+def load_attempt(directory: Path) -> Attempt:
+    """Read the experiment directory; anything that is not one is an input error."""
+    data = _read_json(directory / "report.json")
+    experiment_data = data.get("experiment") if isinstance(data, dict) else None
+    if (not isinstance(experiment_data, dict)
+            or data.get("format_version") != report.REPORT_FORMAT_VERSION):
+        raise InputError(f"{directory / 'report.json'} není zpráva pokusu podporovaného formátu "
+                         f"(čekám format_version {report.REPORT_FORMAT_VERSION}).")
+    try:
+        variants = tuple(dict(v) for v in experiment_data["variants"])
+        questions = tuple(q["question_id"] for q in data.get("questions", ()))
+        attempt = Attempt(
+            directory=directory, id=experiment_data["id"], status=experiment_data["status"],
+            role=experiment_data["role"], adapter=experiment_data["adapter"],
+            base_revision=experiment_data["base_revision"],
+            tree_fingerprint=experiment_data.get("tree_fingerprint"), variants=variants,
+            questions=questions, runs=())
+    except (KeyError, TypeError) as exc:
+        raise InputError(f"Zpráva pokusu {directory / 'report.json'} je neúplná "
+                         f"(chybí {exc}).") from None
+    runs = []
+    for path in sorted((directory / "runs").glob("*.result.json")):
+        result = _read_json(path)
+        if isinstance(result, dict) and result.get("case_id") in questions:
+            runs.append(result)
+    return Attempt(**{**attempt.__dict__, "runs": tuple(runs)})
+
+
+def _check_attempt(attempt: Attempt, questions: dict[str, Question], accept_unfinished: bool
+                   ) -> str:
+    """Refuse an attempt the check cannot take; return the agent's family."""
+    if attempt.status != report.STATUS_COMPLETED and not accept_unfinished:
+        raise InputError(f"Pokus {attempt.id} má stav „{attempt.status}“, ne „completed“; "
+                         "jeho odpovědi se nehodnotí. Přepínač --i-nedokonceny je přijme a měření "
+                         "to vyznačí.")
+    if attempt.role not in report.ROLES:
+        raise InputError(f"Pokus má neznámou roli „{attempt.role}“.")
+    family = AGENT_FAMILIES.get(attempt.adapter)
+    if family is None:
+        raise InputError(f"Pokus běžel přes neznámý adaptér „{attempt.adapter}“, rodina agenta "
+                         "se nedá určit a hodnotitel by se nedal vybrat z jiné rodiny.")
+    if not attempt.questions:
+        raise InputError(f"Pokus {attempt.id} neměřil žádnou otázku; není co hodnotit.")
+    revisions = [("pokus", attempt.base_revision)] + [
+        (f"korpus varianty {v.get('name')}", v["corpus_receipt"].get("base_revision"))
+        for v in attempt.variants if isinstance(v.get("corpus_receipt"), dict)]
+    for question_id in attempt.questions:
+        question = questions.get(question_id)
+        if question is None:
+            raise InputError(f"Otázka „{question_id}“ z pokusu není v katalogu.")
+        for what, revision in revisions:
+            if not isinstance(revision, str) or not same_revision(revision, question.commit):
+                raise InputError(f"Otázka „{question_id}“ je v katalogu nad commitem "
+                                 f"{question.commit}, ale {what} vznikl nad revizí {revision}.")
+        for variant in attempt.variants:
+            template = variant.get("question_prompt_template")
+            expected = (variant.get("prompt_sha256") or {}).get(question_id)
+            if template and expected:
+                prompt = experiment.build_prompt(template, question)
+                if hashlib.sha256(prompt.encode("utf-8")).hexdigest() != expected:
+                    raise InputError(f"Zadání otázky „{question_id}“ v katalogu neodpovídá "
+                                     f"zadání, které dostal agent ve variantě "
+                                     f"{variant.get('name')}; katalog se od pokusu změnil.")
+    return family
+
+
+def _answer_runs(attempt: Attempt) -> list[card_check.AnswerRun]:
+    """The stored runs the check judges: the first three of each question and variant."""
+    out: list[card_check.AnswerRun] = []
+    for question_id in attempt.questions:
+        for variant in attempt.variants:
+            mine = [r for r in attempt.runs if r["case_id"] == question_id
+                    and r["variant"] == variant["name"] and r["state"] in report.QUESTION_STATES]
+            for result in mine[:report.RUNS_PER_VARIANT]:
+                text = result.get("answer_text")
+                if result["state"] == report.ANSWERED and isinstance(text, str) and text.strip():
+                    out.append(card_check.AnswerRun(question_id, variant["name"], result["order"],
+                                                    text))
+                    continue
+                reason = result.get("reason") or "no_answer"
+                out.append(card_check.AnswerRun(question_id, variant["name"], result["order"],
+                                                None, NO_ANSWER_REASONS.get(reason, reason)))
+    return out
+
+
+def _receipt_summary(variant: dict[str, Any]) -> dict[str, Any]:
+    receipt = variant.get("corpus_receipt")
+    keep = ("base_revision", "tree_fingerprint", "ra_version", "options", "corpus_fingerprint")
+    return {"nazev": variant.get("name"),
+            "korpus": {k: receipt.get(k) for k in keep} if isinstance(receipt, dict) else None}
+
+
+def _answers_digest(runs: Sequence[card_check.AnswerRun]) -> str:
+    rows = [[r.run, r.question_id, r.variant,
+             None if r.text is None else hashlib.sha256(r.text.encode("utf-8")).hexdigest()]
+            for r in runs]
+    return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+def command_answers(args: argparse.Namespace, services: Services) -> int:
+    state = _checked_state_dir(args.source_repo, args.stav)
+    attempt = load_attempt(args.pokus)
+    catalog = load_catalog(args.katalog)
+    family = _check_attempt(attempt, {q.id: q for q in catalog.questions}, args.i_nedokonceny)
+    runs = _answer_runs(attempt)
+    if not runs:
+        raise InputError(f"Pokus {attempt.id} nemá žádný uložený běh otázky.")
+    judges = load_judges(args.hodnotitele)
+    runner = services.runner or CliJudgeRunner(isolation_root=state / ISOLATION_DIR,
+                                               keep_apart=(attempt.directory,))
+    selection = select_judge(judges, family, runner)
+
+    unfinished = attempt.status != report.STATUS_COMPLETED
+    corpus = {"revision": attempt.base_revision, "source": card_check.ANSWER_PATH,
+              "label": f"odpovědi pokusu {attempt.id}", "tree_fingerprint": attempt.tree_fingerprint,
+              "pokus": attempt.id, "role": attempt.role, "odpovedi": _answers_digest(runs),
+              "varianty": [_receipt_summary(v) for v in attempt.variants]}
+    extra = {"pokus": {
+        "id": attempt.id, "stav": attempt.status, "nedokonceny": unfinished, "role": attempt.role,
+        "adapter": attempt.adapter, "rodina_agenta": family,
+        "behy": [{"run": r.run, "otazka": r.question_id, "varianta": r.variant,
+                  "odpoved": r.text is not None} for r in runs],
+        "bez_odpovedi": [{"run": r.run, "otazka": r.question_id, "varianta": r.variant,
+                          "duvod": r.reason} for r in runs if r.text is None]}}
+
+    path = card_check.measurement_path(state / ANSWERS_DIR / attempt.directory.name)
+    plan_id = None
+    moved = None
+
+    def save(measurement: card_check.Measurement) -> None:
+        nonlocal plan_id, moved
+        if plan_id != measurement.id:
+            plan_id = measurement.id
+            moved = card_check.archive_foreign_measurement(path, measurement.id)
+        card_check.write_measurement(path, measurement)
+
+    def progress(done: int, total: int, unit: card_check.UnitResult) -> None:
+        if unit.state == card_check.STATE_PENDING:
+            return
+        print(f"[{done}/{total}] {unit.id}: {unit.final_label or unit.state}")
+
+    try:
+        measurement = card_check.run_answer_check(
+            catalog, runs, attempt.role, corpus, extra, selection, runner,
+            JudgeCache(state / card_check.JUDGE_CACHE_DIR), save=save, progress=progress)
+    except (AgentRunError, JudgeCacheError, KeyboardInterrupt):
+        print(f"Měření je uložené jako nedokončené: {path}. Stejný příkaz pokračuje z cache "
+              "hodnotitele.", file=sys.stderr)
+        raise
+    if moved is not None:
+        print(f"Dřívější měření jiného vstupu uloženo jako {moved}.")
+    print(_answers_summary(measurement, attempt, len(runs)))
+    print(f"Měření: {path}")
+    return EXIT_DONE
+
+
+def _answers_summary(measurement: card_check.Measurement, attempt: Attempt, run_count: int) -> str:
+    results = measurement.results()
+    counts: dict[str, int] = {}
+    for fact in results.facts:
+        counts[fact.status] = counts.get(fact.status, 0) + 1
+    missing = len(measurement.extra["pokus"]["bez_odpovedi"])
+    lines = [f"Hodnocení odpovědí hotové: {run_count} běhů ({missing} bez odpovědi), "
+             f"{len(results.facts)} výsledků faktů, {len(results.claims)} zakázaných tvrzení, "
+             f"{len(measurement.units)} jednotek."]
+    if attempt.status != report.STATUS_COMPLETED:
+        lines.append(f"Pozor: pokus má stav „{attempt.status}“ a měření to vyznačuje.")
+    lines += [f"  {status}: {count}" for status, count in sorted(counts.items())]
+    return "\n".join(lines)
+
+
 # --- kontrola --------------------------------------------------------------------------
 
 def configure_review(parser: argparse.ArgumentParser) -> None:
@@ -210,6 +440,10 @@ SUBCOMMANDS: tuple[Subcommand, ...] = (
     Subcommand("kontrola",
                "soubor ke kontrole vlastníka (sporné jednotky a vzorek) a načtení jeho rozhodnutí",
                configure_review, command_review),
+    Subcommand("hodnot-odpovedi",
+               "ohodnotí volné odpovědi agenta na otázky z pokusu run.py proti faktům "
+               "a zakázaným tvrzením katalogu",
+               configure_answers, command_answers),
 )
 
 
