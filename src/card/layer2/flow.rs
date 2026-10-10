@@ -11,10 +11,12 @@
 //! fields** (any path not rooted at a local) and **calls written as a
 //! statement whose result goes nowhere**, events raised (`X?.Invoke(…)`)
 //! included; they run even when the guard stops the rest, so they are the
-//! guard's **effects**. The first top-level statement that is neither — a
-//! local declared (`var x = Load();`, even from a construction), a loop, a
-//! choice that is no guard, a `return` with a value — is the **main work**,
-//! and no `if` after it is a precondition.
+//! guard's **effects**. A local written a construction or a constant
+//! (`var evt = new CancelEventArgs();`, `var n = 0;`) has no effect beyond
+//! the member: it is neither an effect nor the main work. The first top-level
+//! statement that is none of these — a local written anything else
+//! (`var x = Load();`), a loop, a choice that is no guard, a `return` with a
+//! value — is the **main work**, and no `if` after it is a precondition.
 //!
 //! A body is followed into a callee only through its main work: when the
 //! statements after its last guard are one call of a member of the type,
@@ -29,13 +31,12 @@
 //! [`super::bind_construction`]) gives preconditions too: an `if (c) return
 //! false;` at its top level gives `c`, and the predicate it returns is split
 //! into its top-level conjuncts, each turned by De Morgan into “does not run
-//! when” (`(a || b) && c` → `!a && !b`, `!c`). Contract 0.3 gives a returned
-//! expression no `expr` tree — only an arm, a loop, a `switch` subject and a
-//! catch filter carry a [`Condition`] — so the predicate is read from the
-//! `condition` of its `return` node when a component gives one, from a lone
-//! read (`p => canErrors`), or by following a lone call into a member of the
-//! type (`p => CanCheck()`); anything else is admitted as
-//! [`Gap::PredicateNotInModel`].
+//! when” (`(a || b) && c` → `!a && !b`, `!c`). The predicate is read from
+//! the [`Condition`] a component gives the `return` node of a returned
+//! expression that is no constant (`return …;`, a member's `=> …`, a
+//! lambda's `p => …`), from a lone read (`p => canErrors`), or by following
+//! a lone call into a member of the type (`p => CanCheck()`, `return
+//! CanCheck();`); anything else is admitted as [`Gap::PredicateNotInModel`].
 //!
 //! Equal conditions are **one precondition** ([`Cond`]): the trees are
 //! compared after negations are pushed to the leaves and the operands of
@@ -505,8 +506,9 @@ pub enum Gap {
     /// The main work calls a member of an ancestor; its preconditions are
     /// not followed.
     Ancestor(NodeKey),
-    /// A CanExecute predicate the model gives no tree of (contract 0.3 gives
-    /// a returned expression none).
+    /// A CanExecute predicate the model gives no tree of: the component gave
+    /// its returned expression none, or it is a call of nothing the type
+    /// declares.
     PredicateNotInModel,
 }
 
@@ -765,8 +767,8 @@ fn invocations_at(body: &MemberBody, node: u32) -> impl Iterator<Item = &Invocat
 }
 
 /// A node whose `condition` decides a branch: an arm, a `switch` subject, a
-/// loop, a catch filter. The `condition` a component may give a `return`
-/// node is a predicate's value ([`returned`]), not a test the states and the
+/// loop, a catch filter. The `condition` a component gives a `return` node
+/// is the returned value ([`returned`]), not a test the states and the
 /// guarding members are read from.
 fn carries_condition(n: &BodyNode) -> bool {
     matches!(
@@ -831,11 +833,45 @@ enum Class<'b> {
     /// Field writes and calls whose result goes nowhere: their effects, and
     /// the call when the statement is one call alone.
     Precursor(Vec<Effect>, Option<&'b Invocation>),
+    /// Locals written a construction or a constant: no effect beyond the
+    /// member, no main work.
+    Local,
     Work,
 }
 
 fn is_raise(callee: &AccessPath) -> bool {
     callee.segments.len() >= 2 && callee.segments.last().is_some_and(|s| s == "Invoke")
+}
+
+/// Whether a statement only writes locals a construction or a constant
+/// (`var evt = new CancelEventArgs();`, `var n = 0;`) and calls nothing but
+/// those constructions. A parameter of the member is no local here: an `out`
+/// or `ref` one reaches the caller.
+fn writes_locals_only(body: &MemberBody, writes: &[&MemberAccess], invs: &[&Invocation]) -> bool {
+    let parameter = |name: &str| {
+        body.typed_names
+            .iter()
+            .any(|t| t.kind == DeclarationKind::Parameter && t.scope.is_none() && t.name == name)
+    };
+    let locals: Vec<&str> = writes
+        .iter()
+        .filter_map(
+            |w| match (w.target.root, w.target.segments.as_slice(), &w.rhs) {
+                (
+                    PathRoot::Local,
+                    [name],
+                    Some(ValueRef::Construction(_) | ValueRef::Constant(_)),
+                ) if !parameter(name) => Some(name.as_str()),
+                _ => None,
+            },
+        )
+        .collect();
+    !writes.is_empty()
+        && locals.len() == writes.len()
+        && invs.iter().all(|i| {
+            i.kind == CallKind::Construct
+                && matches!(&i.flow, Some(FlowTarget::Local(l)) if locals.contains(&l.as_str()))
+        })
 }
 
 fn classify<'b>(at: Loc<'b>, n: &'b BodyNode) -> Class<'b> {
@@ -850,6 +886,9 @@ fn classify<'b>(at: Loc<'b>, n: &'b BodyNode) -> Class<'b> {
                 .filter(|a| a.mode == AccessMode::Write)
                 .collect();
             let invs: Vec<&Invocation> = invocations_at(body, n.id).collect();
+            if writes_locals_only(body, &writes, &invs) {
+                return Class::Local;
+            }
             if writes
                 .iter()
                 .any(|w| matches!(w.target.root, PathRoot::Local | PathRoot::Expression))
@@ -928,6 +967,7 @@ fn scan<'b>(at: Loc<'b>, node: u32) -> Scan<'b> {
                 after.push((tail.map(|t| (t, k.id)), effects.len()));
                 effects.extend(e);
             }
+            Class::Local => {}
             Class::Work => {
                 work = true;
                 break;
@@ -951,18 +991,20 @@ enum Returned<'b> {
     Read(&'b AccessPath),
     /// One call alone (`p => CanCheck()`).
     Call(&'b Invocation),
-    /// Anything else: contract 0.3 gives no tree of a returned expression.
+    /// Anything else: the component gave the returned expression no tree.
     NotInModel,
 }
 
 fn returned<'b>(body: &'b MemberBody, r: &BodyNode) -> Returned<'b> {
-    if let Some(c) = r
+    let tree = r
         .condition
         .as_ref()
-        .and_then(|c| Cond::of(c, &body.literals))
-    {
-        return Returned::Tree(c);
-    }
+        .and_then(|c| Cond::of(c, &body.literals));
+    // A lone call is followed into the member it calls, not read as a tree.
+    let tree = match tree {
+        Some(Cond::Call(..)) | None => tree,
+        Some(c) => return Returned::Tree(c),
+    };
     if r.returns.is_some() {
         return Returned::Constant;
     }
@@ -980,7 +1022,7 @@ fn returned<'b>(body: &'b MemberBody, r: &BodyNode) -> Returned<'b> {
         {
             Returned::Call(inv)
         }
-        _ => Returned::NotInModel,
+        _ => tree.map_or(Returned::NotInModel, Returned::Tree),
     }
 }
 

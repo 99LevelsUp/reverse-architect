@@ -78,7 +78,10 @@
 //!   member returns a value (a method not declared `void`, a getter, an
 //!   expression-bodied property). A lambda's expression body is a `statement`
 //!   when it is an invocation, an assignment, `++`/`--`, `await` or a
-//!   construction, and a `return` otherwise.
+//!   construction, and a `return` otherwise. A `return` node's value is its
+//!   `returns` when it is a constant and its `condition` (the tree an arm's
+//!   condition has) otherwise, whether or not it is a test: `return x && y;`
+//!   and `return items.Count;` both have one.
 //!
 //! A callee the syntax cannot spell as a path (`items.Where(…).Select(…)`,
 //! `GetX().Run()`) has root `expression` and the names written after the
@@ -1599,9 +1602,9 @@ impl<'t> Builder<'t> {
             "return_statement" => {
                 let r = self.add_at(NodeKind::Return, node, parent);
                 if let Some(e) = node.named_child(0) {
-                    self.nodes[r as usize].returns = constant_of(e, self.src);
                     let ctx = self.return_ctx(r);
                     self.expr(e, ctx);
+                    self.returned(r, e);
                 }
             }
             "throw_statement" => {
@@ -1787,14 +1790,27 @@ impl<'t> Builder<'t> {
         }
     }
 
+    /// The value `e` the `return` node `r` returns: a constant is its
+    /// `returns`, anything else its `condition`, so a predicate can be read
+    /// as a tree. After [`Self::expr`]: the tree's literals are the walk's.
+    fn returned(&mut self, r: u32, e: Node<'t>) {
+        match constant_of(e, self.src) {
+            Some(c) => self.nodes[r as usize].returns = Some(c),
+            None => {
+                let condition = self.condition(e);
+                self.nodes[r as usize].condition = Some(condition);
+            }
+        }
+    }
+
     /// `=> e` as the body under `root`: the `return` (or, for a member that
     /// returns nothing, the statement) `{ return e; }` would hold.
     fn expression_body(&mut self, e: Node<'t>, root: u32, returns_value: bool) {
         if returns_value {
             let r = self.add_at(NodeKind::Return, e, root);
-            self.nodes[r as usize].returns = constant_of(e, self.src);
             let ctx = self.return_ctx(r);
             self.expr(e, ctx);
+            self.returned(r, e);
         } else {
             let s = self.add_at(NodeKind::Statement, e, root);
             self.expr(e, Ctx::plain(s));
@@ -2973,10 +2989,10 @@ impl<'t> Builder<'t> {
                     NodeKind::Statement
                 };
                 let s = self.add_at(kind, e, body_node);
-                if returns {
-                    self.nodes[s as usize].returns = constant_of(e, self.src);
-                }
                 self.expr(e, Ctx::plain(s));
+                if returns {
+                    self.returned(s, e);
+                }
             }
             None => {}
         }

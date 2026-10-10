@@ -1403,7 +1403,6 @@ const FLOW: &str = r#"namespace Acme.Flow
         private readonly Action<object> _execute;
         private readonly Predicate<object> _canExecute;
         private Action pre;
-        private CancelArgs evt;
         private bool busy;
         public event EventHandler ExecutingStarted;
         public RelayCommand(Action<object> execute) : this(execute, null) { }
@@ -1415,6 +1414,7 @@ const FLOW: &str = r#"namespace Acme.Flow
         public bool CanExecute(object parameter) { return _canExecute == null || _canExecute(parameter); }
         public void Execute(object p)
         {
+            var evt = new CancelEventArgs();
             SetBusyState();
             pre?.Invoke();
             ExecutingStarted?.Invoke(this, evt);
@@ -1495,6 +1495,34 @@ const FLOW: &str = r#"namespace Acme.Flow
         object Fetch() { return data; }
     }
 
+    public class AcmeRead
+    {
+        private object data;
+        public void Read() { var x = Load(); if (x == null) return; data = x; }
+        object Load() { return data; }
+    }
+
+    public class AcmeFresh
+    {
+        private int state;
+        public void Start() { var n = 0; var args = new CancelEventArgs(); if (state == 0) return; state = n; }
+    }
+
+    public class AcmeOut
+    {
+        private int state;
+        public void Fill(out object r) { r = null; if (state == 0) return; r = state; }
+    }
+
+    public class AcmeGate
+    {
+        private bool busy;
+        public RelayCommand RunCommand => new RelayCommand(p => Run(), p => CanRun());
+        public void Run() { busy = true; }
+        bool CanRun() { return Ready(); }
+        bool Ready() => !busy;
+    }
+
     public class AcmeLater
     {
         private int state;
@@ -1554,8 +1582,8 @@ fn texts(flow: &FunctionalityFlow) -> Vec<&str> {
 
 /// AE1: the check has each precondition once — the guards of `Check(bool)`,
 /// reached from the command's lambda through `Check()` → `Check(bool)` (by
-/// arity) — the CanExecute predicate the model gives no tree of is admitted,
-/// not dropped, and `syntaxOnly` chooses `Syntax` instead of `Check`.
+/// arity) — nothing of the CanExecute predicate is admitted, and
+/// `syntaxOnly` chooses `Syntax` instead of `Check`.
 #[test]
 fn the_check_has_each_precondition_once_and_its_parameter_chooses_the_check() {
     let (_, analysis) = flow_analysis();
@@ -1578,15 +1606,9 @@ fn the_check_has_each_precondition_once_and_its_parameter_chooses_the_check() {
         assert_eq!(guard.place.path, "src/Flow.cs");
         assert!(guard.place.range.start.line > 1);
     }
-    // The CanExecute predicate is a returned expression: contract 0.3 gives
-    // it no tree, so it is admitted at its lambda.
-    let checks: Vec<&Gap> = flow
-        .admitted
-        .iter()
-        .filter(|a| a.member == key(FLOW_NS, "EditorViewModel.CheckCommand"))
-        .map(|a| &a.gap)
-        .collect();
-    assert_eq!(checks, [&Gap::PredicateNotInModel]);
+    // The CanExecute predicate is read from the tree of its lambda's
+    // returned expression: nothing is admitted.
+    assert!(flow.admitted.is_empty(), "{:#?}", flow.admitted);
 
     // `syntaxOnly` chooses `Syntax` instead of `Check`.
     let choice = flow
@@ -1644,6 +1666,153 @@ fn the_check_has_each_precondition_once_and_its_parameter_chooses_the_check() {
     );
 }
 
+/// From the C# source to the analysis: the CanExecute lambda
+/// `p => (syntax == SyntaxKind.Sql || syntax == SyntaxKind.Script) &&
+/// canErrors`, read from the tree the component gives its returned
+/// expression, and the guards `!canErrors` and `syntax != SyntaxKind.Sql &&
+/// syntax != SyntaxKind.Script` of `Check(bool)` give the check each
+/// precondition once, found twice by the check: by the predicate and by the
+/// guard. (`QuickCommand`, clustered with the check through `canErrors`,
+/// adds its own two places to `!canErrors`.)
+#[test]
+fn the_can_execute_lambda_and_the_guards_give_each_precondition_once() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModel", "CheckCommand");
+    let all: BTreeSet<&str> = texts(flow).into_iter().collect();
+    assert_eq!(texts(flow).len(), 2, "{:?}", texts(flow));
+    assert_eq!(
+        all,
+        [
+            "!canErrors",
+            "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script"
+        ]
+        .into_iter()
+        .collect()
+    );
+    let command = key(FLOW_NS, "EditorViewModel.CheckCommand");
+    let check_bool = key(FLOW_NS, "EditorViewModel.Check(bool)");
+    for p in &flow.preconditions {
+        let found: Vec<(Source, &NodeKey)> = p
+            .occurrences
+            .iter()
+            .map(|o| (o.source, &o.member))
+            .filter(|(_, m)| *m == &command || *m == &check_bool)
+            .collect();
+        assert_eq!(
+            found,
+            [(Source::CanExecute, &command), (Source::Guard, &check_bool)],
+            "{}: {:#?}",
+            p.text,
+            p.occurrences
+        );
+    }
+    let syntax = precondition(
+        flow,
+        "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+    );
+    assert_eq!(syntax.occurrences.len(), 2, "{:#?}", syntax.occurrences);
+    assert!(flow.admitted.is_empty(), "{:#?}", flow.admitted);
+}
+
+/// The editor's check alone: the command class, the lazy command with its
+/// CanExecute lambda, `Check()` → `Check(bool)` with its two guards.
+const CHECK: &str = r#"namespace Acme.Check
+{
+    public enum SyntaxKind { Sql, Script, Text }
+
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        private readonly Predicate<object> _canExecute;
+        public RelayCommand(Action<object> execute, Predicate<object> canExecute)
+        {
+            _execute = execute;
+            _canExecute = canExecute;
+        }
+        public bool CanExecute(object parameter) { return _canExecute == null || _canExecute(parameter); }
+        public void Execute(object p) { _execute(p); }
+    }
+
+    public class EditorViewModel
+    {
+        private RelayCommand checkCommand;
+        private bool canErrors;
+        private SyntaxKind syntax;
+        public bool CheckWasDone;
+        public RelayCommand CheckCommand
+        {
+            get
+            {
+                if (checkCommand == null) checkCommand = new RelayCommand(p => Check(), p => (syntax == SyntaxKind.Sql || syntax == SyntaxKind.Script) && canErrors);
+                return checkCommand;
+            }
+        }
+        public void Check() { Check(false); }
+        void Check(bool syntaxOnly)
+        {
+            if (!canErrors) return;
+            if (syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script) return;
+            CheckWasDone = true;
+        }
+    }
+}
+"#;
+
+/// The same on the check alone, from its C# source to the analysis: each
+/// precondition exactly twice, by the CanExecute lambda and by the guard of
+/// `Check(bool)`, nothing admitted.
+#[test]
+fn the_check_alone_has_each_precondition_from_the_predicate_and_the_guard() {
+    const NS: &str = "sym:csharp:Acme.Check#";
+    let (_, analysis) = analyzed(&[("src/Check.cs", CHECK)]);
+    let t = type_of(&analysis, &key(NS, "EditorViewModel"));
+    let f = functionality(t, &format!("{NS}EditorViewModel.CheckCommand"));
+    let flow = t.flow_of(&f.key).expect("the check's flow");
+    let mut all = texts(flow);
+    all.sort();
+    assert_eq!(
+        all,
+        [
+            "!canErrors",
+            "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script"
+        ]
+    );
+    let command = key(NS, "EditorViewModel.CheckCommand");
+    let check_bool = key(NS, "EditorViewModel.Check(bool)");
+    for p in &flow.preconditions {
+        let found: Vec<(Source, &NodeKey)> = p
+            .occurrences
+            .iter()
+            .map(|o| (o.source, &o.member))
+            .collect();
+        assert_eq!(
+            found,
+            [(Source::CanExecute, &command), (Source::Guard, &check_bool)],
+            "{}: {:#?}",
+            p.text,
+            p.occurrences
+        );
+    }
+    assert!(flow.admitted.is_empty(), "{:#?}", flow.admitted);
+}
+
+/// A CanExecute method returning a call of the type's own member is followed
+/// into it, not read as the call: `CanRun()` → `Ready()` → `!busy`.
+#[test]
+fn a_predicate_returning_an_own_call_is_followed_into_it() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "AcmeGate", "RunCommand");
+    assert_eq!(texts(flow), ["busy"]);
+    assert_eq!(
+        flow.preconditions[0].occurrences[0].via,
+        [
+            key(FLOW_NS, "AcmeGate.CanRun()"),
+            key(FLOW_NS, "AcmeGate.Ready()")
+        ]
+    );
+    assert!(flow.admitted.is_empty(), "{:#?}", flow.admitted);
+}
+
 /// Guards after the write `CheckWasDone = false;` are preconditions, and the
 /// write is an effect of the path they stop.
 #[test]
@@ -1673,10 +1842,11 @@ fn a_guard_after_a_field_write_is_a_precondition_with_the_write_as_its_effect() 
     }
 }
 
-/// `Execute` of a command class: `SetBusyState(); pre?.Invoke();
-/// ExecutingStarted?.Invoke(this, evt); if (evt.Cancel) return;
-/// _execute(p);` has the precondition `evt.Cancel` once, with the call and
-/// both raised events as the effects of the path it stops.
+/// `Execute` of a command class: `var evt = new CancelEventArgs();
+/// SetBusyState(); pre?.Invoke(); ExecutingStarted?.Invoke(this, evt); if
+/// (evt.Cancel) return; _execute(p);` has the precondition `evt.Cancel` once,
+/// with the call and both raised events as the effects of the path it stops;
+/// the local constructed first is neither an effect nor the main work.
 #[test]
 fn execute_of_a_command_class_has_its_cancel_guard_and_the_events_raised_before_it() {
     let (_, analysis) = flow_analysis();
@@ -1715,6 +1885,27 @@ fn an_assigned_call_is_main_work_and_a_call_after_it_passes_nothing() {
     let now = flow_of(&analysis, "AcmeNow", "Direct()");
     let p = precondition(now, "state == 0");
     assert_eq!(p.occurrences[0].via, [key(FLOW_NS, "AcmeNow.Guarded()")]);
+}
+
+/// A local written a call (`var x = Load();`) is the main work, so the `if`
+/// after it is no precondition; locals written a constant or a construction
+/// (`var n = 0; var args = new CancelEventArgs();`) are not, and the guard
+/// after them is one, with no effect.
+#[test]
+fn a_local_from_a_call_is_main_work_and_one_from_a_constant_or_a_construction_is_not() {
+    let (_, analysis) = flow_analysis();
+    let read = flow_of(&analysis, "AcmeRead", "Read()");
+    assert!(read.preconditions.is_empty(), "{:?}", texts(read));
+    assert!(read.admitted.is_empty());
+    let start = flow_of(&analysis, "AcmeFresh", "Start()");
+    assert_eq!(texts(start), ["state == 0"]);
+    let o = &start.preconditions[0].occurrences;
+    assert_eq!(o.len(), 1, "{o:#?}");
+    assert_eq!(o[0].source, Source::Guard);
+    assert!(o[0].effects.is_empty(), "{:?}", o[0].effects);
+    // A parameter written a constant reaches the caller (`out`): main work.
+    let fill = flow_of(&analysis, "AcmeOut", "Fill(object)");
+    assert!(fill.preconditions.is_empty(), "{:?}", texts(fill));
 }
 
 /// `Check()` → `Check(bool)` by arity; two overloads of one arity, and a

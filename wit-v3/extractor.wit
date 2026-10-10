@@ -620,7 +620,10 @@ interface types {
         /// The enclosing node, `none` for the root.
         parent: option<u32>,
         /// The condition of a choice, an arm, a loop, or a catch filter
-        /// (`catch (E e) when (…)`). A `switch` choice's condition is its
+        /// (`catch (E e) when (…)`); and the returned expression of a
+        /// `return` or an expression body (a member's `=> …`, a lambda's
+        /// `p => …`) when it is not a constant, so a predicate can be read
+        /// as a tree. A `switch` choice's condition is its
         /// subject and each arm's is its label (`SyntaxKind.Sql`), so the
         /// arm is taken when subject equals label; a `when` guard on a case is
         /// joined to the label with `and`.
