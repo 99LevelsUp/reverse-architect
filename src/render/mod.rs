@@ -35,6 +35,19 @@ pub fn build_corpus(
     links: LinkStyle,
     profile: Option<&str>,
 ) -> Result<Corpus, crate::taxonomy::profile::UnknownProfile> {
+    build_corpus_with(graph, links, profile, None)
+}
+
+/// [`build_corpus`] with the summary of the run's second layer (plan 2b, U8:
+/// KTD12): with it, the view `entry-points` carries the line of trigger
+/// coverage, linking the registry, right before its caveat E9; with `None`
+/// every byte is [`build_corpus`]'s.
+pub fn build_corpus_with(
+    graph: &Graph,
+    links: LinkStyle,
+    profile: Option<&str>,
+    layer2: Option<&crate::card::triggers::TriggerCoverage>,
+) -> Result<Corpus, crate::taxonomy::profile::UnknownProfile> {
     let views = taxonomy::select_views(graph, profile)?;
 
     let entries: Vec<MapEntry> = views
@@ -51,9 +64,19 @@ pub fn build_corpus(
     }];
 
     for view in &views {
-        let lens = lens::compose(view, graph);
+        let mut lens = lens::compose(view, graph);
+        let path = format!("{}.md", view.id);
+        if let (Some(coverage), taxonomy::views::ENTRY_POINTS_VIEW) = (layer2, view.id) {
+            let line = coverage.entry_points_line(&path, links);
+            for section in &mut lens.sections {
+                if taxonomy::views::insert_before_entry_caveat(&mut section.instances, line.clone())
+                {
+                    break;
+                }
+            }
+        }
         files.push(RenderedFile {
-            path: format!("{}.md", view.id),
+            path,
             contents: markdown::render_leaf(&lens),
         });
     }

@@ -3,6 +3,7 @@
 mod common;
 
 use common::init_repo_with_files;
+use reverse_architect::card::triggers::{REGISTRY_PATH, TRIGGERS_ID, TRIGGERS_KIND};
 use reverse_architect::extract::{run_all, trust_ranks, Repo};
 use reverse_architect::graph::{merge, Graph};
 use reverse_architect::manifest::{
@@ -963,26 +964,7 @@ fn a_detail_and_a_map_are_documents_with_their_level_parent_and_embed() {
     assert_eq!(map.embed, None, "a map may be embedded");
     assert_eq!(map.path, "cards/map/src/Geo.md");
 
-    // Every rendered card, map and detail has its document, and nothing
-    // else is one: the documents name exactly the files the run writes.
-    let paths = |level: &str| -> Vec<String> {
-        let mut v: Vec<String> = manifest
-            .documents
-            .iter()
-            .filter(|d| d.level.as_deref() == Some(level))
-            .map(|d| d.path.clone())
-            .collect();
-        v.sort();
-        v
-    };
-    let written = |files: &[reverse_architect::render::RenderedFile]| -> Vec<String> {
-        let mut v: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-        v.sort();
-        v
-    };
-    assert_eq!(paths("detail"), written(&generated.details));
-    assert_eq!(paths("map"), written(&generated.maps));
-    assert_eq!(paths("card"), written(&generated.cards));
+    assert_documents_name_the_written_files(&generated);
     assert!(manifest
         .documents
         .iter()
@@ -1057,15 +1039,134 @@ fn every_card_detail_and_map_document_carries_the_full_context_header() {
         "a map's header is its module card's"
     );
 
-    // Every card, map and detail has one; no view and no page does.
+    assert_header_on_every_level_but_the_registry(&manifest);
+}
+
+/// Every rendered card, map and detail has its document, and nothing else is
+/// one: the documents name exactly the files the run writes. The registry of
+/// triggers (plan 2b, U7) is at the level `map` and maps no module, so it is
+/// held apart: its one document names the one file it is, and only a run
+/// with the second layer has it.
+fn assert_documents_name_the_written_files(generated: &reverse_architect::Generated) {
+    let manifest = &generated.manifest;
+    let registry =
+        |d: &&reverse_architect::manifest::ManifestDoc| d.kind.as_deref() == Some(TRIGGERS_KIND);
+    let paths = |level: &str| -> Vec<String> {
+        let mut v: Vec<String> = manifest
+            .documents
+            .iter()
+            .filter(|d| d.level.as_deref() == Some(level))
+            .filter(|d| !registry(d))
+            .map(|d| d.path.clone())
+            .collect();
+        v.sort();
+        v
+    };
+    let written = |files: &[reverse_architect::render::RenderedFile]| -> Vec<String> {
+        let mut v: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(paths("detail"), written(&generated.details));
+    assert_eq!(paths("map"), written(&generated.maps));
+    assert_eq!(paths("card"), written(&generated.cards));
+    let registries: Vec<String> = manifest
+        .documents
+        .iter()
+        .filter(registry)
+        .map(|d| d.path.clone())
+        .collect();
+    let written: Vec<String> = generated.triggers.iter().map(|f| f.path.clone()).collect();
+    assert_eq!(registries, written);
+}
+
+/// Every card, map and detail has the full context header; no view, no page
+/// and not the registry of triggers, which is about no one entity (plan 2b,
+/// KTD10), does.
+fn assert_header_on_every_level_but_the_registry(manifest: &Manifest) {
     for d in &manifest.documents {
+        let registry = d.kind.as_deref() == Some(TRIGGERS_KIND);
         assert_eq!(
             d.header.is_some(),
-            d.level.is_some(),
-            "header on exactly the three levels: {}",
+            d.level.is_some() && !registry,
+            "header on exactly the three levels, the registry aside: {}",
             d.id
         );
     }
+}
+
+/// The ids of documents and chunks are unique, and every `parent` names a
+/// document.
+fn assert_ids_unique_and_parents_resolve(manifest: &Manifest) {
+    let mut ids: Vec<&str> = Vec::new();
+    for d in &manifest.documents {
+        ids.push(&d.id);
+        ids.extend(d.chunks.iter().map(|c| c.id.as_str()));
+    }
+    let unique: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
+    assert_eq!(unique.len(), ids.len(), "a document or chunk id repeats");
+    for d in &manifest.documents {
+        if let Some(parent) = &d.parent {
+            assert!(
+                manifest.documents.iter().any(|p| &p.id == parent),
+                "{} names a parent no document has: {parent}",
+                d.id
+            );
+        }
+    }
+}
+
+/// Plan 2b, U7 (R14, KTD10): with the second layer the registry of triggers
+/// is one document — id `triggers:index`, kind `triggers`, level `map`, no
+/// header and no parent, chunked by its sections — and the invariants of the
+/// three levels hold with it as they hold without it; its ids are unique and
+/// the same on a second run.
+#[test]
+fn the_registry_of_triggers_is_one_map_level_document_without_header_or_parent() {
+    let tmp = tempfile::tempdir().unwrap();
+    three_level_fixture(tmp.path());
+    let run = || {
+        reverse_architect::generate(&reverse_architect::config::Config {
+            detail_level: Some(1),
+            ..common::config_for(tmp.path(), &tmp.path().join("_layered"))
+        })
+        .unwrap()
+    };
+    let generated = run();
+    let manifest = &generated.manifest;
+    let registry = doc(manifest, TRIGGERS_ID);
+    assert_eq!(registry.kind.as_deref(), Some(TRIGGERS_KIND));
+    assert_eq!(registry.level.as_deref(), Some("map"));
+    assert_eq!(registry.header, None);
+    assert_eq!(registry.parent, None);
+    assert_eq!(registry.embed, None, "the registry may be embedded");
+    assert_eq!(registry.path, REGISTRY_PATH);
+    assert_eq!(
+        registry
+            .chunks
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        [format!("{TRIGGERS_ID}#triggers")]
+    );
+    assert_eq!(
+        manifest
+            .documents
+            .iter()
+            .filter(|d| d.id.starts_with("triggers:"))
+            .count(),
+        1
+    );
+    assert_documents_name_the_written_files(&generated);
+    assert_header_on_every_level_but_the_registry(manifest);
+    assert_ids_unique_and_parents_resolve(manifest);
+    assert_eq!(manifest.documents, run().manifest.documents);
+
+    // Without the layer: no registry, and the same invariants.
+    let plain = generated_three_levels(tmp.path());
+    assert!(plain.manifest.documents.iter().all(|d| d.id != TRIGGERS_ID));
+    assert_documents_name_the_written_files(&plain);
+    assert_header_on_every_level_but_the_registry(&plain.manifest);
 }
 
 /// KTD9: ids are unique across documents and chunks — a detail's id is not
@@ -1076,23 +1177,7 @@ fn document_ids_are_unique_resolvable_and_stable_across_runs() {
     let tmp = tempfile::tempdir().unwrap();
     three_level_fixture(tmp.path());
     let first = generated_three_levels(tmp.path()).manifest;
-
-    let mut ids: Vec<&str> = Vec::new();
-    for d in &first.documents {
-        ids.push(&d.id);
-        ids.extend(d.chunks.iter().map(|c| c.id.as_str()));
-    }
-    let unique: std::collections::BTreeSet<&str> = ids.iter().copied().collect();
-    assert_eq!(unique.len(), ids.len(), "a document or chunk id repeats");
-    for d in &first.documents {
-        if let Some(parent) = &d.parent {
-            assert!(
-                first.documents.iter().any(|p| &p.id == parent),
-                "{} names a parent no document has: {parent}",
-                d.id
-            );
-        }
-    }
+    assert_ids_unique_and_parents_resolve(&first);
 
     let second = generated_three_levels(tmp.path()).manifest;
     assert_eq!(first.documents, second.documents);

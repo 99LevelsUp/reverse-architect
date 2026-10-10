@@ -259,6 +259,27 @@ const FRAMEWORK_ENTRY_CAVEAT: &str =
      dependency-injected services — are invisible to the deterministic floor; this list is what \
      the code and manifests declare, not a proof that no other entry exists.";
 
+/// The id of the view the line of trigger coverage goes into (plan 2b, U8).
+pub const ENTRY_POINTS_VIEW: &str = "entry-points";
+
+/// Plan 2b, U8 (KTD12): put `line` — the line of trigger coverage of a run
+/// with the second layer — right before the caveat E9 of the view
+/// `entry-points`, which stays as it is. Done at render time, so
+/// [`ViewType::instances`] keeps its signature and a run without the layer
+/// never reaches here. `false` when `instances` hold no caveat.
+pub fn insert_before_entry_caveat(instances: &mut Vec<Instance>, line: String) -> bool {
+    match instances
+        .iter()
+        .position(|i| i.text == FRAMEWORK_ENTRY_CAVEAT)
+    {
+        Some(at) => {
+            instances.insert(at, Instance::new(line));
+            true
+        }
+        None => false,
+    }
+}
+
 fn dependencies_instances(graph: &Graph) -> Vec<Instance> {
     // Which manifest(s) declare each dependency, via the DependsOn edges
     // (manifest File --DependsOn--> dep node). Conveys the ecosystem without

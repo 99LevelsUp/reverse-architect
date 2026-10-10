@@ -7,8 +7,11 @@
 //! projection of it. These tests assert over every artifact a run writes.
 
 mod common;
+#[path = "common/coverage_line.rs"]
+mod coverage_line;
 
 use common::init_repo_with_files;
+use coverage_line::without_coverage_line;
 use reverse_architect::config::{Config, DEFAULT_AMBIGUITY_CEILING};
 use reverse_architect::render::RenderedFile;
 use reverse_architect::{card, cli::LinkStyle, coverage, generate, manifest, Generated};
@@ -501,7 +504,9 @@ fn first_layer_sections(body: &str) -> String {
 /// fixture of this file, every view, detail and map, every card but a type's,
 /// the first-layer sections of a type's card, the manifest forms and the sites
 /// are what a run without the layer writes, and the manifest and coverage
-/// differ only by what the layer adds to them.
+/// differ only by what the layer adds to them — among it, since plan 2b, the
+/// line of trigger coverage in `entry-points.md` (U8) and the document
+/// `triggers:index` of the registry of triggers (U7).
 #[test]
 fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
     for (name, plant) in FIXTURES {
@@ -517,7 +522,11 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
         };
         let plain = run(None, "plain");
         let layered = run(Some(2), "layered");
-        assert_eq!(plain.corpus, layered.corpus, "{name}: the views differ");
+        assert_eq!(
+            plain.corpus,
+            without_coverage_line(&layered.corpus),
+            "{name}: the views differ"
+        );
         // Plan 2a, U6 (KTD9 point 2): a type's card names the second layer in
         // its front matter and, with the type's analysis, rewrites its purpose
         // and keywords and adds what the layer read; every other part of it,
@@ -561,12 +570,14 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
         ] {
             assert_eq!(form(&plain.manifest), form(&layered.manifest), "{name}");
         }
-        // A type card's document gains the chunks of its new sections.
+        // A type card's document gains the chunks of its new sections, and
+        // the manifest the registry's document (plan 2b, U7).
         let unchunked = |m: &manifest::Manifest| -> Vec<serde_json::Value> {
             manifest::to_documents_jsonl(m)
                 .lines()
-                .map(|l| {
-                    let mut d: serde_json::Value = serde_json::from_str(l).unwrap();
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+                .filter(|d| d["kind"] != "triggers")
+                .map(|mut d| {
                     if d["kind"] == "card:type" {
                         d.as_object_mut().unwrap().remove("chunks");
                     }
@@ -598,6 +609,10 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
         );
         let manifest_value = |g: &Generated, keys: &[&str]| {
             let mut v = without(serde_json::to_value(&g.manifest).unwrap(), keys);
+            v["documents"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|d| d["kind"] != "triggers");
             for d in v["documents"].as_array_mut().unwrap() {
                 if d["kind"] == "card:type" {
                     d.as_object_mut().unwrap().remove("chunks");

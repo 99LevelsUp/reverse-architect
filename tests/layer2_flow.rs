@@ -5,7 +5,9 @@
 //! of callers and the class of a member. U4: the results of a functionality
 //! and the state read and written from outside, over the editor of the
 //! acceptance examples (`common/editor_fixture.rs`). U5: the triggers and
-//! their flows. U6: the `### Context` the cards draw of them.
+//! their flows. U6: the `### Context` the cards draw of them. U7: the
+//! registry of triggers, `cards/triggers.md`, and its line of coverage. U8:
+//! that line in the view `entry-points`.
 
 mod common;
 
@@ -2752,10 +2754,15 @@ fn the_command_class_has_one_flow_and_the_view_refers_to_the_check() {
     let n = rows_to(&analysis, &command, f).len();
     let context = editor_context(&g, &command, &execute);
     let flow = flow_block(&context, "Execute → target");
+    // The registry is a file since U7: the card links it.
+    let registry = format!(
+        "[cards/triggers.md]({})",
+        reverse_architect::card::links::relative(&card_path(&g, &command), "cards/triggers.md")
+    );
     assert!(
         flow.contains(&format!(
             "- {n} triggers lead to it: one flow for every command built of this class; the \
-             registry of triggers (`cards/triggers.md`) lists every one.\n"
+             registry of triggers ({registry}) lists every one.\n"
         )),
         "{flow}"
     );
@@ -2798,4 +2805,472 @@ fn two_runs_give_the_same_contexts() {
         .cards
         .iter()
         .any(|c| c.contents.contains("\n### Context\n")));
+}
+
+// ---- U7: the registry of triggers, `cards/triggers.md` ----
+
+use reverse_architect::card::links::relative;
+use reverse_architect::card::map::MAP_PART_ROWS;
+use reverse_architect::card::render::Lang;
+use reverse_architect::card::triggers::{coverage, BodyComponent, REGISTRY_PATH, TRIGGERS_ID};
+
+/// The registry a run with the second layer wrote.
+fn registry(g: &Generated) -> &str {
+    let file = g
+        .triggers
+        .as_ref()
+        .expect("a run with the second layer writes the registry");
+    assert_eq!(file.path, REGISTRY_PATH);
+    &file.contents
+}
+
+/// The rows of a registry: every bullet below its first `##`.
+fn registry_rows(text: &str) -> Vec<&str> {
+    text.lines()
+        .skip_while(|l| !l.starts_with("## "))
+        .filter(|l| l.starts_with("- "))
+        .collect()
+}
+
+/// The link from the registry to the card of the type `ty`.
+fn card_link(g: &Generated, ty: &NodeKey) -> String {
+    relative(REGISTRY_PATH, &card_path(g, ty))
+}
+
+/// AE6, R15, KTD11: without a component for XAML the registry carries, above
+/// its rows, the line of coverage — C# with the event, the key, the menu item
+/// and the entry from another component, XAML not covered — in the run's
+/// language.
+#[test]
+fn the_registry_without_a_xaml_component_says_xaml_is_not_covered_above_its_rows() {
+    for (lang, line) in [
+        (
+            "cs",
+            "**Pokrytí:** C#: událost, klávesa, položka menu, vstup z jiné komponenty; XAML: \
+             nepokryto.\n",
+        ),
+        (
+            "en",
+            "**Coverage:** C#: event, key, menu item, entry from another component; XAML: not \
+             covered.\n",
+        ),
+    ] {
+        let g = layered(&editor_fixture::files(), 1, lang);
+        let text = registry(&g);
+        assert!(
+            text.starts_with("---\nschema: 7\ntool: reverse-architect\nkind: triggers\n---\n"),
+            "{lang}: {text}"
+        );
+        assert_eq!(text.matches(line).count(), 1, "{lang}: {text}");
+        let at = text.find(line).unwrap();
+        assert!(at < text.find("\n## ").unwrap(), "{lang}: above the rows");
+    }
+}
+
+/// AE3, AE2, R11, R12: F4 of `EditorView` and F4 of `EditorViewNew` are rows
+/// of their own; the old one leads to the old view model's command and never
+/// to the new one, the new one's way to its command is dead, with the anchor
+/// of `CanCheck()` in the same row.
+#[test]
+fn f4_of_each_editor_is_a_row_of_its_own_and_the_new_ones_is_dead_with_its_anchor() {
+    let g = layered(&editor_fixture::files(), 1, "en");
+    let rows = registry_rows(registry(&g));
+    let f4 = |view: &str| -> Vec<&str> {
+        let lead =
+            format!("- key · `Key.F4` in `{view}.Editor_PreviewKeyDown(object,KeyEventArgs)` · ");
+        rows.iter()
+            .copied()
+            .filter(|r| r.starts_with(&lead))
+            .collect()
+    };
+    let (old, new) = (f4("EditorView"), f4("EditorViewNew"));
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let vm_new = key(EDITOR_MODELS, "EditorViewModelNew");
+    let to_old = format!(
+        " · active → [EditorViewModel.CheckCommand]({}) — `src/Views/EditorView.cs:",
+        card_link(&g, &vm)
+    );
+    assert!(old.iter().any(|r| r.contains(&to_old)), "{old:#?}");
+    assert!(
+        old.iter().all(|r| !r.contains("EditorViewModelNew")),
+        "{old:#?}"
+    );
+
+    let can_check = format!(
+        "`src/ViewModels/EditorViewModelNew.cs:{}`",
+        line_in(editor_fixture::VIEW_MODEL_NEW, "bool CanCheck()")
+    );
+    let to_new = format!(
+        " · dead, turned off at `EditorViewModelNew.CanCheck()` → \
+         [EditorViewModelNew.CheckCommand]({}) — `src/Views/EditorViewNew.cs:",
+        card_link(&g, &vm_new)
+    );
+    let dead = new
+        .iter()
+        .find(|r| r.contains(&to_new))
+        .unwrap_or_else(|| panic!("{new:#?}"));
+    assert!(dead.ends_with(&format!(", {can_check}")), "{dead}");
+    assert!(ends_in_anchor(dead), "{dead}");
+    assert!(
+        new.iter().all(|r| !r.contains("[EditorViewModel.")),
+        "{new:#?}"
+    );
+}
+
+/// R11, R12, KTD10: every row of the analysis is a row of the registry —
+/// nothing merged — in the order of kind, key and place, each ending in its
+/// anchor; the registry counts them, and in Czech its words are Czech.
+#[test]
+fn every_trigger_of_the_analysis_is_a_row_in_order_and_ends_in_its_anchor() {
+    let g = layered(&editor_fixture::files(), 1, "en");
+    let analysis = layer2::analyze(&g.graph, g.bodies.as_ref().unwrap());
+    let text = registry(&g);
+    let rows = registry_rows(text);
+    assert_eq!(rows.len(), analysis.triggers.len(), "{text}");
+    assert!(text.contains(&format!("**registry of triggers** · {} rows\n", rows.len())));
+    assert!(rows.iter().all(|r| ends_in_anchor(r)), "{text}");
+    let leads = [
+        "- event · ",
+        "- key · ",
+        "- menu item · ",
+        "- entry from another component · ",
+    ];
+    let kind = |r: &str| {
+        leads
+            .iter()
+            .position(|p| r.starts_with(p))
+            .unwrap_or_else(|| panic!("no kind: {r}"))
+    };
+    assert!(rows.windows(2).all(|w| kind(w[0]) <= kind(w[1])), "{text}");
+    for (r, t) in rows.iter().zip(&analysis.triggers) {
+        assert_eq!(kind(r), t.trigger.kind as usize, "{r}");
+    }
+    let order: Vec<(usize, &str)> = rows
+        .iter()
+        .zip(&analysis.triggers)
+        .map(|(r, t)| (kind(r), t.trigger.key.as_str()))
+        .collect();
+    assert!(order.windows(2).all(|w| w[0] <= w[1]), "{order:?}");
+    // The gesture `Ctrl+F4`, given to the command in C#, is a key row (AE5).
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("- key · `Key.F4+ModifierKeys.Control` in ")),
+        "{text}"
+    );
+
+    let cs = layered(&editor_fixture::files(), 1, "cs");
+    let text = registry(&cs);
+    assert!(text.contains(&format!("**rejstřík spouštěčů** · {} řádků\n", rows.len())));
+    let czech = registry_rows(text);
+    assert!(
+        czech.iter().any(|r| r.starts_with(
+            "- klávesa · `Key.F4` v `EditorViewNew.Editor_PreviewKeyDown(object,KeyEventArgs)` · \
+             mrtvá, vypíná ji `EditorViewModelNew.CanCheck()` → "
+        )),
+        "{text}"
+    );
+    assert!(czech
+        .iter()
+        .any(|r| r.starts_with("- vstup z jiné komponenty · `ExternalCheck.Run()` · aktivní → ")));
+    assert!(
+        text.contains("\n## Triggers\n"),
+        "the headings stay English"
+    );
+}
+
+/// `n` classes of one method nothing calls: `n` entries from another
+/// component.
+fn workers(n: usize) -> String {
+    let classes: String = (0..n)
+        .map(|i| {
+            format!(
+                "    public class AcmeWorker{i:03}\n    {{\n        public int Count;\n        \
+                 public void Run() {{ Count = {i}; }}\n    }}\n"
+            )
+        })
+        .collect();
+    format!("namespace Acme.Workers\n{{\n{classes}}}\n")
+}
+
+/// R14, KTD10: a registry of more rows than a map's part holds is cut into
+/// `## Part N`, none over the threshold, and its document in the manifest has
+/// one chunk per part, `triggers:index#part-N`.
+#[test]
+fn a_large_registry_is_cut_into_parts_that_are_the_chunks_of_its_document() {
+    let n = MAP_PART_ROWS + 10;
+    let source = workers(n);
+    let g = layered(&[("src/Workers.cs", source.as_str())], 1, "en");
+    let text = registry(&g);
+    let rows = registry_rows(text);
+    assert!(rows.len() >= n, "{} rows:\n{text}", rows.len());
+    assert!(!text.contains("\n## Triggers\n"), "{text}");
+    let parts: Vec<&str> = text.split("\n## Part ").skip(1).collect();
+    assert_eq!(parts.len(), rows.len().div_ceil(MAP_PART_ROWS), "{text}");
+    for (i, part) in parts.iter().enumerate() {
+        assert!(part.starts_with(&format!("{}\n", i + 1)), "{part}");
+        let count = part.lines().filter(|l| l.starts_with("- ")).count();
+        assert!(
+            count > 0 && count <= MAP_PART_ROWS,
+            "part {}: {count}",
+            i + 1
+        );
+    }
+    let doc = g
+        .manifest
+        .documents
+        .iter()
+        .find(|d| d.id == TRIGGERS_ID)
+        .expect("the registry's document");
+    let chunks: Vec<&str> = doc.chunks.iter().map(|c| c.id.as_str()).collect();
+    let expected: Vec<String> = (1..=parts.len())
+        .map(|i| format!("{TRIGGERS_ID}#part-{i}"))
+        .collect();
+    assert_eq!(chunks, expected);
+    // Under the threshold: one section, one chunk.
+    let small = layered(&[("src/Workers.cs", workers(3).as_str())], 1, "en");
+    assert!(registry(&small).contains("\n## Triggers\n"));
+    let doc = small
+        .manifest
+        .documents
+        .iter()
+        .find(|d| d.id == TRIGGERS_ID)
+        .unwrap();
+    assert_eq!(
+        doc.chunks.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        [format!("{TRIGGERS_ID}#triggers")]
+    );
+}
+
+/// KTD10, R17: a run without `--detail-level` writes no registry, and the
+/// copy a run with it left in the corpus is removed — through the binary,
+/// which owns the files of the corpus.
+#[test]
+fn a_run_without_the_detail_level_writes_no_registry_and_removes_the_old_copy() {
+    use assert_cmd::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    common::init_repo_with_files(&repo, "Alice", &editor_fixture::files());
+    let out = dir.path().join("out");
+    let run = |level: Option<&str>| {
+        let mut command = Command::cargo_bin("reverse-architect").unwrap();
+        command.arg(&repo).arg("--out").arg(&out);
+        if let Some(level) = level {
+            command.arg("--detail-level").arg(level);
+        }
+        command.assert().success();
+    };
+    let file = out.join("cards").join("triggers.md");
+    run(Some("1"));
+    let written = std::fs::read_to_string(&file).expect("the registry is written");
+    assert!(written.contains("\nkind: triggers\n"), "{written}");
+    run(None);
+    assert!(!file.exists(), "the old copy stays");
+    assert!(
+        out.join("cards").join("type").is_dir(),
+        "the cards stay where they are"
+    );
+
+    let plain = generate(&common::config_for(&repo, &dir.path().join("plain"))).unwrap();
+    assert_eq!(plain.triggers, None);
+    assert!(plain.manifest.documents.iter().all(|d| d.id != TRIGGERS_ID));
+}
+
+/// R15, KTD11: a component that declares no `emits`, or that read no file,
+/// covers nothing, so its language is not covered; a language another
+/// component claims is listed; a component for XAML that read files covers
+/// nothing until the core turns XAML into rows (step 2c) — the line never
+/// claims a kind no row of the registry can have.
+#[test]
+fn a_component_without_emits_leaves_its_language_not_covered() {
+    let component = |languages: &[&str], emits: &[&str], read: bool| BodyComponent {
+        languages: languages.iter().map(|s| s.to_string()).collect(),
+        emits: emits.iter().map(|s| s.to_string()).collect(),
+        read,
+    };
+    let csharp = component(
+        &["csharp"],
+        &[
+            "member-access",
+            "subscription",
+            "key-compare",
+            "key-gesture",
+            "menu-item",
+        ],
+        true,
+    );
+    let none = coverage(&[component(&["csharp"], &[], true)]);
+    assert_eq!(none.summary(Lang::En), "C#: not covered; XAML: not covered");
+    assert_eq!(none.summary(Lang::Cs), "C#: nepokryto; XAML: nepokryto");
+    let idle = coverage(&[component(&["csharp"], &["subscription"], false)]);
+    assert_eq!(idle.summary(Lang::En), "C#: not covered; XAML: not covered");
+    let other = coverage(&[csharp.clone(), component(&["probe3"], &[], true)]);
+    assert_eq!(
+        other.summary(Lang::En),
+        "C#: event, key, menu item, entry from another component; probe3: not covered; XAML: \
+         not covered"
+    );
+    let xaml = coverage(&[
+        csharp,
+        component(
+            &["xaml"],
+            &["subscription", "key-gesture", "control-key"],
+            true,
+        ),
+    ]);
+    assert_eq!(
+        xaml.summary(Lang::En),
+        "C#: event, key, menu item, entry from another component; XAML: not covered"
+    );
+    assert_eq!(coverage(&[]).summary(Lang::En), none.summary(Lang::En));
+}
+
+/// The menu of `SECRET_MENU`: an item whose label is a literal of a secret's
+/// shape, given a command.
+const SECRET_MENU: &str = r#"namespace Acme.Menus
+{
+    public class AcmeMenu
+    {
+        public int Opened;
+        void BuildMenu()
+        {
+            ContextMenuItem open = new ContextMenuItem();
+            open.Header = "ghp_Q7rT2mX9vB4nL6kP1sD8fH3jW5zC0aE";
+            open.Command = OpenCommand;
+        }
+        public RelayCommand OpenCommand => new RelayCommand(p => Open());
+        public void Open() { Opened = 1; }
+    }
+}
+"#;
+
+/// R18: a menu item's label of a secret's shape is not in the registry; its
+/// row keeps the marker and says once, before its anchor, that a value was
+/// left out — in English and in Czech.
+#[test]
+fn a_secret_in_a_menu_items_label_is_left_out_of_the_registry_and_admitted() {
+    for (lang, lead, sentence) in [
+        (
+            "en",
+            "- menu item · `[redacted: ",
+            " (a value was left out as a likely secret; see the source) — ",
+        ),
+        (
+            "cs",
+            "- položka menu · `[redacted: ",
+            " (hodnota vynechána jako pravděpodobné tajemství; viz zdroj) — ",
+        ),
+    ] {
+        let g = layered(&[("src/Menu.cs", SECRET_MENU)], 1, lang);
+        let text = registry(&g);
+        assert!(
+            !text.contains("ghp_Q7rT2mX9vB4nL6kP1sD8fH3jW5zC0aE"),
+            "{text}"
+        );
+        let rows: Vec<&str> = registry_rows(text)
+            .into_iter()
+            .filter(|r| r.starts_with(lead))
+            .collect();
+        assert!(!rows.is_empty(), "{lang}: no menu item row:\n{text}");
+        for row in rows {
+            assert_eq!(row.matches(sentence).count(), 1, "{lang}: {row}");
+            assert!(ends_in_anchor(row), "{lang}: {row}");
+        }
+    }
+}
+
+/// R17, KTD13: two runs give the same registry and the same view
+/// `entry-points`, byte for byte.
+#[test]
+fn two_runs_give_the_same_registry() {
+    let one = layered(&editor_fixture::files(), 2, "en");
+    let two = layered(&editor_fixture::files(), 2, "en");
+    assert_eq!(one.triggers, two.triggers);
+    assert_eq!(one.corpus, two.corpus);
+    assert!(!registry_rows(registry(&one)).is_empty());
+}
+
+/// U6 with U7: the card links the registry, relative to the card, where it
+/// named it as text before the file existed — and the link resolves.
+#[test]
+fn the_card_links_the_registry_it_names() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let command = key(EDITOR_MODELS, "RelayCommand");
+    let card = card_text(&g, &command);
+    let link = format!(
+        "[{REGISTRY_PATH}]({})",
+        relative(&card_path(&g, &command), REGISTRY_PATH)
+    );
+    assert!(
+        card.contains(&format!(
+            "the registry of triggers ({link}) lists every one."
+        )),
+        "{card}"
+    );
+    assert!(!card.contains("(`cards/triggers.md`)"), "{card}");
+    assert_eq!(g.triggers.as_ref().unwrap().path, REGISTRY_PATH);
+}
+
+// ---- U8: the line of coverage in `entry-points.md` ----
+
+/// A run over `repo` into `out`, with the second layer at `level` or without.
+fn run_over(repo: &Path, out: &Path, level: Option<u8>) -> Generated {
+    generate(&Config {
+        detail_level: level,
+        ..common::config_for(repo, out)
+    })
+    .unwrap()
+}
+
+fn view<'g>(g: &'g Generated, path: &str) -> &'g str {
+    &g.corpus
+        .files
+        .iter()
+        .find(|f| f.path == path)
+        .unwrap_or_else(|| panic!("no {path}"))
+        .contents
+}
+
+/// AE6, AE7, KTD12, R15: with the second layer the view `entry-points` has
+/// the line of coverage, in English, linking the registry, right above the
+/// sentence E9, which is unchanged; without the line the view is the plain
+/// run's to the byte, and so is every other view.
+#[test]
+fn the_entry_points_view_carries_the_line_of_coverage_right_above_e9() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    common::init_repo_with_files(&repo, "Alice", &editor_fixture::files());
+    let plain = run_over(&repo, &dir.path().join("plain"), None);
+    let line = "- Coverage of triggers by the second layer, by language — C#: event, key, menu \
+                item, entry from another component; XAML: not covered. The [registry of \
+                triggers](cards/triggers.md) lists every trigger it found.\n";
+    let e9 = view(&plain, "entry-points.md")
+        .lines()
+        .find(|l| l.starts_with("- Framework-level entry points — "))
+        .expect("the sentence E9")
+        .to_string();
+    for (lang, level) in [("en", 1), ("cs", 2)] {
+        let layered = generate(&Config {
+            lang: lang.to_string(),
+            detail_level: Some(level),
+            ..common::config_for(&repo, &dir.path().join(format!("layered-{lang}")))
+        })
+        .unwrap();
+        let entry = view(&layered, "entry-points.md");
+        assert!(
+            entry.contains(&format!("{line}{e9}\n")),
+            "{lang}: the line right above E9:\n{entry}"
+        );
+        assert_eq!(entry.matches(line).count(), 1, "{lang}");
+        assert_eq!(
+            entry.replacen(line, "", 1),
+            view(&plain, "entry-points.md"),
+            "{lang}"
+        );
+        for f in &plain.corpus.files {
+            if f.path != "entry-points.md" {
+                assert_eq!(view(&layered, &f.path), f.contents, "{lang}: {}", f.path);
+            }
+        }
+    }
+    assert!(!view(&plain, "entry-points.md").contains("Coverage of triggers"));
 }

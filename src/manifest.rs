@@ -370,15 +370,20 @@ pub struct ManifestCardKind {
 pub struct ManifestDoc {
     pub id: String,
     /// `card:type`, `card:file`, `card:module`, `card:<declared kind>`,
-    /// `card:detail`, `map` or `page`; absent on a view (v8, v10).
+    /// `card:detail`, `map`, `triggers` or `page`; absent on a view (v8,
+    /// v10). `triggers` is the registry of triggers of a run with the second
+    /// layer (plan 2b, U7: KTD10), id `triggers:index`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Which level of the card corpus the document is (plan B, U11): `map`,
-    /// `card` or `detail`. Absent on a view and a page.
+    /// `card` or `detail`. Absent on a view and a page. The registry of
+    /// triggers is at `map` too — the level above the cards — though it maps
+    /// no module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
     /// The id of the document one level up: a detail's card, a map's module
-    /// card, a type card's map. See [`SCHEMA_VERSION`], v10.
+    /// card, a type card's map — never the registry of triggers, which has
+    /// nothing above it. See [`SCHEMA_VERSION`], v10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// `false` on a document a vector index should leave out — every detail
@@ -386,7 +391,9 @@ pub struct ManifestDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<bool>,
     /// The context header of the entity a card, a detail or a map is about
-    /// (plan B, R4). Absent on a view and a page.
+    /// (plan B, R4). Absent on a view, a page and the registry of triggers,
+    /// which is about no one entity (plan 2b, KTD10): every document with a
+    /// `level` but that one carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<ManifestHeader>,
     pub title: String,

@@ -47,6 +47,9 @@ pub mod pages;
 pub mod purpose;
 pub mod render;
 pub mod story;
+/// The registry of triggers, `cards/triggers.md` (plan 2b, U7), and its line
+/// of coverage.
+pub mod triggers;
 
 use crate::coverage::CardRows;
 use crate::extract::treesitter::{symbol_role, Role};

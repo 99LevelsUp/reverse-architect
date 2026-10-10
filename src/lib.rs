@@ -57,6 +57,11 @@ pub struct Generated {
     /// beside the cards' and the details' (KTD9), paired with its module's
     /// card by path like a detail.
     pub maps: Vec<render::RenderedFile>,
+    /// The registry of triggers, `cards/triggers.md` (plan 2b, U7: KTD10) —
+    /// for a run with `--detail-level`, `None` otherwise. A field of its own,
+    /// like the maps' (KTD9): it pairs with no card, and its one document in
+    /// the manifest is `triggers:index`.
+    pub triggers: Option<render::RenderedFile>,
     /// What the corpus may claim, and over which files (U7/R6/R20). A separate
     /// artifact rather than a sentence in a view, so a consumer deciding whether
     /// an absence claim is licensed reads a file instead of parsing prose.
@@ -144,8 +149,16 @@ pub fn generate_reporting(
     } else {
         None
     };
+    // Which kinds of trigger the second layer covers in which language (plan
+    // 2b, U7–U8: KTD11) — only for a run with it. Read from what the run's
+    // body components declare and from the files they read, before any
+    // projection: the view `entry-points` and the registry both carry it.
+    let trigger_coverage = bodies
+        .as_ref()
+        .map(|layer| card::triggers::coverage(&body_components(layer, &extract_options)));
     progress.phase("render views", None);
-    let mut corpus = render::build_corpus(&graph, config.links, profile)?;
+    let mut corpus =
+        render::build_corpus_with(&graph, config.links, profile, trigger_coverage.as_ref())?;
     progress.phase_done();
     progress.phase("build manifest", None);
     let mut manifest = manifest::build_manifest(&graph, profile)?;
@@ -231,6 +244,17 @@ pub fn generate_reporting(
         card::render_card_files_layered(&card_set, &card_index, lang, config.links, run.as_ref());
     let details = card::detail::render_detail_files(&card_set, &card_index, lang, config.links);
     let maps = card::map::render_map_files(&card_set, &card_index, lang, config.links);
+    // The registry of triggers (plan 2b, U7): with the second layer only,
+    // and then always — the cards and the view `entry-points` link it.
+    let triggers = match (&analysis, trigger_coverage) {
+        (Some(analysis), Some(coverage)) => Some(card::triggers::render_registry(
+            &card::triggers::Registry::of(analysis, coverage),
+            &card_index,
+            lang,
+            config.links,
+        )),
+        _ => None,
+    };
     // Appends the corpus signpost (U10/R12) to index.md's own RenderedFile —
     // a module list plus a curated "most-referenced types" highlight, built
     // from the same card set rather than walking the graph a second time.
@@ -276,6 +300,11 @@ pub fn generate_reporting(
         .extend(card::documents::manifest_documents(
             &card_set, &cards, &maps, &details, lang,
         ));
+    if let Some(file) = &triggers {
+        manifest
+            .documents
+            .push(card::documents::triggers_document(file));
+    }
     card::index::prepend_start_here(
         &mut corpus,
         &[
@@ -327,9 +356,39 @@ pub fn generate_reporting(
         cards,
         details,
         maps,
+        triggers,
         coverage,
         bodies,
     })
+}
+
+/// The run's body components as the line of trigger coverage reads them
+/// (plan 2b, U7: KTD11): the languages each claims, what its `describe`
+/// says it emits, and whether it read a file. The bundled body component is
+/// no plugin of the run, so its declaration is read from the bundle.
+fn body_components(
+    layer: &extract::bodies::BodyLayer,
+    options: &extract::ExtractOptions,
+) -> Vec<card::triggers::BodyComponent> {
+    let read: std::collections::BTreeSet<&str> =
+        layer.files().map(|(_, f)| f.plugin.as_str()).collect();
+    layer
+        .readers()
+        .iter()
+        .map(|r| {
+            let plugin = options.plugins.iter().find(|p| p.id() == r.id).or_else(|| {
+                (r.component && plugin::bundled::csharp_body().id() == r.id)
+                    .then(plugin::bundled::csharp_body)
+            });
+            card::triggers::BodyComponent {
+                languages: r.languages.clone(),
+                emits: plugin
+                    .map(|p| p.manifest().emits.clone())
+                    .unwrap_or_default(),
+                read: read.contains(r.id.as_str()),
+            }
+        })
+        .collect()
 }
 
 /// The graph one run builds, with what built it — everything the projections,

@@ -1688,15 +1688,17 @@ fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) 
         let count = if cx.cs() {
             format!(
                 "Vede na ni {}: jeden tok pro každý příkaz sestavený z této třídy; každý spouštěč \
-                 uvádí rejstřík spouštěčů (`{REGISTRY}`).",
-                cs_n(n, ("spouštěč", "spouštěče", "spouštěčů"))
+                 uvádí rejstřík spouštěčů ({}).",
+                cs_n(n, ("spouštěč", "spouštěče", "spouštěčů")),
+                cx.registry()
             )
         } else {
             format!(
                 "{} {} to it: one flow for every command built of this class; the registry of \
-                 triggers (`{REGISTRY}`) lists every one.",
+                 triggers ({}) lists every one.",
                 plural(n, "trigger", "triggers"),
-                if n == 1 { "leads" } else { "lead" }
+                if n == 1 { "leads" } else { "lead" },
+                cx.registry()
             )
         };
         let _ = writeln!(s, "- {count}");
@@ -1765,8 +1767,15 @@ fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) 
 }
 
 /// The path of `cards/triggers.md`, the registry of triggers (U7), which the
-/// card names as text.
-const REGISTRY: &str = "cards/triggers.md";
+/// card links — every run with the second layer writes it.
+const REGISTRY: &str = super::triggers::REGISTRY_PATH;
+
+impl Cx<'_> {
+    /// The link to the registry of triggers from the card, named by its path.
+    fn registry(&self) -> String {
+        super::links::link(&self.card.path, REGISTRY, REGISTRY, self.links)
+    }
+}
 
 /// The trigger of a flow, with its condition and where it is wired.
 fn trigger_line(cx: &Cx<'_>, flow: &TriggerFlow) -> String {
@@ -2026,16 +2035,18 @@ fn result_phrase(cx: &Cx<'_>, r: &FlowResult) -> String {
             let n = *subscribers;
             if cx.cs() {
                 format!(
-                    "vyvolá událost {}; v korpusu {} k ní, uvádí je rejstřík spouštěčů (`{REGISTRY}`)",
+                    "vyvolá událost {}; v korpusu {} k ní, uvádí je rejstřík spouštěčů ({})",
                     code(cx.name(event.as_str())),
-                    cs_n(n, ("přihlášení", "přihlášení", "přihlášení"))
+                    cs_n(n, ("přihlášení", "přihlášení", "přihlášení")),
+                    cx.registry()
                 )
             } else {
                 format!(
                     "raises the event {}; {} to it in the corpus, listed in the registry of \
-                     triggers (`{REGISTRY}`)",
+                     triggers ({})",
                     code(cx.name(event.as_str())),
-                    plural(n, "subscription", "subscriptions")
+                    plural(n, "subscription", "subscriptions"),
+                    cx.registry()
                 )
             }
         }

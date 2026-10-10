@@ -52,7 +52,8 @@ fn run_generate(cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
     let written = generated.corpus.files.len()
         + generated.cards.len()
         + generated.details.len()
-        + generated.maps.len();
+        + generated.maps.len()
+        + usize::from(generated.triggers.is_some());
     progress.phase("write corpus", Some(written));
     write_corpus(&config.corpus_dir, &generated, config.sites)?;
     progress.phase_done();
@@ -517,11 +518,15 @@ fn write_corpus(
     // in trees of their own: left out of this set, every run would delete
     // each one before writing it again, and an unchanged rerun would rewrite
     // every detail and map instead of none (U12/KTD3).
+    // The registry of triggers (plan 2b, U7: KTD10) too, when the run has the
+    // second layer: a run without it owns no `cards/triggers.md`, so the loop
+    // below removes the copy an earlier run with the layer left.
     let new_owned_cards: HashSet<PathBuf> = generated
         .cards
         .iter()
         .chain(&generated.details)
         .chain(&generated.maps)
+        .chain(&generated.triggers)
         .map(|f| dir.join(&f.path))
         .collect();
 
@@ -556,6 +561,9 @@ fn write_corpus(
     write_files(dir, &generated.cards)?;
     write_files(dir, &generated.details)?;
     write_files(dir, &generated.maps)?;
+    if let Some(triggers) = &generated.triggers {
+        write_files(dir, std::slice::from_ref(triggers))?;
+    }
     if line_delimited {
         for (name, render) in jsonl_files {
             write_if_changed(&dir.join(name), render(&generated.manifest).as_bytes())?;

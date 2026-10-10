@@ -14,9 +14,12 @@
 //! scheduler or on where the checkout lies would be no gate at all.
 
 mod common;
+#[path = "common/coverage_line.rs"]
+mod coverage_line;
 
 use assert_cmd::Command;
 use common::output_files;
+use coverage_line::{without_coverage_bytes, without_coverage_line};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -181,13 +184,21 @@ fn first_layer_sections(body: &str) -> String {
 }
 
 /// KTD9: with the second layer every view, detail and map is what a plain
-/// run writes, and so is every card but a type's. A type's card says
+/// run writes — but for the line of trigger coverage `entry-points.md` gains
+/// right above E9 (plan 2b, U8: KTD12) — and so is every card but a type's.
+/// The registry of triggers (plan 2b, U7) is a file of its own beside them.
+/// A type's card says
 /// `schema: 7`, the level and its `layer2:` word in its front matter; with
 /// its analysis (`present`) it rewrites its purpose and keywords and adds its
 /// functionalities and states, every other part as it was, and without one
 /// (`failed`, `none`) the rest of it is the plain run's byte for byte.
 fn assert_same_first_layer(plain: &Generated, layered: &Generated) {
-    assert_eq!(plain.corpus, layered.corpus, "the views differ");
+    assert_eq!(
+        plain.corpus,
+        without_coverage_line(&layered.corpus),
+        "the views differ"
+    );
+    assert!(layered.triggers.is_some() && plain.triggers.is_none());
     assert_eq!(plain.details, layered.details, "the details differ");
     assert_eq!(plain.maps, layered.maps, "the maps differ");
     assert_eq!(plain.cards.len(), layered.cards.len());
@@ -228,8 +239,9 @@ fn assert_same_first_layer(plain: &Generated, layered: &Generated) {
 
 /// With `--detail-level` every view, detail and map is what a plain run
 /// writes, and every card as [`assert_same_first_layer`] allows; the manifest
-/// gains the level and the body component, and a type card's document the
-/// chunks of its new sections, and nothing else; coverage gains the `bodies`
+/// gains the level and the body component, a type card's document the
+/// chunks of its new sections, and the one document of the registry of
+/// triggers (plan 2b, U7), and nothing else; coverage gains the `bodies`
 /// section and the component's contract, and the type cards' own counts.
 #[test]
 fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
@@ -282,7 +294,19 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
             .collect()
     };
     let plain_docs = plain_manifest["documents"].as_array().unwrap();
-    let docs = manifest["documents"].as_array().unwrap();
+    let all_docs = manifest["documents"].as_array().unwrap();
+    assert_eq!(
+        all_docs
+            .iter()
+            .filter(|d| d["id"] == "triggers:index")
+            .count(),
+        1,
+        "the registry of triggers is one document (plan 2b, U7)"
+    );
+    let docs: Vec<&serde_json::Value> = all_docs
+        .iter()
+        .filter(|d| d["kind"] != "triggers")
+        .collect();
     assert_eq!(plain_docs.len(), docs.len());
     for (p, d) in plain_docs.iter().zip(docs) {
         if d["kind"] == "card:type" {
@@ -299,6 +323,10 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
         }
     }
     let unchunked = |mut m: serde_json::Value| {
+        m["documents"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|d| d["kind"] != "triggers");
         for d in m["documents"].as_array_mut().unwrap() {
             if d["kind"] == "card:type" {
                 d.as_object_mut().unwrap().remove("chunks");
@@ -3586,7 +3614,9 @@ fn a_diagram_label_with_a_withheld_value_is_drawn_escaped_and_admitted() {
 //    through a scoped pool (`tests/card.rs`).
 // 4. Every detail, view and map of a run with the layer is the plain run's,
 //    byte for byte, on disk (`a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were`),
-//    as it is for the typed outputs in `assert_same_first_layer`.
+//    as it is for the typed outputs in `assert_same_first_layer` — the
+//    registry of triggers and the line of coverage in `entry-points.md`
+//    aside (plan 2b, U7–U8).
 
 /// The files of the gate's fixture: the editor — a view with a key handler and
 /// a context menu whose labels are quoted, and its view model — and the flow
@@ -3735,7 +3765,9 @@ fn a_layered_run_writes_the_same_bytes_on_one_thread_and_on_four() {
 
 /// KTD9 point 3: with the layer every detail, view and map is the plain run's
 /// bytes on disk, and so is every card that is no type's; the type cards
-/// differ, and the manifest and coverage with them.
+/// differ, and the manifest and coverage with them. Plan 2b adds the
+/// registry of triggers, a file of the layer alone (U7), and the line of
+/// coverage in `entry-points.md` (U8), which is the plain run's without it.
 #[test]
 fn a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were() {
     let dir = tempfile::tempdir().unwrap();
@@ -3746,13 +3778,31 @@ fn a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were() {
 
     let same = |path: &str| {
         !path.starts_with("cards/type/")
+            && path != "cards/triggers.md"
             && !matches!(path, "manifest.json" | "coverage.json")
             && !path.starts_with("manifest")
     };
-    let kept = |files: &[(String, Vec<u8>)]| -> Vec<(String, Vec<u8>)> {
-        files.iter().filter(|(p, _)| same(p)).cloned().collect()
+    // The layered run's `entry-points.md` without its line of coverage.
+    let kept = |files: &[(String, Vec<u8>)], layer: bool| -> Vec<(String, Vec<u8>)> {
+        files
+            .iter()
+            .filter(|(p, _)| same(p))
+            .map(|(p, b)| {
+                let bytes = if layer {
+                    without_coverage_bytes(p, b)
+                } else {
+                    b.clone()
+                };
+                (p.clone(), bytes)
+            })
+            .collect()
     };
-    let (plain_kept, layered_kept) = (kept(&plain), kept(&layered));
+    assert!(
+        layered.iter().any(|(p, _)| p == "cards/triggers.md"),
+        "the registry of triggers (plan 2b, U7)"
+    );
+    assert!(plain.iter().all(|(p, _)| p != "cards/triggers.md"));
+    let (plain_kept, layered_kept) = (kept(&plain, false), kept(&layered, true));
     assert!(
         plain_kept
             .iter()
