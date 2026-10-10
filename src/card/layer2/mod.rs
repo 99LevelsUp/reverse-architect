@@ -13,6 +13,9 @@
 //!   delegates and events.
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
+//! - [`flow`] — U11: the preconditions and their effects, the dead paths,
+//!   the steps and the mentions of every functionality, and the states of the
+//!   type (KTD13, KTD5, R6, R7, R9), [`TypeAnalysis::flow`].
 //!
 //! The analysis is deterministic (R3): it reads the graph and the model in
 //! key and path order, keeps every collection ordered, and never iterates a
@@ -21,12 +24,18 @@
 
 pub mod cluster;
 pub mod entry;
+pub mod flow;
 pub mod resolve;
 
 pub use cluster::{Functionality, FunctionalityName};
 pub use entry::{
     bind_construction, Binding, BoundDelegate, CommandSite, EntryKind, EntryPoint, Label,
     MenuEntry, Place, Region, Slot, SubMenu, SubscriptionSite, Target, UnboundCommand,
+};
+pub use flow::{
+    AdmittedPrecondition, ArmStep, Cond, ConfigKey, DeadKind, DeadPath, Effect, EffectKind,
+    FunctionalityFlow, Gap, Guarding, Mentions, Occurrence, Precondition, Source, State,
+    StateChange, StateValue, Step, StepKind, TypeFlow, Written,
 };
 pub use resolve::{Chain, Index, Link, Scope, Unresolved};
 
@@ -48,6 +57,9 @@ pub struct TypeAnalysis {
     /// Constructions that would be commands but whose binding cannot be
     /// told (admitted), by place.
     pub unbound_commands: Vec<UnboundCommand>,
+    /// The preconditions, dead paths, steps and mentions of each
+    /// functionality, and the type's states (U11).
+    pub flow: TypeFlow,
 }
 
 impl TypeAnalysis {
@@ -57,6 +69,11 @@ impl TypeAnalysis {
             .binary_search_by(|f| f.key.as_str().cmp(key))
             .ok()
             .map(|i| &self.functionalities[i])
+    }
+
+    /// What U11 read of the functionality `key`.
+    pub fn flow_of(&self, key: &str) -> Option<&FunctionalityFlow> {
+        self.flow.of(key)
     }
 
     /// The functionality an entry point with `key` belongs to.
@@ -100,11 +117,13 @@ pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
             let mut seeds = entry::seeds(&ix, ty);
             let unbound_commands = std::mem::take(&mut seeds.unbound);
             let (functionalities, hubs) = cluster::cluster(&ix, ty, seeds);
+            let flow = flow::analyze(&ix, ty, &functionalities);
             TypeAnalysis {
                 key: ty.clone(),
                 functionalities,
                 hubs,
                 unbound_commands,
+                flow,
             }
         })
         .collect();

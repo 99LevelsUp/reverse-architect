@@ -90,7 +90,7 @@ pub fn split_identifier(name: &str) -> Vec<String> {
 
 /// Whether a lower-cased part is a keyword at all: long enough, not too long,
 /// not a bare number, not a common word.
-fn is_word(part: &str) -> bool {
+pub(crate) fn is_word(part: &str) -> bool {
     let chars = part.chars().count();
     (MIN_WORD_CHARS..=MAX_WORD_CHARS).contains(&chars)
         && part.chars().any(char::is_alphabetic)

@@ -411,14 +411,14 @@ pub fn bind_construction(
 
 /// A body of the model with where it is.
 #[derive(Clone, Copy)]
-struct At<'l> {
-    path: &'l str,
-    index: usize,
-    body: &'l MemberBody,
+pub(crate) struct At<'l> {
+    pub path: &'l str,
+    pub index: usize,
+    pub body: &'l MemberBody,
 }
 
 /// Every body of `member`, with its index in its file.
-fn bodies<'l>(ix: &Index<'l>, member: &NodeKey) -> Vec<At<'l>> {
+pub(crate) fn bodies<'l>(ix: &Index<'l>, member: &NodeKey) -> Vec<At<'l>> {
     ix.layer
         .bodies_of(member)
         .into_iter()

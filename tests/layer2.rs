@@ -1380,3 +1380,478 @@ fn the_analysis_is_the_same_bytes_on_one_thread_and_on_many() {
     assert!(one.len() > 1000, "the analysis holds something");
     assert_eq!(one, many);
 }
+
+// ---- Preconditions, dead paths, states, steps and mentions (plan 2a, U11) ----
+
+use reverse_architect::card::layer2::{
+    DeadKind, EffectKind, FunctionalityFlow, Gap, Guarding, Precondition, Source, StepKind, Written,
+};
+use reverse_architect::extract::bodies::Constant;
+use std::collections::BTreeSet;
+
+/// The editor's check with its literal conditions, a command class whose
+/// `Execute` raises events before its guard, the new editor's constant
+/// CanExecute, a toggled state beside a static read of another type, and
+/// the shapes of main work.
+const FLOW: &str = r#"namespace Acme.Flow
+{
+    public enum SyntaxKind { Sql, Script, Text }
+    public enum CheckKind { Syntax, Check }
+
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        private readonly Predicate<object> _canExecute;
+        private Action pre;
+        private CancelArgs evt;
+        private bool busy;
+        public event EventHandler ExecutingStarted;
+        public RelayCommand(Action<object> execute) : this(execute, null) { }
+        public RelayCommand(Action<object> execute, Predicate<object> canExecute)
+        {
+            _execute = execute;
+            _canExecute = canExecute;
+        }
+        public bool CanExecute(object parameter) { return _canExecute == null || _canExecute(parameter); }
+        public void Execute(object p)
+        {
+            SetBusyState();
+            pre?.Invoke();
+            ExecutingStarted?.Invoke(this, evt);
+            if (evt.Cancel) return;
+            _execute(p);
+        }
+        void SetBusyState() { busy = true; }
+    }
+
+    public class EditorViewModel
+    {
+        private RelayCommand checkCommand;
+        private bool canErrors;
+        private SyntaxKind syntax;
+        public bool CheckWasDone;
+        public RelayCommand CheckCommand
+        {
+            get
+            {
+                if (checkCommand == null) checkCommand = new RelayCommand(p => Check(), p => (syntax == SyntaxKind.Sql || syntax == SyntaxKind.Script) && canErrors);
+                return checkCommand;
+            }
+        }
+        public RelayCommand QuickCommand => new RelayCommand(p => Quick(), p => canErrors);
+        public void Check() { Check(false); }
+        void Check(bool syntaxOnly)
+        {
+            CheckWasDone = false;
+            if (!canErrors) return;
+            if (syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script) return;
+            if (syntaxOnly) { Parse(CheckKind.Syntax); } else { Parse(CheckKind.Check); }
+        }
+        void Quick() { if (!canErrors) return; Lint(); }
+        void Parse(CheckKind kind)
+        {
+            var parser = new Parser();
+            parser.Run(GetConfigValue("SQLPREFIX"), "Heslo123");
+        }
+        void Lint() { CheckWasDone = true; }
+        public void Twice() { Do(1); }
+        void Do(int a) { if (a < 0) return; }
+        void Do(string s) { if (s == null) return; }
+    }
+
+    public class EditorViewModelNew
+    {
+        private bool busy;
+        public RelayCommand CheckCommand => new RelayCommand(p => Check(), p => CanCheck());
+        public void Check() { Lint(); }
+        bool CanCheck() { return false; }
+        bool Other() { return false; }
+        void Lint() { busy = true; }
+    }
+
+    public class AcmeScreen
+    {
+        private bool isFullscreen;
+        private int Modifiers;
+        public bool IsFullscreen
+        {
+            get { return isFullscreen; }
+            set { if (isFullscreen == value) return; isFullscreen = value; OnPropertyChanged(); }
+        }
+        public void Toggle() { IsFullscreen = !IsFullscreen; }
+        public void Leave() { IsFullscreen = false; }
+        public void Draw() { if (IsFullscreen) { Paint(); } }
+        public void Reset() { Modifiers = 0; }
+        public void Shift() { Modifiers = 1; }
+        public void Key() { if (Keyboard.Modifiers == ModifierKeys.Shift) { Paint(); } }
+        void OnPropertyChanged() { }
+        void Paint() { }
+    }
+
+    public class AcmeLoad
+    {
+        private object data;
+        public void Load() { var x = Fetch(); if (x == null) return; data = x; }
+        object Fetch() { return data; }
+    }
+
+    public class AcmeLater
+    {
+        private int state;
+        public void After() { var n = Count(); Guarded(); }
+        void Guarded() { if (state == 0) return; state = 2; }
+        int Count() { return state; }
+    }
+
+    public class AcmeNow
+    {
+        private int state;
+        public void Direct() { Guarded(); }
+        void Guarded() { if (state == 0) return; state = 2; }
+    }
+
+    public class AcmeBase
+    {
+        private bool ready;
+        protected void Helper() { if (!ready) return; ready = false; }
+    }
+
+    public class AcmeDerived : AcmeBase
+    {
+        public void Run() { Helper(); }
+    }
+}
+"#;
+
+const FLOW_NS: &str = "sym:csharp:Acme.Flow#";
+
+fn flow_analysis() -> (Generated, Analysis) {
+    analyzed(&[("src/Flow.cs", FLOW)])
+}
+
+/// The flow of the functionality the entry point `entry` (a member of
+/// `ty`, without the namespace) belongs to.
+fn flow_of<'a>(analysis: &'a Analysis, ty: &str, entry: &str) -> &'a FunctionalityFlow {
+    let t = type_of(analysis, &key(FLOW_NS, ty));
+    let f = functionality(t, &format!("{FLOW_NS}{ty}.{entry}"));
+    t.flow_of(&f.key)
+        .unwrap_or_else(|| panic!("no flow of {}", f.key))
+}
+
+fn precondition<'a>(flow: &'a FunctionalityFlow, text: &str) -> &'a Precondition {
+    flow.preconditions
+        .iter()
+        .find(|p| p.text == text)
+        .unwrap_or_else(|| {
+            let texts: Vec<&str> = flow.preconditions.iter().map(|p| p.text.as_str()).collect();
+            panic!("no precondition {text}: {texts:?}")
+        })
+}
+
+fn texts(flow: &FunctionalityFlow) -> Vec<&str> {
+    flow.preconditions.iter().map(|p| p.text.as_str()).collect()
+}
+
+/// AE1: the check has each precondition once — the guards of `Check(bool)`,
+/// reached from the command's lambda through `Check()` → `Check(bool)` (by
+/// arity) — the CanExecute predicate the model gives no tree of is admitted,
+/// not dropped, and `syntaxOnly` chooses `Syntax` instead of `Check`.
+#[test]
+fn the_check_has_each_precondition_once_and_its_parameter_chooses_the_check() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModel", "CheckCommand");
+    let all = texts(flow);
+    let unique: BTreeSet<&str> = all.iter().copied().collect();
+    assert_eq!(all.len(), unique.len(), "a precondition twice: {all:?}");
+    let check_bool = key(FLOW_NS, "EditorViewModel.Check(bool)");
+    for text in [
+        "!canErrors",
+        "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+    ] {
+        let p = precondition(flow, text);
+        let guard = p
+            .occurrences
+            .iter()
+            .find(|o| o.source == Source::Guard && o.member == check_bool)
+            .unwrap_or_else(|| panic!("{text}: {:#?}", p.occurrences));
+        assert_eq!(guard.via.last(), Some(&check_bool), "{text}");
+        assert_eq!(guard.place.path, "src/Flow.cs");
+        assert!(guard.place.range.start.line > 1);
+    }
+    // The CanExecute predicate is a returned expression: contract 0.3 gives
+    // it no tree, so it is admitted at its lambda.
+    let checks: Vec<&Gap> = flow
+        .admitted
+        .iter()
+        .filter(|a| a.member == key(FLOW_NS, "EditorViewModel.CheckCommand"))
+        .map(|a| &a.gap)
+        .collect();
+    assert_eq!(checks, [&Gap::PredicateNotInModel]);
+
+    // `syntaxOnly` chooses `Syntax` instead of `Check`.
+    let choice = flow
+        .steps
+        .iter()
+        .find_map(|s| match &s.kind {
+            StepKind::ParameterChoice { parameter, arms } if s.member == check_bool => {
+                Some((parameter, arms))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no parameter choice: {:#?}", flow.steps));
+    assert_eq!(choice.0, "syntaxOnly");
+    let selects: Vec<&[String]> = choice.1.iter().map(|a| a.selects.as_slice()).collect();
+    assert_eq!(
+        selects,
+        [
+            &["CheckKind.Syntax".to_string()][..],
+            &["CheckKind.Check".to_string()][..]
+        ]
+    );
+    assert_eq!(choice.1[0].condition.as_deref(), Some("syntaxOnly"));
+    assert_eq!(choice.1[1].condition, None);
+    // Each guard is a step too, anchored on its arm.
+    let guard_steps = flow
+        .steps
+        .iter()
+        .filter(|s| s.member == check_bool && s.kind == StepKind::Idiom("guard-return".into()))
+        .count();
+    assert_eq!(guard_steps, 2);
+    // The lazy getter is one `lazy-init` step, its null test no choice.
+    let command = key(FLOW_NS, "EditorViewModel.CheckCommand");
+    let getter: Vec<&StepKind> = flow
+        .steps
+        .iter()
+        .filter(|s| s.member == command)
+        .map(|s| &s.kind)
+        .filter(|k| !matches!(k, StepKind::Call { .. }))
+        .collect();
+    assert_eq!(
+        getter,
+        [&StepKind::LazyInit {
+            field: key(FLOW_NS, "EditorViewModel.checkCommand")
+        }]
+    );
+
+    // A CanExecute that is one read (`p => canErrors`) is inverted and is one
+    // precondition with the guard of the method the command executes.
+    let quick = flow_of(&analysis, "EditorViewModel", "QuickCommand");
+    let p = precondition(quick, "!canErrors");
+    let sources: BTreeSet<Source> = p.occurrences.iter().map(|o| o.source).collect();
+    assert_eq!(
+        sources,
+        [Source::Guard, Source::CanExecute].into_iter().collect()
+    );
+}
+
+/// Guards after the write `CheckWasDone = false;` are preconditions, and the
+/// write is an effect of the path they stop.
+#[test]
+fn a_guard_after_a_field_write_is_a_precondition_with_the_write_as_its_effect() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModel", "CheckCommand");
+    for text in [
+        "!canErrors",
+        "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+    ] {
+        let p = precondition(flow, text);
+        let guard = p
+            .occurrences
+            .iter()
+            .find(|o| o.source == Source::Guard && !o.via.is_empty())
+            .unwrap_or_else(|| panic!("{text}: {:#?}", p.occurrences));
+        let effects: Vec<(EffectKind, String)> = guard
+            .effects
+            .iter()
+            .map(|e| (e.kind, e.path.segments.join(".")))
+            .collect();
+        assert_eq!(
+            effects,
+            [(EffectKind::Write, "CheckWasDone".to_string())],
+            "{text}"
+        );
+    }
+}
+
+/// `Execute` of a command class: `SetBusyState(); pre?.Invoke();
+/// ExecutingStarted?.Invoke(this, evt); if (evt.Cancel) return;
+/// _execute(p);` has the precondition `evt.Cancel` once, with the call and
+/// both raised events as the effects of the path it stops.
+#[test]
+fn execute_of_a_command_class_has_its_cancel_guard_and_the_events_raised_before_it() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "RelayCommand", "Execute(object)");
+    let p = precondition(flow, "evt.Cancel");
+    assert_eq!(p.occurrences.len(), 1, "{:#?}", p.occurrences);
+    let effects: Vec<(EffectKind, String)> = p.occurrences[0]
+        .effects
+        .iter()
+        .map(|e| (e.kind, e.path.segments.join(".")))
+        .collect();
+    assert_eq!(
+        effects,
+        [
+            (EffectKind::Call, "SetBusyState".to_string()),
+            (EffectKind::Raise, "pre".to_string()),
+            (EffectKind::Raise, "ExecutingStarted".to_string()),
+        ]
+    );
+    // `_execute(p)` after the guard calls a field, not a method: nothing to
+    // follow, nothing admitted.
+    assert_eq!(texts(flow), ["evt.Cancel"]);
+}
+
+/// A call whose result is assigned is the main work, so the `if` after it is
+/// no precondition; a call after the main work passes the callee's guards to
+/// nobody, while the same call as the main work does.
+#[test]
+fn an_assigned_call_is_main_work_and_a_call_after_it_passes_nothing() {
+    let (_, analysis) = flow_analysis();
+    let load = flow_of(&analysis, "AcmeLoad", "Load()");
+    assert!(load.preconditions.is_empty(), "{:?}", texts(load));
+    let later = flow_of(&analysis, "AcmeLater", "After()");
+    assert!(later.preconditions.is_empty(), "{:?}", texts(later));
+    assert!(later.admitted.is_empty());
+    let now = flow_of(&analysis, "AcmeNow", "Direct()");
+    let p = precondition(now, "state == 0");
+    assert_eq!(p.occurrences[0].via, [key(FLOW_NS, "AcmeNow.Guarded()")]);
+}
+
+/// `Check()` → `Check(bool)` by arity; two overloads of one arity, and a
+/// callee in an ancestor, are admitted, not followed.
+#[test]
+fn an_overload_resolves_by_arity_and_two_of_one_arity_are_admitted() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModel", "Check()");
+    let p = precondition(flow, "!canErrors");
+    assert!(p
+        .occurrences
+        .iter()
+        .any(|o| o.via == [key(FLOW_NS, "EditorViewModel.Check(bool)")]
+            && o.member == key(FLOW_NS, "EditorViewModel.Check(bool)")));
+    let twice = flow_of(&analysis, "EditorViewModel", "Twice()");
+    assert!(twice.preconditions.is_empty(), "{:?}", texts(twice));
+    let gaps: Vec<&Gap> = twice.admitted.iter().map(|a| &a.gap).collect();
+    assert_eq!(gaps, [&Gap::Call(Unresolved::AmbiguousMember("Do".into()))]);
+    // An overload of the type's own is no call of another type.
+    assert!(twice.steps.is_empty(), "{:?}", twice.steps);
+    // The main work calls a member of the base: admitted, not followed.
+    let run = flow_of(&analysis, "AcmeDerived", "Run()");
+    assert!(run.preconditions.is_empty(), "{:?}", texts(run));
+    let gaps: Vec<&Gap> = run.admitted.iter().map(|a| &a.gap).collect();
+    assert_eq!(gaps, [&Gap::Ancestor(key(FLOW_NS, "AcmeBase.Helper()"))]);
+}
+
+/// The new editor's `CanCheck()` returning `false` is a dead path because it
+/// is the CanExecute; another method returning `false` that guards nothing
+/// is listed nowhere.
+#[test]
+fn a_can_execute_returning_false_is_a_dead_path_and_an_unguarding_constant_is_not() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModelNew", "CheckCommand");
+    let can_check = key(FLOW_NS, "EditorViewModelNew.CanCheck()");
+    let dead: Vec<(&NodeKey, &DeadKind)> = flow
+        .dead_paths
+        .iter()
+        .map(|d| (&d.member, &d.kind))
+        .collect();
+    assert_eq!(
+        dead,
+        [(
+            &can_check,
+            &DeadKind::ConstantReturn(Constant::Boolean(false))
+        )]
+    );
+    assert!(flow.dead_paths[0].guarding.contains(&Guarding::CanExecute));
+    // Following the CanExecute into `CanCheck()` finds a constant: no
+    // precondition, nothing admitted.
+    assert!(flow.preconditions.is_empty(), "{:?}", texts(flow));
+    assert!(flow.admitted.is_empty(), "{:?}", flow.admitted);
+    let t = type_of(&analysis, &key(FLOW_NS, "EditorViewModelNew"));
+    let other = key(FLOW_NS, "EditorViewModelNew.Other()");
+    assert!(t
+        .flow
+        .functionalities
+        .iter()
+        .flat_map(|f| &f.dead_paths)
+        .chain(&t.flow.dead_paths)
+        .all(|d| d.member != other));
+}
+
+/// `IsFullscreen = !IsFullscreen` is a change of a state; the property
+/// stands for the field its setter writes, whose guard `notifies-change`
+/// absorbs; `Keyboard.Modifiers` read in a condition makes no state of the
+/// type's own `Modifiers`, written constants twice but never read.
+#[test]
+fn a_toggle_is_a_state_change_and_a_static_read_of_another_type_is_no_state() {
+    let (_, analysis) = flow_analysis();
+    let t = type_of(&analysis, &key(FLOW_NS, "AcmeScreen"));
+    let states: Vec<&str> = t.flow.states.iter().map(|s| s.member.as_str()).collect();
+    let full = format!("{FLOW_NS}AcmeScreen.IsFullscreen");
+    assert_eq!(states, [full.as_str()]);
+    let state = &t.flow.states[0];
+    assert_eq!(state.field, Some(key(FLOW_NS, "AcmeScreen.isFullscreen")));
+    let values: Vec<&Written> = state.values.iter().map(|v| &v.value).collect();
+    assert_eq!(
+        values,
+        [
+            &Written::Constant(Constant::Boolean(false)),
+            &Written::Toggle
+        ]
+    );
+    // Read by `Draw`'s condition only: the setter's guard is absorbed.
+    assert_eq!(state.reads.len(), 1, "{:?}", state.reads);
+    // The toggle is a step of `Toggle`.
+    let toggle = flow_of(&analysis, "AcmeScreen", "Toggle()");
+    assert!(toggle.steps.iter().any(|s| s.kind
+        == StepKind::StateChange {
+            state: key(FLOW_NS, "AcmeScreen.IsFullscreen"),
+            value: Written::Toggle,
+        }));
+}
+
+/// R9: `GetConfigValue("SQLPREFIX")` gives the keyword `SQLPREFIX`; the
+/// literal `"Heslo123"` gives none; the parser, a type of no repository
+/// member, is mentioned.
+#[test]
+fn a_config_key_passed_to_a_call_is_a_keyword_and_another_literal_is_not() {
+    let (_, analysis) = flow_analysis();
+    let flow = flow_of(&analysis, "EditorViewModel", "CheckCommand");
+    let keys: Vec<&str> = flow
+        .mentions
+        .config_keys
+        .iter()
+        .map(|k| k.key.as_str())
+        .collect();
+    assert_eq!(keys, ["SQLPREFIX"]);
+    assert_eq!(
+        flow.mentions.config_keys[0].callee.segments,
+        ["GetConfigValue"]
+    );
+    let keywords = &flow.mentions.keywords;
+    assert!(keywords.iter().any(|k| k == "SQLPREFIX"), "{keywords:?}");
+    assert!(keywords.iter().any(|k| k == "Parser"), "{keywords:?}");
+    assert!(
+        !keywords.iter().any(|k| k.contains("Heslo")),
+        "{keywords:?}"
+    );
+    assert!(flow.mentions.works_with().contains(&"Parser"));
+}
+
+/// R3: the flow of one input is the same bytes on one thread and on eight.
+#[test]
+fn the_flow_is_the_same_bytes_on_one_thread_and_on_many() {
+    let run = |threads: usize| -> Vec<u8> {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let (_, analysis) = flow_analysis();
+                serde_json::to_vec(&analysis).unwrap()
+            })
+    };
+    let one = run(1);
+    assert!(one.len() > 1000, "the flow holds something");
+    assert_eq!(one, run(8));
+}

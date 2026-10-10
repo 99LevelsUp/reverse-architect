@@ -404,19 +404,37 @@ impl<'a> Index<'a> {
             _ => Err(ambiguous()),
         };
         match call {
-            Some(arity) if !methods.is_empty() => {
-                if let [only] = methods.as_slice() {
-                    return Ok(Some((*only).clone()));
-                }
-                let by_arity: Vec<&NodeKey> = methods
-                    .into_iter()
-                    .filter(|m| self.arity_of(m) == Some(arity))
-                    .collect();
-                one(&by_arity)
-            }
+            Some(arity) if !methods.is_empty() => self.overload(name, &methods, arity).map(Some),
             _ if !values.is_empty() => one(&values),
             _ if !methods.is_empty() => one(&methods),
             _ => one(&named.iter().map(|(k, _)| *k).collect::<Vec<_>>()),
+        }
+    }
+
+    /// The overload of `name` a call with `arity` arguments picks among
+    /// `methods`: the only one, else the one that declares `arity`
+    /// parameters ([`Index::arity_of`]). None or several of that arity is
+    /// [`Unresolved::AmbiguousMember`] — admitted, never guessed. The one
+    /// choice of an overload the analyses make (`Check()` → `Check(bool)`);
+    /// step 2b extends it to the members of other types instead of writing a
+    /// second one.
+    pub fn overload(
+        &self,
+        name: &str,
+        methods: &[&NodeKey],
+        arity: u32,
+    ) -> Result<NodeKey, Unresolved> {
+        if let [only] = methods {
+            return Ok((*only).clone());
+        }
+        let by_arity: Vec<&NodeKey> = methods
+            .iter()
+            .copied()
+            .filter(|m| self.arity_of(m) == Some(arity))
+            .collect();
+        match by_arity.as_slice() {
+            [one] => Ok((*one).clone()),
+            _ => Err(Unresolved::AmbiguousMember(name.to_string())),
         }
     }
 
