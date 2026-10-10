@@ -139,7 +139,9 @@ pub const CARD_SCHEMA_VERSION: u32 = 6;
 /// `### Preconditions`, `### Dead paths`, `### Steps`, `### Flowchart`,
 /// `### Members`) and a `## State: <member>` per state (`- Key:`, `- Field:`,
 /// `### Values`, `### Read in conditions`, `### Changed by`,
-/// `### State diagram`), as deep as the level asks
+/// `### State diagram`), each ending in its `### Context` of step 2b when it
+/// has one (the flows of its triggers under `#### <kind>: <key>`, the reads
+/// and writes from outside), as deep as the level asks
 /// ([`super::layer2_render`]). A type card with `layer2: none` or `failed`
 /// is otherwise the card of a run without the second layer.
 pub const CARD_SCHEMA_VERSION_LAYER2: u32 = 7;
@@ -505,7 +507,7 @@ pub fn render_card_layered(
             // the notes.
             if let (Some(l), Some(analysis)) = (&layer2, analysis) {
                 s.push_str(&super::layer2_render::sections(
-                    card, lang, l.level, analysis,
+                    card, lang, l.level, analysis, index, links,
                 ));
             }
         }

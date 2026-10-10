@@ -2982,7 +2982,10 @@ fn the_view_card_has_one_check_with_the_key_and_the_menu_item() {
     assert!(card.contains(
         "\n## Functionality: EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)#Key.F3\n"
     ));
-    assert!(!card.contains("### Context"), "reserved for step 2b");
+    assert!(
+        card.contains("\n### Context\n"),
+        "step 2b draws the context"
+    );
 
     // The detail does not know the second layer.
     let cards = build_cards(&with.graph);

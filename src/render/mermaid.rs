@@ -158,6 +158,47 @@ fn render_block(edges: &[(&str, &str)]) -> String {
     s
 }
 
+/// One fenced `sequenceDiagram` block (plan 2b, U6: KTD8): the participants
+/// in the order given, each under a positional id (`p0`, `p1`, …) with its
+/// name as the alias, and the messages `(from, to, text)` between them in
+/// order. The caller caps how many it draws. Every name and text goes through
+/// [`escape_message`].
+pub(crate) fn sequence_block(
+    participants: &[String],
+    messages: &[(usize, usize, String)],
+) -> String {
+    let mut s = String::from("```mermaid\nsequenceDiagram\n");
+    for (i, p) in participants.iter().enumerate() {
+        let _ = writeln!(s, "    participant p{i} as {}", escape_message(p));
+    }
+    for (from, to, text) in messages {
+        let _ = writeln!(s, "    p{from}->>p{to}: {}", escape_message(text));
+    }
+    s.push_str("```\n");
+    s
+}
+
+/// [`escape_label`] for the text of a sequence diagram, which is not quoted:
+/// a `;` there ends the statement, so it becomes an entity too. One pass over
+/// the characters, so no entity this introduces is escaped again.
+pub(crate) fn escape_message(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '#' => out.push_str("&#35;"),
+            '\\' => out.push_str("&#92;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            ';' => out.push_str("&#59;"),
+            '\n' | '\r' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Neutralise every mermaid label metacharacter to an HTML entity. `&` is
 /// escaped first so the entities we introduce are not re-escaped; `#` follows it
 /// (never before — that would double-escape the `&` in `&#35;`) so a key
@@ -251,6 +292,23 @@ mod tests {
                 assert!(!label.contains('>'), "raw `>` in label: {line}");
             }
         }
+    }
+
+    #[test]
+    fn a_sequence_diagram_declares_its_participants_and_escapes_its_texts() {
+        let out = sequence_block(
+            &["EditorView".to_string(), "A<B>".to_string()],
+            &[
+                (0, 1, "Run(a;b) -> x #1".to_string()),
+                (1, 1, "self".to_string()),
+            ],
+        );
+        assert_eq!(
+            out,
+            "```mermaid\nsequenceDiagram\n    participant p0 as EditorView\n    \
+             participant p1 as A&lt;B&gt;\n    p0->>p1: Run(a&#59;b) -&gt; x &#35;1\n    \
+             p1->>p1: self\n```\n"
+        );
     }
 
     #[test]

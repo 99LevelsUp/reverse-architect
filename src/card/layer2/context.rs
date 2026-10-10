@@ -56,7 +56,7 @@ use super::entry::{bodies, EntryKind, Place};
 use super::flow::{is_can_execute, Cond, DeadKind, Guarding, Occurrence, StepKind};
 use super::link::{Candidates, Links, Outcome};
 use super::resolve::{Scope, Unresolved};
-use super::triggers::{delegate_hosts, FunctionalityRef, PathState, TriggerRow};
+use super::triggers::{delegate_hosts, FunctionalityRef, PathState, Trigger, TriggerRow};
 use super::TypeAnalysis;
 use crate::extract::bodies::{
     AccessPath, BodyKind, CallKind, Constant, DeclarationKind, PairedBy, ValueRef,
@@ -163,6 +163,11 @@ pub struct CommonPart {
 pub struct TriggerFlow {
     /// The row: an index into [`super::Analysis::triggers`].
     pub row: usize,
+    /// The row's trigger, as the registry holds it — what the card's
+    /// `### Context` draws without the registry (U6).
+    pub trigger: Trigger,
+    /// The row's state once the composition told every dead row (U6).
+    pub state: PathState,
     pub condition: Option<TriggerCondition>,
     /// The trigger's way to the functionality, one [`FlowStepKind::Through`]
     /// per member.
@@ -670,6 +675,8 @@ pub(crate) fn compose(
                     }
                     fc.flows.push(TriggerFlow {
                         row: i,
+                        trigger: row.trigger.clone(),
+                        state: row.state.clone(),
                         condition: row.trigger.condition.as_ref().map(|c| TriggerCondition {
                             text: c.text.clone(),
                             place: row.trigger.place.clone(),
@@ -679,7 +686,10 @@ pub(crate) fn compose(
                             .iter()
                             .map(|hop| FlowStep {
                                 member: hop.member.clone(),
-                                place: hop.place.clone(),
+                                // A hop of a first-layer relation has no
+                                // place of a body: the card anchors it at
+                                // the member's own body (U6).
+                                place: hop.place.clone().or_else(|| body_place(ix, &hop.member)),
                                 grade: hop.grade,
                                 kind: FlowStepKind::Through,
                             })
@@ -716,5 +726,24 @@ pub(crate) fn compose(
             rows[i].state = PathState::Dead { member, place };
         }
     }
+    // Every flow carries its row's final state: the dead rows were told
+    // only now.
+    for flow in out
+        .iter_mut()
+        .flat_map(|t| &mut t.functionalities)
+        .flat_map(|f| &mut f.flows)
+    {
+        flow.state = rows[flow.row].state.clone();
+    }
     out
+}
+
+/// Where the body of `member` is: the place of its root node.
+fn body_place(ix: &super::Index<'_>, member: &NodeKey) -> Option<Place> {
+    bodies(ix, member).into_iter().find_map(|at| {
+        at.body.nodes.get(at.body.root as usize).map(|n| Place {
+            path: at.path.to_string(),
+            range: n.place,
+        })
+    })
 }

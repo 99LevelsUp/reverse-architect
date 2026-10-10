@@ -4,7 +4,8 @@
 //! the analysis of a card and its flow never disagree. U1: the reverse index
 //! of callers and the class of a member. U4: the results of a functionality
 //! and the state read and written from outside, over the editor of the
-//! acceptance examples (`common/editor_fixture.rs`).
+//! acceptance examples (`common/editor_fixture.rs`). U5: the triggers and
+//! their flows. U6: the `### Context` the cards draw of them.
 
 mod common;
 
@@ -2207,4 +2208,594 @@ fn two_runs_give_the_same_triggers_and_flows() {
         .map(|r| (r.trigger.kind, r.trigger.key.as_str()))
         .collect();
     assert!(order.windows(2).all(|w| w[0] <= w[1]), "{order:?}");
+}
+
+// ---- U6: the `### Context` of a card ----
+
+use reverse_architect::card::build_cards;
+
+/// A run with the second layer at `level` in `lang` over `files`.
+fn layered(files: &[(&str, &str)], level: u8, lang: &str) -> Generated {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    common::init_repo_with_files(&repo, "Alice", files);
+    generate(&Config {
+        lang: lang.to_string(),
+        detail_level: Some(level),
+        ..common::config_for(&repo, &dir.path().join("out"))
+    })
+    .unwrap()
+}
+
+/// The path of the card of the type `key`.
+fn card_path(g: &Generated, key: &NodeKey) -> String {
+    build_cards(&g.graph)
+        .into_iter()
+        .find(|c| c.identity == key.as_str())
+        .unwrap_or_else(|| panic!("no card for {key:?}"))
+        .path
+}
+
+/// The rendered card of the type `key`.
+fn card_text<'g>(g: &'g Generated, key: &NodeKey) -> &'g str {
+    let path = card_path(g, key);
+    g.cards
+        .iter()
+        .find(|c| c.path == path)
+        .map(|c| c.contents.as_str())
+        .unwrap_or_else(|| panic!("no card at {path}"))
+}
+
+/// The part of `text` under `heading` (`## …` or `### …`), through the line
+/// before the next heading of its level or above (`####` is below both).
+fn part<'c>(text: &'c str, heading: &str) -> &'c str {
+    let start = text
+        .find(&format!("\n{heading}\n"))
+        .unwrap_or_else(|| panic!("no {heading:?} in:\n{text}"))
+        + 1;
+    let rest = &text[start..];
+    let sub = heading.starts_with("### ");
+    let mut end = rest.len();
+    let mut at = 0;
+    for (i, line) in rest.split_inclusive('\n').enumerate() {
+        if i > 0 && (line.starts_with("## ") || (sub && line.starts_with("### "))) {
+            end = at;
+            break;
+        }
+        at += line.len();
+    }
+    &rest[..end]
+}
+
+/// The flow of a context under `#### heading`, through the next `####`.
+fn flow_block<'c>(context: &'c str, heading: &str) -> &'c str {
+    let start = context
+        .find(&format!("\n#### {heading}\n"))
+        .unwrap_or_else(|| panic!("no flow {heading:?} in:\n{context}"))
+        + 1;
+    let rest = &context[start..];
+    let end = rest[1..].find("\n#### ").map_or(rest.len(), |i| i + 2);
+    &rest[..end]
+}
+
+/// Every `### Context` of a card.
+fn contexts(card: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = card[from..].find("\n### Context\n") {
+        let start = from + i + 1;
+        let rest = &card[start..];
+        let mut end = rest.len();
+        let mut at = 0;
+        for (n, line) in rest.split_inclusive('\n').enumerate() {
+            if n > 0 && (line.starts_with("## ") || line.starts_with("### ")) {
+                end = at;
+                break;
+            }
+            at += line.len();
+        }
+        out.push(&rest[..end]);
+        from = start + end.max(1);
+    }
+    out
+}
+
+/// A line ends in its anchors: `` — `path:N` `` or `` `path:N-M` ``, several
+/// separated by commas, never with a column.
+fn ends_in_anchor(line: &str) -> bool {
+    let Some((_, anchors)) = line.rsplit_once(" — ") else {
+        return false;
+    };
+    anchors.split(", ").all(|a| {
+        let Some(inner) = a.strip_prefix('`').and_then(|a| a.strip_suffix('`')) else {
+            return false;
+        };
+        let Some((path, lines)) = inner.rsplit_once(':') else {
+            return false;
+        };
+        let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+        !path.is_empty()
+            && !path.contains(':')
+            && match lines.split_once('-') {
+                Some((a, b)) => number(a) && number(b),
+                None => number(lines),
+            }
+    })
+}
+
+/// The `sequenceDiagram` blocks of a text.
+fn sequence_blocks(text: &str) -> Vec<&str> {
+    text.split("```mermaid\n")
+        .skip(1)
+        .map(|b| b.split("```").next().unwrap())
+        .filter(|b| b.starts_with("sequenceDiagram\n"))
+        .collect()
+}
+
+/// A sequence diagram is valid: every participant is declared once as `pN`,
+/// every message joins two declared participants, and no text holds a raw
+/// `;`, `<`, `>` or `"`. Its messages.
+fn valid_sequence(block: &str) -> Vec<&str> {
+    let mut declared: Vec<&str> = Vec::new();
+    let mut messages = Vec::new();
+    for line in block.lines().skip(1) {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("participant ") {
+            let (id, name) = rest.split_once(" as ").expect("an alias");
+            assert!(!declared.contains(&id), "{id} twice:\n{block}");
+            for raw in [';', '<', '>', '"'] {
+                assert!(!name.contains(raw), "raw {raw:?}: {line}");
+            }
+            declared.push(id);
+            continue;
+        }
+        let (arrow, text) = line.split_once(": ").expect("a message");
+        let (from, to) = arrow.split_once("->>").expect("an arrow");
+        assert!(declared.contains(&from) && declared.contains(&to), "{line}");
+        for raw in [';', '<', '>', '"'] {
+            assert!(!text.contains(raw), "raw {raw:?}: {line}");
+        }
+        messages.push(line);
+    }
+    messages
+}
+
+/// The heading of a functionality's section on its card.
+fn functionality_heading(f: &Functionality) -> String {
+    let key = f.key.strip_prefix("sym:").unwrap_or(&f.key);
+    format!(
+        "## Functionality: {}",
+        key.split_once('#').map_or(key, |(_, k)| k)
+    )
+}
+
+/// The `### Context` of the functionality of `ty` that holds `member`, in a
+/// run at `level` in `lang` over the editor.
+fn editor_context(g: &Generated, ty: &NodeKey, member: &NodeKey) -> String {
+    let analysis = layer2::analyze(&g.graph, g.bodies.as_ref().unwrap());
+    // A key branch's functionality holds the branch, not always its handler:
+    // then the one it is an entry point of.
+    let all = &type_of(&analysis, ty).functionalities;
+    let f = all
+        .iter()
+        .find(|f| f.members.contains(member))
+        .or_else(|| {
+            all.iter()
+                .find(|f| f.entry_points.iter().any(|e| &e.member == member))
+        })
+        .unwrap_or_else(|| panic!("no functionality of {ty:?} has {member:?}"));
+    let card = card_text(g, ty);
+    part(part(card, &functionality_heading(f)), "### Context").to_string()
+}
+
+/// AE8, R16: the context of the check in `EditorViewModelNew` has on level 1
+/// the trigger F4 and its dead path with its anchor and no step; on level 2
+/// the steps and the sequence diagram too.
+#[test]
+fn the_new_editors_check_has_the_dead_f4_on_level_1_and_its_steps_on_level_2() {
+    let vm_new = key(EDITOR_MODELS, "EditorViewModelNew");
+    let command = key(EDITOR_MODELS, "EditorViewModelNew.CheckCommand");
+    let can_check = format!(
+        "`src/ViewModels/EditorViewModelNew.cs:{}`",
+        line_in(editor_fixture::VIEW_MODEL_NEW, "bool CanCheck()")
+    );
+    let one = layered(&editor_fixture::files(), 1, "en");
+    let context = editor_context(&one, &vm_new, &command);
+    let f4 = flow_block(&context, "Key: Key.F4 — EditorViewNew");
+    let trigger = f4
+        .lines()
+        .find(|l| l.starts_with("- Trigger: key `Key.F4` in `EditorViewNew."))
+        .unwrap_or_else(|| panic!("the trigger:\n{f4}"));
+    assert!(ends_in_anchor(trigger), "{trigger}");
+    let dead = f4
+        .lines()
+        .find(|l| l.starts_with("- Path: dead, turned off at `CanCheck()`"))
+        .unwrap_or_else(|| panic!("the dead path:\n{f4}"));
+    assert!(dead.ends_with(&format!(" — {can_check}")), "{dead}");
+    assert!(!context.contains("- Step:"), "{context}");
+    assert!(!context.contains("```mermaid"), "{context}");
+
+    let two = layered(&editor_fixture::files(), 2, "en");
+    let context = editor_context(&two, &vm_new, &command);
+    let f4 = flow_block(&context, "Key: Key.F4 — EditorViewNew");
+    assert!(f4.contains(&format!(" — {can_check}\n")), "{f4}");
+    assert!(
+        f4.lines().any(|l| l.starts_with(
+            "- Step: `EditorViewNew.Editor_PreviewKeyDown(object,KeyEventArgs)` → `CheckCommand` \
+             (card [EditorViewNew]("
+        )),
+        "the view's step into the command:\n{f4}"
+    );
+    assert!(
+        f4.lines().any(|l| l.starts_with(
+            "- Step: `CheckCommand`: `RelayCommand.CanExecute(object)` → `CanCheck()`"
+        )),
+        "{f4}"
+    );
+    let blocks = sequence_blocks(f4);
+    assert_eq!(blocks.len(), 1, "{f4}");
+    let messages = valid_sequence(blocks[0]);
+    assert!(!messages.is_empty(), "{}", blocks[0]);
+    assert!(
+        blocks[0].contains("participant p0 as EditorViewNew\n"),
+        "{}",
+        blocks[0]
+    );
+}
+
+/// R2, KTD8: every line of a step or a result of every `### Context` of the
+/// editor's cards ends in its anchor in backticks after ` — `, and so does
+/// every precondition and dead path; the sequence diagrams are valid.
+#[test]
+fn every_step_and_result_of_a_context_ends_in_its_anchor() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let (mut steps, mut results) = (0, 0);
+    for card in g.cards.iter().filter(|c| c.path.starts_with("cards/type/")) {
+        for context in contexts(&card.contents) {
+            for line in context.lines() {
+                let anchored = ["- Step: ", "- Result: ", "- Precondition: ", "- Path: dead"];
+                if !anchored.iter().any(|p| line.starts_with(p)) {
+                    continue;
+                }
+                steps += usize::from(line.starts_with("- Step: "));
+                results += usize::from(line.starts_with("- Result: "));
+                assert!(ends_in_anchor(line), "{}: {line}", card.path);
+            }
+            for block in sequence_blocks(context) {
+                valid_sequence(block);
+            }
+        }
+    }
+    assert!(steps > 5 && results > 5, "{steps} steps, {results} results");
+}
+
+/// AE1, AE10, R1, R7: on the card of `EditorViewModel`, the flow of F4 has
+/// the key branch's condition, the command class as one step `Execute →
+/// Check()`, the branch on Shift, the parser as one step with its card, and
+/// the results; the menu item that enters at the same command refers to the
+/// part F4 wrote instead of repeating it.
+#[test]
+fn the_f4_flow_of_the_old_editor_is_drawn_once_and_the_menu_item_refers_to_it() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let context = editor_context(&g, &vm, &key(EDITOR_MODELS, "EditorViewModel.Check(bool)"));
+    let f4 = flow_block(&context, "Key: Key.F4 — EditorView");
+    for part in [
+        "- Trigger: key `Key.F4` in `EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)`, \
+         when `e.Key == Key.F4 && (viewModel.ShowErrors || viewModel.CanErrors)` — ",
+        "- Precondition: does not run when `!canErrors` (the CanExecute predicate in \
+         `CheckCommand`) — ",
+        ": `RelayCommand.Execute(object)` → `Check()` (the command class ",
+        "- Step: `Check()` calls `Check(bool)`, the argument for `syntaxOnly` branches on \
+         `ModifierKeys.Shift` — ",
+        "- Step: `Check(bool)` calls `Parser.Parse(string,bool)`, one step (card [Parser](",
+        "- Result: `Check(bool)` writes `Errors`, which notifies its change — ",
+        "- Result: `Check(bool)` writes `CheckWasDone` = `true`, read by ",
+    ] {
+        assert!(f4.contains(part), "{part}\n{f4}");
+    }
+    assert!(!f4.contains("EditorViewModelNew"), "{f4}");
+    let menu = flow_block(&context, "Menu item: Check errors — EditorView");
+    assert!(
+        menu.contains("- From `CheckCommand` on: as under “Key: Key.F4 — EditorView” above.\n"),
+        "{menu}"
+    );
+    assert!(
+        !menu.contains("- Result: "),
+        "the shared part is not repeated:\n{menu}"
+    );
+    // The precondition is said once in the context, under F4.
+    assert_eq!(
+        context
+            .matches("does not run when `!canErrors` (the CanExecute")
+            .count(),
+        1,
+        "{context}"
+    );
+}
+
+/// A functionality with `n` calls of another type: one flow of more steps
+/// than a diagram draws. The callee is an interface, which has no
+/// functionality of its own, so the flow is drawn at the hub.
+fn wide(n: usize) -> String {
+    let members: String = (0..n).map(|i| format!("        void M{i}();\n")).collect();
+    let calls: String = (0..n).map(|i| format!(" worker.M{i}();")).collect();
+    format!(
+        "namespace Acme.Wide\n{{\n    public interface IAcmeWorker\n    {{\n{members}    }}\n\n\
+         \x20   public class AcmeHub\n    {{\n        private IAcmeWorker worker;\n\
+         \x20       public void Run() {{{calls} }}\n    }}\n}}\n"
+    )
+}
+
+/// KTD8: a sequence diagram with more messages than the cap
+/// ([`SPLIT_THRESHOLD`]) draws the cap and says, in English and in Czech,
+/// how many there are and that the steps list them all.
+#[test]
+fn a_sequence_diagram_over_the_cap_draws_the_cap_and_says_the_rest() {
+    use reverse_architect::render::mermaid::SPLIT_THRESHOLD;
+    let n = SPLIT_THRESHOLD + 5;
+    let source = wide(n);
+    let hub = key("sym:csharp:Acme.Wide#", "AcmeHub");
+    let run = key("sym:csharp:Acme.Wide#", "AcmeHub.Run()");
+    for (lang, sentence) in [
+        (
+            "en",
+            format!(
+                "The sequence diagram draws {SPLIT_THRESHOLD} of {n} messages; the steps above \
+                 list them all."
+            ),
+        ),
+        (
+            "cs",
+            format!(
+                "Sekvenční diagram kreslí {SPLIT_THRESHOLD} zpráv z celkem {n}; všechny uvádějí \
+                 kroky výše."
+            ),
+        ),
+    ] {
+        let g = layered(&[("src/Wide.cs", source.as_str())], 2, lang);
+        let context = editor_context(&g, &hub, &run);
+        let blocks = sequence_blocks(&context);
+        assert_eq!(blocks.len(), 1, "{lang}: {context}");
+        assert_eq!(valid_sequence(blocks[0]).len(), SPLIT_THRESHOLD, "{lang}");
+        assert_eq!(
+            context.matches(sentence.as_str()).count(),
+            1,
+            "{lang}: {context}"
+        );
+        let steps = context
+            .lines()
+            .filter(|l| l.starts_with("- Step: ") || l.starts_with("- Krok: "))
+            .count();
+        assert_eq!(steps, n, "{lang}: every step is listed: {context}");
+    }
+    // Under the cap, no sentence.
+    let g = layered(&[("src/Wide.cs", wide(3).as_str())], 2, "en");
+    let context = editor_context(&g, &hub, &run);
+    assert_eq!(valid_sequence(sequence_blocks(&context)[0]).len(), 3);
+    assert!(!context.contains("The sequence diagram draws"), "{context}");
+}
+
+/// R18, KTD8: a card in Czech has Czech sentences in its context and the
+/// headings in English.
+#[test]
+fn a_czech_context_has_czech_sentences_and_english_headings() {
+    let g = layered(&editor_fixture::files(), 2, "cs");
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let context = editor_context(&g, &vm, &key(EDITOR_MODELS, "EditorViewModel.Check(bool)"));
+    let f4 = flow_block(&context, "Key: Key.F4 — EditorView");
+    for part in [
+        "- Spouštěč: klávesa `Key.F4` v `EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)`, \
+         když ",
+        "- Předpoklad: nespustí se, když `!canErrors` (podmínka CanExecute v `CheckCommand`) — ",
+        "- Krok: `Check()` volá `Check(bool)`, argument pro `syntaxOnly` větví podle \
+         `ModifierKeys.Shift` — ",
+        "- Výsledek: `Check(bool)` zapíše `Errors`, vlastnost hlásí změnu — ",
+    ] {
+        assert!(f4.contains(part), "{part}\n{f4}");
+    }
+    for english in ["- Trigger:", "- Step:", "- Result:", " calls ", " writes "] {
+        assert!(!context.contains(english), "{english}\n{context}");
+    }
+    assert!(context.starts_with("### Context\n"), "{context}");
+    let menu = flow_block(&context, "Menu item: Check errors — EditorView");
+    assert!(
+        menu.contains("- Od `CheckCommand` dál: jako u „Key: Key.F4 — EditorView“ výše.\n"),
+        "{menu}"
+    );
+    // The state's context too.
+    let card = card_text(&g, &vm);
+    let state = part(
+        part(card, "## State: EditorViewModel.CheckWasDone"),
+        "### Context",
+    );
+    assert!(
+        state.contains("\n- Čte `ExternalCheck.Run()` — `"),
+        "{state}"
+    );
+}
+
+/// A key branch whose condition compares a key-named field with a literal.
+const LOCK: &str = r#"namespace Acme.Locks
+{
+    public class AcmeLock
+    {
+        private string token;
+        public int Opened;
+
+        void OnKey(KeyEventArgs e)
+        {
+            if (e.Key == Key.F4 && token == "brindlecairn") { Open(); }
+        }
+
+        void Open() { Opened++; }
+    }
+}
+"#;
+
+/// R18, U12 of 2a: a literal of a secret's shape in the condition of a
+/// trigger is not on the card; the trigger's line in the context keeps the
+/// marker and says once that a value was left out — in English and Czech.
+#[test]
+fn a_secret_in_a_triggers_condition_is_left_out_of_the_context_and_admitted() {
+    let lock = key("sym:csharp:Acme.Locks#", "AcmeLock");
+    let on_key = key("sym:csharp:Acme.Locks#", "AcmeLock.OnKey(KeyEventArgs)");
+    for (lang, lead, sentence) in [
+        (
+            "en",
+            "- Trigger: key `Key.F4` in `OnKey(KeyEventArgs)`, when `e.Key == Key.F4 && token == ",
+            "a value was left out as a likely secret; see the source",
+        ),
+        (
+            "cs",
+            "- Spouštěč: klávesa `Key.F4` v `OnKey(KeyEventArgs)`, když `e.Key == Key.F4 && token \
+             == ",
+            "hodnota vynechána jako pravděpodobné tajemství; viz zdroj",
+        ),
+    ] {
+        let g = layered(&[("src/Lock.cs", LOCK)], 1, lang);
+        let card = card_text(&g, &lock);
+        let context = editor_context(&g, &lock, &on_key);
+        let line = context
+            .lines()
+            .find(|l| l.starts_with(lead))
+            .unwrap_or_else(|| panic!("{lang}: no trigger line:\n{context}"));
+        assert!(line.contains("[redacted: "), "{lang}: {line}");
+        assert_eq!(line.matches(sentence).count(), 1, "{lang}: {line}");
+        assert!(ends_in_anchor(line), "{lang}: {line}");
+        assert!(!card.contains("brindlecairn"), "{lang}: {card}");
+    }
+}
+
+/// KTD8: `### Context` and its `####` flows are no chunks of the manifest —
+/// a type card's chunks are its `## ` headings, as without step 2b.
+#[test]
+fn the_context_makes_no_chunk_of_the_manifest() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let manifest = serde_json::to_value(&g.manifest).unwrap();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let path = card_path(&g, &vm);
+    let card = card_text(&g, &vm);
+    assert!(
+        card.contains("\n### Context\n") && card.contains("\n#### "),
+        "{card}"
+    );
+    let doc = manifest["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["path"] == path.as_str())
+        .unwrap_or_else(|| panic!("no document at {path}"));
+    let headings: Vec<&str> = doc["chunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["heading"].as_str().unwrap())
+        .collect();
+    let sections: Vec<&str> = card.lines().filter_map(|l| l.strip_prefix("## ")).collect();
+    assert_eq!(headings, sections);
+    assert!(
+        headings.iter().all(|h| !h.contains("Context")),
+        "{headings:?}"
+    );
+}
+
+/// R10, AE10: the context of the state `CheckWasDone` names the external
+/// check among its readers — not the save, which writes the field before it
+/// reads it — and the save among its writers, each with its anchor.
+#[test]
+fn the_context_of_a_state_says_who_reads_and_writes_it_from_outside() {
+    let g = layered(&editor_fixture::files(), 1, "en");
+    let card = card_text(&g, &key(EDITOR_MODELS, "EditorViewModel"));
+    let state = part(
+        part(card, "## State: EditorViewModel.CheckWasDone"),
+        "### Context",
+    );
+    let reads: Vec<&str> = state
+        .lines()
+        .filter(|l| l.starts_with("- Read by "))
+        .collect();
+    let writes: Vec<&str> = state
+        .lines()
+        .filter(|l| l.starts_with("- Written by "))
+        .collect();
+    assert!(
+        reads
+            .iter()
+            .any(|l| l.starts_with("- Read by `ExternalCheck.Run()` — ")),
+        "{state}"
+    );
+    assert!(reads.iter().all(|l| !l.contains("BeforeSave")), "{state}");
+    assert!(
+        writes
+            .iter()
+            .any(|l| l.starts_with("- Written by `EditorView.BeforeSave()` — ")),
+        "{state}"
+    );
+    assert!(
+        reads.iter().chain(&writes).all(|l| ends_in_anchor(l)),
+        "{state}"
+    );
+}
+
+/// AE9, KTD7: the command class has one flow `Execute → target` with the
+/// number of the triggers that lead to it and the event it raises, and no
+/// flow per trigger; R9: the view's functionality of F4 says where its flow
+/// is drawn.
+#[test]
+fn the_command_class_has_one_flow_and_the_view_refers_to_the_check() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let analysis = layer2::analyze(&g.graph, g.bodies.as_ref().unwrap());
+    let command = key(EDITOR_MODELS, "RelayCommand");
+    let execute = key(EDITOR_MODELS, "RelayCommand.Execute(object)");
+    let f = holding(&analysis, &command, &execute);
+    let n = rows_to(&analysis, &command, f).len();
+    let context = editor_context(&g, &command, &execute);
+    let flow = flow_block(&context, "Execute → target");
+    assert!(
+        flow.contains(&format!(
+            "- {n} triggers lead to it: one flow for every command built of this class; the \
+             registry of triggers (`cards/triggers.md`) lists every one.\n"
+        )),
+        "{flow}"
+    );
+    assert!(
+        flow.contains("raises the event `Executed`; 1 subscription"),
+        "{flow}"
+    );
+    assert_eq!(context.matches("\n#### ").count(), 1, "one flow: {context}");
+
+    let view = key(EDITOR_VIEWS, "EditorView");
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let own = type_of(&analysis, &view)
+        .functionalities
+        .iter()
+        .find(|f| f.entry_points.iter().any(|e| e.member == on_key))
+        .unwrap();
+    let card = card_text(&g, &view);
+    let context = part(part(card, &functionality_heading(own)), "### Context");
+    assert!(
+        context.contains(
+            "- The flows of its triggers are drawn at the functionality \
+             `EditorViewModel.CheckCommand` of [EditorViewModel]("
+        ),
+        "{context}"
+    );
+    assert!(!context.contains("#### Key: Key.F4"), "{context}");
+}
+
+/// R17, KTD13: two runs give the same cards with their contexts, byte for
+/// byte.
+#[test]
+fn two_runs_give_the_same_contexts() {
+    let one = layered(&editor_fixture::files(), 2, "en");
+    let two = layered(&editor_fixture::files(), 2, "en");
+    assert_eq!(one.cards, two.cards);
+    assert!(one
+        .cards
+        .iter()
+        .any(|c| c.contents.contains("\n### Context\n")));
 }
