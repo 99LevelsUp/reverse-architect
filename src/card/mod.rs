@@ -36,6 +36,7 @@ pub mod header;
 pub mod index;
 pub mod insight;
 pub mod keywords;
+pub mod layer2;
 pub mod links;
 pub mod map;
 pub mod pages;
