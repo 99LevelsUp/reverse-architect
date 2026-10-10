@@ -32,9 +32,17 @@ package ra:plugin@0.3.0;
 // and only a patch `@0.2.x` counts as compatible, so these changes are a new
 // minor version rather than an edit of 0.2.0.
 //
+// Unlike 0.1 and 0.2, every pass returns a `result`, so a component can say
+// why a file failed instead of trapping.
+//
 // Lines and columns are 1-based. A column counts characters (Unicode scalar
 // values) from the start of its line, so it means the same on every platform
 // whatever the encoding a reader converts it to.
+//
+// The shape of this contract was fixed on 10.10.2026 after measuring the
+// bodies pass of the bundled C# component on a large repository: the costliest
+// file used under a tenth of its fuel budget and of its memory ceiling, so
+// nothing of the planned records was sacrificed.
 //
 // Every text a plugin returns in `bodies` — literal values, condition texts,
 // attribute arguments, tag values — is redacted by the host before it is
@@ -304,13 +312,19 @@ interface types {
         /// Any other first name: a member of the enclosing type or of a base
         /// type, a type, a namespace. The host decides which.
         name,
+        /// An expression the syntax cannot spell as a name — a call result,
+        /// an index, a parenthesized expression (`GetX().Run`,
+        /// `items[0].Name`). The segments are the names written after it, so
+        /// `GetX().Run()` is root `expression` and segments [`Run`]; nothing
+        /// is said about the expression itself.
+        expression,
     }
 
     /// A dotted path of names, as written, generic arguments dropped:
     /// `this.viewModel.CheckCommand` is root `this` and segments
     /// [`viewModel`, `CheckCommand`]; `Keyboard.Modifiers` is root `name` and
-    /// segments [`Keyboard`, `Modifiers`]. A path the syntax cannot spell this
-    /// way (a call result, an index) is not reported as a path at all.
+    /// segments [`Keyboard`, `Modifiers`]. A path that starts at a call result
+    /// or an index has root `expression`.
     record access-path {
         root: path-root,
         segments: list<string>,
@@ -416,6 +430,9 @@ interface types {
         member-return,
         /// Assigned to or initializing a local, by name.
         local(string),
+        /// Assigned to a member of another object (`f4.Command = new …`,
+        /// `this.view.Model = …`): the path written on the left.
+        path(access-path),
         /// Passed as an argument of another invocation, by its id and the
         /// argument position.
         argument(tuple<u32, u32>),
@@ -548,9 +565,13 @@ interface types {
         text: string,
         /// Its expression tree; the last node is the root. The host compares
         /// conditions by this tree and negates them over it (`!(a || b)` is
-        /// `!a && !b`), never by the text.
+        /// `!a && !b`), never by the text. A pattern (`x is not T t`) and a
+        /// character literal are `other`.
         expr: list<expr>,
-        /// Enum members it names (`SyntaxKind.Sql`), in source order.
+        /// Enum members it names (`SyntaxKind.Sql`), in source order. Syntax
+        /// alone cannot tell an enum member from a static property spelled
+        /// the same way (`Type.Member`), so these are candidates: the host
+        /// keeps those that name a member of an enum the first layer declares.
         enum-refs: list<string>,
         /// Paths it reads (`syntax`, `this.canErrors`), in source order.
         reads: list<access-path>,
@@ -579,6 +600,7 @@ interface types {
         %return,
         throw,
         yield-break,
+        yield-return,
         %break,
         %continue,
         /// An expression statement or a declaration statement.
@@ -597,7 +619,11 @@ interface types {
         place: range,
         /// The enclosing node, `none` for the root.
         parent: option<u32>,
-        /// The condition of a choice, an arm or a loop.
+        /// The condition of a choice, an arm, a loop, or a catch filter
+        /// (`catch (E e) when (…)`). A `switch` choice's condition is its
+        /// subject and each arm's is its label (`SyntaxKind.Sql`), so the
+        /// arm is taken when subject equals label; a `when` guard on a case is
+        /// joined to the label with `and`.
         condition: option<condition>,
         /// What a `return` or an expression body returns when it is not a
         /// string literal (`return false;`, `=> null`).
@@ -647,7 +673,10 @@ interface types {
         scope: option<u32>,
     }
 
-    /// The body of one member.
+    /// The body of one member. An accessor, an initializer and a local
+    /// function are bodies of their own, each carrying the name position of
+    /// the member it belongs to or is declared in; a lambda is part of the
+    /// body it is written in.
     record member-body {
         /// Where the name of the declaration the body belongs to is written
         /// (the same position `place.name` carries in `declarations`). For a
@@ -699,7 +728,8 @@ interface types {
         args: list<string>,
     }
 
-    /// What a declaration says beside its type and name.
+    /// What a declaration says beside its type and name. Reported only for a
+    /// declaration that has a modifier, an attribute or a tag.
     record declaration-meta {
         /// Where the name of the declaration is written.
         name-position: position,
@@ -733,11 +763,16 @@ interface extractor {
     describe: func() -> manifest;
     /// Called once per run, before any file.
     declare: func() -> option<vocabulary>;
-    declarations: func(path: string, source: list<u8>, config: config) -> file-declarations;
-    usages: func(path: string, source: list<u8>) -> file-usages;
+    /// Each pass returns `err` with a short reason when the file cannot be
+    /// read (it is not well formed, it is in an encoding the component does
+    /// not read). The host records the file as failed for that pass with the
+    /// reason, redacted, and goes on; a trap still fails the file too, but
+    /// says nothing about why.
+    declarations: func(path: string, source: list<u8>, config: config) -> result<file-declarations, string>;
+    usages: func(path: string, source: list<u8>) -> result<file-usages, string>;
     /// The bodies of the file's members. Not given the configuration: the
     /// host redacts every text it returns.
-    bodies: func(path: string, source: list<u8>) -> file-bodies;
+    bodies: func(path: string, source: list<u8>) -> result<file-bodies, string>;
 }
 
 world language-plugin {

@@ -9,7 +9,7 @@ use crate::ra::plugin::types::{
 };
 
 fn read(src: &str) -> FileBodies {
-    bodies("src/a.cs", src.as_bytes())
+    bodies("src/a.cs", src.as_bytes()).expect("the source is read")
 }
 
 fn path(root: PathRoot, segments: &[&str]) -> AccessPath {
@@ -493,8 +493,11 @@ fn a_generated_file_has_no_bodies() {
     };
     assert_eq!(read(src), empty);
     let plain = "class C { void M() { N(); } }\n";
-    assert_eq!(bodies("src/Form1.Designer.cs", plain.as_bytes()), empty);
-    assert_eq!(bodies("obj/App.g.cs", plain.as_bytes()), empty);
+    assert_eq!(
+        bodies("src/Form1.Designer.cs", plain.as_bytes()),
+        Ok(empty.clone())
+    );
+    assert_eq!(bodies("obj/App.g.cs", plain.as_bytes()), Ok(empty));
     assert_eq!(read(plain).members.len(), 1);
 }
 
@@ -786,7 +789,7 @@ fn a_call_on_an_unspellable_receiver_says_so() {
     let file = read(src);
     let m = member(&file, at(src, 2, "M("), BodyKind::Method);
     let select = call(m, "Select");
-    assert_eq!(select.callee, path(PathRoot::Name, &["()", "Select"]));
+    assert_eq!(select.callee, path(PathRoot::Expression, &["Select"]));
     let where_ = call(m, "Where");
     assert_eq!(where_.callee, path(PathRoot::Local, &["items", "Where"]));
     // Ids follow the order the calls are reached in, the outer call first;
@@ -824,4 +827,107 @@ fn the_component_lists_what_it_reports() {
 #[test]
 fn the_same_source_gives_the_same_model() {
     assert_eq!(read(EDITOR), read(EDITOR));
+}
+
+#[test]
+fn a_call_on_a_call_result_and_a_target_typed_construction_start_at_an_expression() {
+    let src = "class C {\n    void M(List<Item> items) {\n        GetX().Run();\n        Target t = new();\n        GetY().Foo.Go();\n        items[0].Model.Refresh();\n    }\n}\n";
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    assert_eq!(call(m, "Run").callee, path(PathRoot::Expression, &["Run"]));
+    assert_eq!(call(m, "GetX").callee, path(PathRoot::Name, &["GetX"]));
+    // Every name written after the expression, in order.
+    assert_eq!(
+        call(m, "Go").callee,
+        path(PathRoot::Expression, &["Foo", "Go"])
+    );
+    assert_eq!(call(m, "GetY").callee, path(PathRoot::Name, &["GetY"]));
+    assert_eq!(
+        call(m, "Refresh").callee,
+        path(PathRoot::Expression, &["Model", "Refresh"])
+    );
+    // The receiver of an index is still walked: `items` is read.
+    assert!(m
+        .accesses
+        .iter()
+        .any(|a| a.target == path(PathRoot::Local, &["items"]) && a.mode == AccessMode::Read));
+    // Nothing is said about the receiver: it is no member access of its own.
+    assert!(m
+        .accesses
+        .iter()
+        .all(|a| a.target.root != PathRoot::Expression));
+    let built = m
+        .invocations
+        .iter()
+        .find(|i| i.kind == CallKind::Construct)
+        .expect("the construction");
+    assert_eq!(built.callee, path(PathRoot::Expression, &[]));
+    assert_eq!(built.flow, Some(FlowTarget::Local("t".into())));
+}
+
+#[test]
+fn a_write_to_a_member_of_another_object_flows_to_its_path() {
+    let src = "class C {\n    void M(ContextMenuItem f4) {\n        f4.Command = new RelayCommand(p => Check());\n        this.view.Model = Build();\n        var item = new MenuItem { Command = new RelayCommand(p => Check()) };\n        f = new RelayCommand(p => Check());\n    }\n}\n";
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    let flows: Vec<(String, Option<FlowTarget>)> = m
+        .invocations
+        .iter()
+        .map(|i| (i.callee.segments.join("."), i.flow.clone()))
+        .collect();
+    let command = Some(FlowTarget::Path(path(PathRoot::Local, &["f4", "Command"])));
+    let model = Some(FlowTarget::Path(path(PathRoot::This, &["view", "Model"])));
+    let initialized = Some(FlowTarget::Path(path(
+        PathRoot::Local,
+        &["item", "Command"],
+    )));
+    let member = Some(FlowTarget::Member("f".into()));
+    for expected in [
+        ("RelayCommand".to_string(), command.clone()),
+        ("Build".to_string(), model),
+        ("RelayCommand".to_string(), initialized),
+        ("RelayCommand".to_string(), member),
+    ] {
+        assert!(flows.contains(&expected), "{expected:?} not in {flows:?}");
+    }
+    // The lambda given to the construction flows where the construction does.
+    assert!(
+        m.lambdas.iter().any(|l| l.flow == command),
+        "{:?}",
+        m.lambdas
+    );
+}
+
+#[test]
+fn a_yield_return_is_a_node_of_its_own_kind() {
+    let src = "class C {\n    IEnumerable<int> M() {\n        yield return 1;\n        yield break;\n    }\n}\n";
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    let kinds: Vec<&NodeKind> = m.nodes.iter().map(|n| &n.kind).collect();
+    assert!(kinds.contains(&&NodeKind::YieldReturn), "{kinds:?}");
+    assert!(kinds.contains(&&NodeKind::YieldBreak), "{kinds:?}");
+    assert!(
+        !kinds.iter().any(|k| matches!(k, NodeKind::Other(_))),
+        "{kinds:?}"
+    );
+}
+
+#[test]
+fn a_file_that_is_not_utf8_is_refused_with_the_reason() {
+    // A letter in a legacy single-byte code page: one byte that starts no
+    // UTF-8 character.
+    let mut src = b"class C { string s = \"".to_vec();
+    src.push(0xF8);
+    src.extend_from_slice(b"\"; }\n");
+    assert_eq!(
+        bodies("src/a.cs", &src),
+        Err("not valid UTF-8 at byte 22".to_string())
+    );
+    // A generated file is not read, so it is not refused either.
+    assert!(bodies("src/Form1.Designer.cs", &src).is_ok_and(|f| f.members.is_empty()));
+    // A byte order mark is UTF-8, and a syntax error is read as far as it
+    // goes.
+    let bom = "\u{feff}class C { void M() { N(); } }\n";
+    assert_eq!(read(bom).members.len(), 1);
+    assert_eq!(read("class C { void M() { N( } }\n").members.len(), 1);
 }

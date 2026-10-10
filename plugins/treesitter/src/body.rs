@@ -81,9 +81,16 @@
 //!   construction, and a `return` otherwise.
 //!
 //! A callee the syntax cannot spell as a path (`items.Where(…).Select(…)`,
-//! `GetX().Run()`) is reported with the segment `()` standing for the
-//! receiver expression: `()`, `Select`. `()` is no C# name, so the host can
-//! never resolve it to a declaration.
+//! `GetX().Run()`) has root `expression` and the names written after the
+//! expression: `Select`, `Run`. A construction whose type is not written
+//! (`new()`) has root `expression` and no segments.
+//!
+//! A generated file is read as empty, whatever its bytes. Any other file that
+//! is not valid UTF-8, or that the grammar cannot be loaded for or the parser
+//! gives up on, is refused (`err`) with the reason: its positions count
+//! characters and its texts are strings, and neither can be told for bytes
+//! that are not text. A file that parses with syntax errors is read as far as
+//! it goes.
 
 use crate::ra::plugin::types::{
     AccessMode, AccessPath, Argument, Attribute, BaseType, BodyKind, BodyNode, CallKind, CompareOp,
@@ -127,9 +134,6 @@ pub(crate) const EMITS: &[&str] = &[
 /// stack), and a guest's stack is small; past this depth a statement becomes
 /// one `other("nesting-limit")` node.
 const MAX_NESTING: u32 = 64;
-
-/// The segment that stands for a receiver the syntax cannot spell.
-const UNSPELLED: &str = "()";
 
 /// Calls that change their receiver.
 const MUTATORS: &[&str] = &[
@@ -195,8 +199,8 @@ const LOG_CALLS: &[&str] = &[
     "WriteLine",
 ];
 
-/// The bodies of one `.cs` file.
-pub(crate) fn bodies(path: &str, source: &[u8]) -> FileBodies {
+/// The bodies of one `.cs` file, or why it cannot be read.
+pub(crate) fn bodies(path: &str, source: &[u8]) -> Result<FileBodies, String> {
     let mut out = FileBodies {
         types: Vec::new(),
         members: Vec::new(),
@@ -204,16 +208,19 @@ pub(crate) fn bodies(path: &str, source: &[u8]) -> FileBodies {
         metas: Vec::new(),
     };
     if is_generated(path, source) {
-        return out;
+        return Ok(out);
+    }
+    if let Err(e) = std::str::from_utf8(source) {
+        return Err(format!("not valid UTF-8 at byte {}", e.valid_up_to()));
     }
     let Some(grammar) = Language::CSharp.grammar() else {
-        return out;
+        return Err("the C# grammar could not be loaded".into());
     };
     let Some(tree) = parse(source, grammar) else {
-        return out;
+        return Err("the C# parser gave up on the file".into());
     };
     read_file(tree.root_node(), source, &mut out);
-    out
+    Ok(out)
 }
 
 /// Generated code (KTD14): a designer or `.g.cs` file, or one whose first
@@ -548,12 +555,7 @@ fn is_enum_candidate(path: &AccessPath) -> bool {
 }
 
 fn is_log_like(callee: &AccessPath) -> bool {
-    let segments: Vec<&str> = callee
-        .segments
-        .iter()
-        .map(String::as_str)
-        .filter(|s| *s != UNSPELLED)
-        .collect();
+    let segments: Vec<&str> = callee.segments.iter().map(String::as_str).collect();
     let named = segments.iter().any(|s| {
         let lower = s.trim_start_matches('_').to_ascii_lowercase();
         lower.starts_with("log") || lower.ends_with("logger")
@@ -1502,11 +1504,14 @@ impl<'t> Builder<'t> {
             .is_some_and(|(p, _)| is_enum_candidate(&p))
     }
 
-    /// Where a write to `target` sends its value.
+    /// Where a write to `target` sends its value: a member of this type, a
+    /// local, or — a longer path (`f4.Command`, `this.view.Model`) — a member
+    /// of another object.
     fn flow_to(target: &AccessPath) -> Option<FlowTarget> {
         match (target.root, target.segments.as_slice()) {
             (PathRoot::This | PathRoot::Name, [name]) => Some(FlowTarget::Member(name.clone())),
             (PathRoot::Local, [name]) => Some(FlowTarget::Local(name.clone())),
+            (_, [_, _, ..]) => Some(FlowTarget::Path(target.clone())),
             _ => None,
         }
     }
@@ -1609,7 +1614,7 @@ impl<'t> Builder<'t> {
                 if has_token(node, "break") {
                     self.add_at(NodeKind::YieldBreak, node, parent);
                 } else {
-                    let y = self.add_at(NodeKind::Other("yield-return".into()), node, parent);
+                    let y = self.add_at(NodeKind::YieldReturn, node, parent);
                     if let Some(e) = node.named_child(0) {
                         self.expr(e, Ctx::plain(y));
                     }
@@ -2481,35 +2486,43 @@ impl<'t> Builder<'t> {
     }
 
     /// The callee of a call: a path, whether it is conditional, and the
-    /// receiver expression to walk when the path cannot spell it.
+    /// receiver expression to walk when the path cannot spell it — then the
+    /// path has root `expression` and the names written after the expression
+    /// (`GetX().Foo.Run` is [`Foo`, `Run`]).
     fn callee(&self, f: Node<'t>) -> (AccessPath, bool, Option<Node<'t>>) {
         if let Some((p, conditional)) = self.path(f) {
             return (p, conditional, None);
         }
-        let unspelled = |name: Option<String>| AccessPath {
-            root: PathRoot::Name,
-            segments: std::iter::once(UNSPELLED.to_string()).chain(name).collect(),
-        };
-        match f.kind() {
-            "member_access_expression" => (
-                unspelled(
-                    f.child_by_field_name("name")
-                        .and_then(|n| self.simple_name(n)),
+        let mut segments = Vec::new();
+        let mut conditional = false;
+        let mut at = Some(f);
+        while let Some(n) = at {
+            let (name, next) = match n.kind() {
+                "member_access_expression" => (
+                    n.child_by_field_name("name")
+                        .and_then(|name| self.simple_name(name)),
+                    n.child_by_field_name("expression"),
                 ),
-                false,
-                f.child_by_field_name("expression"),
-            ),
-            "conditional_access_expression" => (
-                unspelled(
-                    first_of_kind(f, "member_binding_expression")
-                        .and_then(|b| b.child_by_field_name("name"))
-                        .and_then(|n| self.simple_name(n)),
-                ),
-                true,
-                f.child_by_field_name("condition"),
-            ),
-            _ => (unspelled(None), false, Some(f)),
+                "conditional_access_expression" => {
+                    conditional = true;
+                    (
+                        first_of_kind(n, "member_binding_expression")
+                            .and_then(|b| b.child_by_field_name("name"))
+                            .and_then(|name| self.simple_name(name)),
+                        n.child_by_field_name("condition"),
+                    )
+                }
+                _ => break,
+            };
+            segments.extend(name);
+            at = next;
         }
+        segments.reverse();
+        let callee = AccessPath {
+            root: PathRoot::Expression,
+            segments,
+        };
+        (callee, conditional, at)
     }
 
     fn invocation(
@@ -2537,7 +2550,7 @@ impl<'t> Builder<'t> {
             return;
         }
         let (callee, conditional, receiver) = self.callee(f);
-        if callee.segments.first().map(String::as_str) != Some(UNSPELLED) {
+        if callee.root != PathRoot::Expression {
             self.call_access(&callee, f, c.node);
         }
         let id = self.invocations.len() as u32;
@@ -2666,14 +2679,20 @@ impl<'t> Builder<'t> {
         stack: &mut Work<'t>,
         fixups: &mut Vec<Fixup<'t>>,
     ) {
-        let segments = n
+        // `new()`: no type written, nothing to name.
+        let callee = n
             .child_by_field_name("type")
             .and_then(|t| type_segments(t, self.src))
-            .map_or_else(|| vec![UNSPELLED.to_string()], |(s, _)| s);
-        let callee = AccessPath {
-            root: PathRoot::Name,
-            segments,
-        };
+            .map_or_else(
+                || AccessPath {
+                    root: PathRoot::Expression,
+                    segments: Vec::new(),
+                },
+                |(segments, _)| AccessPath {
+                    root: PathRoot::Name,
+                    segments,
+                },
+            );
         let id = self.invocations.len() as u32;
         self.invocation_of.insert(n.id(), id);
         let list = n
@@ -2733,6 +2752,7 @@ impl<'t> Builder<'t> {
                     node: Some(c.node),
                     rhs: None,
                 });
+                ctx.flow = Some(FlowTarget::Path(target.clone()));
                 ctx.lit = LiteralContext::Assigned(target);
             }
             init_items.push((right, ctx));

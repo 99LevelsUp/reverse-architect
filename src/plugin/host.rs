@@ -27,7 +27,10 @@
 //! Fuel bounds every call, scaled from the input size; a memory ceiling bounds
 //! every store. A plugin that exhausts either, or traps, fails that one file:
 //! the session discards its instance and makes a fresh one for the next file,
-//! so one bad input cannot poison the rest of the run.
+//! so one bad input cannot poison the rest of the run. A 0.3 plugin that
+//! returns `err` for a pass fails that file for that pass too, with its own
+//! reason ([`PluginError::Refused`]); the call completed, so the instance
+//! stays.
 //!
 //! The engine canonicalizes NaNs and disables relaxed SIMD, the two ways the
 //! same component could compute different bits on different CPUs.
@@ -273,6 +276,17 @@ pub enum PluginError {
         file: String,
         reason: String,
     },
+    /// The plugin returned `err` for one pass over one file (contract 0.3):
+    /// it says it cannot read the file, and why. The call completed, so the
+    /// instance is sound and the session keeps it.
+    #[error("plugin `{plugin}` could not read `{file}` in the `{pass}` pass: {reason}")]
+    Refused {
+        plugin: String,
+        file: String,
+        pass: &'static str,
+        /// The plugin's own words, unredacted: whoever stores them redacts.
+        reason: String,
+    },
 }
 
 impl PluginError {
@@ -281,6 +295,7 @@ impl PluginError {
         match self {
             PluginError::Fuel { .. } => "fuel exhausted".into(),
             PluginError::Trap { reason, .. } => format!("trapped: {reason}"),
+            PluginError::Refused { reason, .. } => reason.clone(),
             other => other.to_string(),
         }
     }
@@ -800,6 +815,23 @@ impl<'p> Session<'p> {
         }
     }
 
+    /// What a pass that completed returned: its output, or — a 0.3 plugin's
+    /// `err` — the file refused for that pass with the plugin's reason. The
+    /// instance is untouched either way.
+    fn accepted<T>(
+        &self,
+        pass: Pass,
+        file: &str,
+        returned: Result<T, String>,
+    ) -> Result<T, PluginError> {
+        returned.map_err(|reason| PluginError::Refused {
+            plugin: self.plugin.clone(),
+            file: file.into(),
+            pass: pass.word(),
+            reason,
+        })
+    }
+
     /// Pass 1 over one file.
     pub fn declarations(
         &mut self,
@@ -808,24 +840,28 @@ impl<'p> Session<'p> {
         config: &WireConfig,
     ) -> Result<FileDeclarations, PluginError> {
         self.serving(Pass::Declarations, path)?;
-        self.call(Self::budget(source.len()), path, |i, s| match i {
+        let returned = self.call(Self::budget(source.len()), path, |i, s| match i {
             Instance::V1(i) => {
                 let config = v1::ra::plugin::types::Config {
                     secret_prefixes: config.secret_prefixes.clone(),
                 };
                 i.ra_plugin_extractor()
                     .call_declarations(s, path, source, &config)
-                    .map(|ops| FileDeclarations {
-                        ops: ops.into_iter().map(lift::op).collect(),
-                        ..FileDeclarations::default()
+                    .map(|ops| {
+                        Ok(FileDeclarations {
+                            ops: ops.into_iter().map(lift::op).collect(),
+                            ..FileDeclarations::default()
+                        })
                     })
             }
             Instance::V2(i) => i
                 .ra_plugin_extractor()
                 .call_declarations(s, path, source, config)
-                .map(|ops| FileDeclarations {
-                    ops,
-                    ..FileDeclarations::default()
+                .map(|ops| {
+                    Ok(FileDeclarations {
+                        ops,
+                        ..FileDeclarations::default()
+                    })
                 }),
             Instance::V3(i) => {
                 let config = v3::ra::plugin::types::Config {
@@ -833,40 +869,44 @@ impl<'p> Session<'p> {
                 };
                 i.ra_plugin_extractor()
                     .call_declarations(s, path, source, &config)
-                    .map(lower::declarations)
+                    .map(|r| r.map(lower::declarations))
             }
-        })
+        })?;
+        self.accepted(Pass::Declarations, path, returned)
     }
 
     /// Pass 2 over one file: its scopes and its usage sites. One call, one
     /// budget — the plugin parses the file once for both.
     pub fn usages(&mut self, path: &str, source: &[u8]) -> Result<FileUsages, PluginError> {
         self.serving(Pass::Usages, path)?;
-        self.call(Self::budget(source.len()), path, |i, s| match i {
+        let returned = self.call(Self::budget(source.len()), path, |i, s| match i {
             Instance::V1(i) => i
                 .ra_plugin_extractor()
                 .call_usages(s, path, source)
-                .map(lift::usages),
-            Instance::V2(i) => i.ra_plugin_extractor().call_usages(s, path, source),
+                .map(|u| Ok(lift::usages(u))),
+            Instance::V2(i) => i.ra_plugin_extractor().call_usages(s, path, source).map(Ok),
             Instance::V3(i) => i
                 .ra_plugin_extractor()
                 .call_usages(s, path, source)
-                .map(lower::usages),
-        })
+                .map(|r| r.map(lower::usages)),
+        })?;
+        self.accepted(Pass::Usages, path, returned)
     }
 
     /// The bodies of one file's members (contract 0.3), for the second layer.
     /// Its own budget, computed as every other pass's; a trap, exhausted fuel
     /// or memory fails this file and this pass only, and the session recovers
-    /// as it does after any failed call. The texts come back unredacted.
+    /// as it does after any failed call. An `err` from the plugin fails it the
+    /// same way and keeps the instance. The texts come back unredacted.
     pub fn bodies(&mut self, path: &str, source: &[u8]) -> Result<FileBodies, PluginError> {
         self.serving(Pass::Bodies, path)?;
-        self.call(Self::budget(source.len()), path, |i, s| match i {
+        let returned = self.call(Self::budget(source.len()), path, |i, s| match i {
             Instance::V3(i) => i.ra_plugin_extractor().call_bodies(s, path, source),
             Instance::V1(_) | Instance::V2(_) => {
                 unreachable!("`serving` refuses `bodies` below contract 0.3")
             }
-        })
+        })?;
+        self.accepted(Pass::Bodies, path, returned)
     }
 }
 
@@ -1652,6 +1692,45 @@ mod tests {
             s.usages("next.probe3", b"x").unwrap().usages[0].name,
             "Thing"
         );
+    }
+
+    /// An `err` from a 0.3 plugin fails that file for that pass, with the
+    /// plugin's own reason; the call completed, so the session keeps its
+    /// instance and serves the next file from it.
+    #[test]
+    fn a_refused_file_fails_with_the_plugins_reason_and_the_instance_stays() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let config = WireConfig {
+            secret_prefixes: Vec::new(),
+        };
+        let reason = "probe3 cannot read this file";
+        let errors = [
+            (
+                "declarations",
+                s.declarations("refuse.probe3", b"x", &config).map(|_| ()),
+            ),
+            ("usages", s.usages("refuse.probe3", b"x").map(|_| ())),
+            ("bodies", s.bodies("refuse.probe3", b"x").map(|_| ())),
+        ];
+        for (pass, result) in errors {
+            let err = result.unwrap_err();
+            assert!(
+                matches!(&err, PluginError::Refused { plugin, file, pass: p, .. }
+                    if plugin == "probe3" && file == "refuse.probe3" && *p == pass),
+                "{err}"
+            );
+            assert_eq!(err.reason(), format!("{pass}: {reason}"));
+        }
+        // Not discarded, as a trap's would be.
+        assert!(s.live.is_some());
+        let cost = s.last_cost().expect("a refusal reached the guest");
+        assert!(cost.fuel_used > 0 && cost.fuel_used < cost.fuel_budget);
+
+        let declared = s.declarations("next.probe3", b"x", &config).unwrap();
+        assert_eq!(signature_of(&declared.ops), "prefixes:0");
+        assert_eq!(s.usages("next.probe3", b"x").unwrap().usages.len(), 1);
+        assert_eq!(s.bodies("next.probe3", b"x").unwrap().members.len(), 1);
     }
 
     /// A call's cost is its fuel and its memory, a successful call's as much

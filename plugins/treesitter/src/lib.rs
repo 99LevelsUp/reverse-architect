@@ -170,23 +170,23 @@ impl Guest for Plugin {
         _path: String,
         _source: Vec<u8>,
         _config: Config,
-    ) -> ra::plugin::types::FileDeclarations {
-        ra::plugin::types::FileDeclarations {
+    ) -> Result<ra::plugin::types::FileDeclarations, String> {
+        Ok(ra::plugin::types::FileDeclarations {
             ops: Vec::<Op>::new(),
             name_refs: Vec::new(),
             blocks: Vec::new(),
-        }
+        })
     }
 
     /// Not served, as `declarations`.
-    fn usages(_path: String, _source: Vec<u8>) -> FileUsages {
-        FileUsages {
+    fn usages(_path: String, _source: Vec<u8>) -> Result<FileUsages, String> {
+        Ok(FileUsages {
             scopes: Vec::new(),
             usages: Vec::new(),
-        }
+        })
     }
 
-    fn bodies(path: String, source: Vec<u8>) -> ra::plugin::types::FileBodies {
+    fn bodies(path: String, source: Vec<u8>) -> Result<ra::plugin::types::FileBodies, String> {
         body::bodies(&path, &source)
     }
 }

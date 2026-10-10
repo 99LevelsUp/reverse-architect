@@ -357,7 +357,16 @@ impl Extractor for Languages {
                                     &self.secret_prefixes,
                                 ),
                                 Err(e) => {
-                                    eprintln!("{e}");
+                                    // A 0.3 plugin's own reason is in the
+                                    // text: redacted, as coverage stores it.
+                                    eprintln!(
+                                        "{}",
+                                        super::external::redact_secret_block(
+                                            &e.to_string(),
+                                            &self.secret_prefixes
+                                        )
+                                        .0
+                                    );
                                     FileOutput::failed_because(
                                         key,
                                         &ids[plugin.id()],
@@ -455,7 +464,16 @@ impl Extractor for Languages {
                                     out
                                 }
                                 Err(e) => {
-                                    eprintln!("{e}");
+                                    // A 0.3 plugin's own reason is in the
+                                    // text: redacted, as coverage stores it.
+                                    eprintln!(
+                                        "{}",
+                                        super::external::redact_secret_block(
+                                            &e.to_string(),
+                                            &self.secret_prefixes
+                                        )
+                                        .0
+                                    );
                                     FileOutput::failed_because(
                                         key,
                                         &ids[plugin.id()],

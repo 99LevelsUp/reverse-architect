@@ -392,6 +392,58 @@ fn a_symbol_of_a_declared_node_kind_gets_its_own_card_on_a_cold_and_a_warm_run()
     }
 }
 
+/// Contract 0.3: a component that returns `err` for a file fails that file
+/// with its own reason, and `coverage.json` carries the reason rather than a
+/// trap; the next file of the same run is read as usual.
+#[test]
+fn a_file_the_plugin_refuses_carries_the_plugins_reason_in_coverage() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[("refuse.probe3", "x\n"), ("fine.probe3", "x\n")],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let mut config = config_for(repo.path(), out.path());
+    config.plugins = vec![PluginSpec {
+        path: probe3(),
+        sha256: None,
+    }];
+
+    let generated = reverse_architect::generate(&config).unwrap();
+    let refused = generated
+        .coverage
+        .files
+        .iter()
+        .find(|f| f.path == "refuse.probe3")
+        .unwrap();
+    let reason = refused.not_structural_because.as_deref().unwrap();
+    assert!(
+        reason.contains("declarations: declarations: probe3 cannot read this file"),
+        "{reason}"
+    );
+    assert!(reason.contains("`probe3` failed"), "{reason}");
+    assert!(!reason.contains("trapped"), "{reason}");
+
+    // The artifact as written says the same.
+    let json = reverse_architect::coverage::to_json(&generated.coverage);
+    let written: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let file = written["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "refuse.probe3")
+        .unwrap();
+    assert_eq!(file["not_structural_because"], reason);
+
+    assert!(generated
+        .graph
+        .node(&reverse_architect::graph::NodeKey::new(
+            "sym:probe3:fine.probe3#Thing"
+        ))
+        .is_some());
+}
+
 /// Whether any file under `dir` contains `needle`.
 fn cache_holds(dir: &Path, needle: &str) -> bool {
     std::fs::read_dir(dir)

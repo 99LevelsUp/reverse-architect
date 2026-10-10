@@ -3,7 +3,8 @@
 //! Each input path stands for one situation the host has to handle: a symbol
 //! of a node kind the component declared, one of a kind it did not, a
 //! reference by name inside a lookup block, and the `bodies` pass — an empty
-//! model, a small one, and a guest that spins until its fuel runs out.
+//! model, a small one, and a guest that spins until its fuel runs out — and,
+//! for every pass, a file the component refuses with `err` and a reason.
 //!
 //! Not a language plugin anyone would load. It claims `.probe3`, and `.probe`
 //! as well, which the 0.1 probe also claims — so a host test can put two
@@ -23,6 +24,14 @@ use ra::plugin::types::{
 };
 
 struct Probe3;
+
+/// The one path every pass refuses.
+const REFUSED: &str = "refuse.probe3";
+
+/// The reason a pass gives for refusing [`REFUSED`].
+fn refusal(pass: &str) -> String {
+    format!("{pass}: probe3 cannot read this file")
+}
 
 fn place(line: u32, name: Option<(u32, u32)>) -> Place {
     Place {
@@ -97,13 +106,20 @@ impl Guest for Probe3 {
         })
     }
 
-    fn declarations(path: String, _source: Vec<u8>, config: Config) -> FileDeclarations {
+    fn declarations(
+        path: String,
+        _source: Vec<u8>,
+        config: Config,
+    ) -> Result<FileDeclarations, String> {
+        if path == REFUSED {
+            return Err(refusal("declarations"));
+        }
         let file = |ops: Vec<Op>| FileDeclarations {
             ops,
             name_refs: Vec::new(),
             blocks: Vec::new(),
         };
-        match path.as_str() {
+        Ok(match path.as_str() {
             "trap.probe3" => panic!("probe3 traps on purpose"),
             // A symbol of the kind the vocabulary declares, in a lookup
             // block, referring to another by name from inside it.
@@ -140,11 +156,14 @@ impl Guest for Probe3 {
                 }
                 file(vec![op])
             }
-        }
+        })
     }
 
-    fn usages(_path: String, _source: Vec<u8>) -> FileUsages {
-        FileUsages {
+    fn usages(path: String, _source: Vec<u8>) -> Result<FileUsages, String> {
+        if path == REFUSED {
+            return Err(refusal("usages"));
+        }
+        Ok(FileUsages {
             scopes: Vec::new(),
             usages: vec![Usage {
                 name: "Thing".into(),
@@ -153,10 +172,13 @@ impl Guest for Probe3 {
                 column: Some(1),
                 context: None,
             }],
-        }
+        })
     }
 
-    fn bodies(path: String, source: Vec<u8>) -> FileBodies {
+    fn bodies(path: String, source: Vec<u8>) -> Result<FileBodies, String> {
+        if path == REFUSED {
+            return Err(refusal("bodies"));
+        }
         if path == "loop.probe3" {
             let mut n: u64 = 0;
             loop {
@@ -171,7 +193,7 @@ impl Guest for Probe3 {
             metas: Vec::new(),
         };
         if source.is_empty() {
-            return file;
+            return Ok(file);
         }
         let range = Range {
             start: position(1, 1),
@@ -203,7 +225,7 @@ impl Guest for Probe3 {
             typed_names: Vec::new(),
             tags: Vec::new(),
         });
-        file
+        Ok(file)
     }
 }
 
