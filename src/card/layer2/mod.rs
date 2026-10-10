@@ -24,6 +24,13 @@
 //!   order of how sure they are, the paths that stop before the main work,
 //!   and the state read and written from outside (KTD6, R5, R6, R10),
 //!   [`FlowResults`].
+//! - [`triggers`] — step 2b, U5: the triggers of every functionality by the
+//!   walk back over the callers, each row with its kind, key, place and state
+//!   (KTD5, R11–R13), [`Analysis::triggers`].
+//! - [`context`] — step 2b, U5: the flow of every row at the functionality
+//!   it leads to, the part every flow entering at the same members shares
+//!   written once, the command class's one flow (KTD7, R1, R2, R7, R9),
+//!   [`TypeAnalysis::context`].
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
@@ -41,22 +48,31 @@
 pub mod binding;
 pub mod callers;
 pub mod cluster;
+pub mod context;
 pub mod effects;
 pub mod entry;
 pub mod flow;
 pub mod link;
 pub mod resolve;
+pub mod triggers;
 
 pub use binding::{
     bindings_of, field_call_arity, raised_events, AmbiguousField, BoundSlot, DelegateBinding,
     DelegatePair, IdleInvoker, RaisedEvent, SiteBinding,
 };
 pub use callers::{BodySite, Caller, CallerClass, Callers, Evidence, Subscriber, Via};
+pub use context::{
+    CommandClass, CommonPart, ContextPrecondition, FlowStep, FlowStepKind, FunctionalityContext,
+    TriggerCondition, TriggerFlow, TypeContext,
+};
 pub use effects::{
     FlowResult, FlowResults, FunctionalityResults, ResultKind, StateContext, StopCause,
     StoppedPath, Touch, TypeResults,
 };
 pub use link::{Basis, Candidates, GradedLink, Links, Outcome, Resolution, Site};
+pub use triggers::{
+    DynamicMarks, FunctionalityRef, Hop, NoMarks, PathState, Trigger, TriggerKind, TriggerRow,
+};
 
 pub use cluster::{Functionality, FunctionalityName};
 pub use entry::{
@@ -71,6 +87,7 @@ pub use flow::{
 pub use resolve::{ByArity, Chain, Index, Link, Scope, Unresolved};
 
 use crate::card::purpose::{copied_comments, CodePurpose};
+use crate::config::DEFAULT_AMBIGUITY_CEILING;
 use crate::extract::bodies::{BodyLayer, SecondLayer};
 use crate::graph::{Graph, NodeKey};
 use serde::Serialize;
@@ -95,6 +112,10 @@ pub struct TypeAnalysis {
     /// What the code says the type is for (U7) — read only by the card with
     /// the second layer, never by the first layer's purpose (KTD9).
     pub purpose: CodePurpose,
+    /// Step 2b: the results and the state from outside (U4) and the flow of
+    /// every trigger at each functionality (U5) — for the `### Context` of
+    /// the card (U6).
+    pub context: TypeContext,
 }
 
 impl TypeAnalysis {
@@ -124,6 +145,11 @@ impl TypeAnalysis {
 pub struct Analysis {
     /// Every C# class, struct and record with its second layer, by key.
     pub types: Vec<TypeAnalysis>,
+    /// Step 2b: the registry of triggers — every trigger and functionality
+    /// it leads to, by kind, key, place and functionality (R11, U5); what
+    /// `cards/triggers.md` lists (U7). A [`TriggerFlow::row`] is an index
+    /// into it.
+    pub triggers: Vec<TriggerRow>,
 }
 
 impl Analysis {
@@ -135,15 +161,45 @@ impl Analysis {
             .ok()
             .map(|i| &self.types[i])
     }
+
+    /// The rows of the registry that lead to the functionality `key` of the
+    /// type `ty`, in the registry's order.
+    pub fn triggers_of<'s>(
+        &'s self,
+        ty: &'s NodeKey,
+        key: &'s str,
+    ) -> impl Iterator<Item = &'s TriggerRow> {
+        self.triggers
+            .iter()
+            .filter(move |r| &r.target.ty == ty && r.target.key == key)
+    }
 }
 
-/// Analyze every C# type of `graph` whose second layer `layer` holds in full.
+/// Analyze every C# type of `graph` whose second layer `layer` holds in full,
+/// at the default ambiguity ceiling and without the markers of step 2c.
 pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
+    analyze_with(graph, layer, DEFAULT_AMBIGUITY_CEILING, &NoMarks)
+}
+
+/// [`analyze`] with the run's ambiguity ceiling (the candidates of a link
+/// that stopped, KTD9) and the dynamic-call markers of step 2c (`marks`,
+/// [`NoMarks`] without it). Step 2a reads every type first; then the index
+/// of callers, the results and the triggers are built once over the whole
+/// run, because a trigger in one type leads to a functionality of another.
+pub fn analyze_with(
+    graph: &Graph,
+    layer: &BodyLayer,
+    ceiling: usize,
+    marks: &dyn DynamicMarks,
+) -> Analysis {
     let ix = Index::new(graph, layer);
+    // One walk for 2a's entry points and 2b's links: the external index's
+    // relation at an access first (R-25).
+    let links = Links::new(&ix, ceiling);
     // Over the whole graph, every language's types: a comment is copied from
     // wherever it was written first.
     let copied = copied_comments(graph);
-    let types = ix
+    let mut types: Vec<TypeAnalysis> = ix
         .csharp_types()
         .into_iter()
         .filter(|ty| {
@@ -152,7 +208,7 @@ pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
                 && layer.layer_of(ty) == SecondLayer::Present
         })
         .map(|ty| {
-            let mut seeds = entry::seeds(&ix, ty);
+            let mut seeds = entry::seeds(&links, ty);
             let unbound_commands = std::mem::take(&mut seeds.unbound);
             let (functionalities, hubs) = cluster::cluster(&ix, ty, seeds);
             let flow = flow::analyze(&ix, ty, &functionalities);
@@ -164,8 +220,19 @@ pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
                 unbound_commands,
                 flow,
                 purpose,
+                context: TypeContext::empty(ty),
             }
         })
         .collect();
-    Analysis { types }
+
+    // Step 2b, once a run.
+    let callers = Callers::new(graph, &links);
+    let flow_results = FlowResults::new(graph, &links, &callers);
+    let results: Vec<TypeResults> = types.iter().map(|t| flow_results.of_type(t)).collect();
+    let mut triggers = triggers::find(&types, &links, &callers, marks);
+    let contexts = context::compose(&types, results, &mut triggers, &links, &callers);
+    for (t, c) in types.iter_mut().zip(contexts) {
+        t.context = c;
+    }
+    Analysis { types, triggers }
 }

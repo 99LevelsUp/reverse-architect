@@ -266,6 +266,24 @@ impl<'i, 'a> Links<'i, 'a> {
         }
     }
 
+    /// The access `path` written at `place` in a body of `caller` walked as
+    /// [`Index::resolve`] walks it, the external index first (KTD3): the
+    /// chain the entry points of 2a hold, so the section of 2a and the flow
+    /// of 2b on one card follow the same link (R-25). Where no relation of the
+    /// index is read at the access it is [`Index::resolve`]'s chain itself.
+    pub fn chain(
+        &self,
+        caller: &NodeKey,
+        scope: &Scope<'_>,
+        path: &AccessPath,
+        call: Option<u32>,
+        place: &Place,
+    ) -> Chain {
+        let pin =
+            |_: Option<&NodeKey>, name: &str, _: Option<u32>| self.pinned(caller, place, name);
+        self.ix.walk(scope, path, call, &pin).chain
+    }
+
     /// The access `path` written at `place` in a body of `caller`, with
     /// `scope` its enclosing type and node, resolved link by link and graded.
     /// `call` is the argument count when the access is a call.

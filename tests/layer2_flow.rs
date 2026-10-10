@@ -9,9 +9,11 @@
 mod common;
 
 use reverse_architect::card::layer2::{
-    self, bindings_of, raised_events, Analysis, Basis, Caller, CallerClass, Callers,
-    DelegateBinding, EntryPoint, FlowResult, FlowResults, Index, Links, Outcome, Resolution,
-    ResultKind, Site, StopCause, StoppedPath, TypeAnalysis, TypeResults, Unresolved, Via,
+    self, bindings_of, raised_events, Analysis, Basis, Caller, CallerClass, Callers, CommonPart,
+    DelegateBinding, EntryPoint, FlowResult, FlowResults, FlowStepKind, Functionality,
+    FunctionalityContext, FunctionalityRef, Index, Links, Outcome, PathState, Resolution,
+    ResultKind, Site, Source, StopCause, StoppedPath, TriggerFlow, TriggerKind, TriggerRow,
+    TypeAnalysis, TypeResults, Unresolved, Via,
 };
 use reverse_architect::config::{Config, DEFAULT_AMBIGUITY_CEILING};
 use reverse_architect::extract::bodies::Constant;
@@ -1454,4 +1456,755 @@ fn a_read_after_a_write_in_another_branch_counts() {
     };
     let who: Vec<&NodeKey> = readers.iter().map(|t| &t.member).collect();
     assert_eq!(who, [&key(EFFECTS_NS, "Branchy.Show(Flag)")]);
+}
+
+// ---- U5: triggers, the walk back and the flows ----
+
+/// The functionality of `ty` that holds `member`.
+fn holding<'a>(analysis: &'a Analysis, ty: &NodeKey, member: &NodeKey) -> &'a Functionality {
+    type_of(analysis, ty)
+        .functionalities
+        .iter()
+        .find(|f| f.members.contains(member))
+        .unwrap_or_else(|| panic!("no functionality of {ty:?} holds {member:?}"))
+}
+
+fn target_of(ty: &NodeKey, f: &Functionality) -> FunctionalityRef {
+    FunctionalityRef {
+        ty: ty.clone(),
+        key: f.key.clone(),
+    }
+}
+
+/// The rows of the registry that lead to `f` of `ty`, with their indices.
+fn rows_to<'a>(
+    analysis: &'a Analysis,
+    ty: &NodeKey,
+    f: &Functionality,
+) -> Vec<(usize, &'a TriggerRow)> {
+    let target = target_of(ty, f);
+    analysis
+        .triggers
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.target == target)
+        .collect()
+}
+
+/// The one row to `f` of `ty` whose trigger is of `kind` and written in
+/// `member`.
+fn row_to<'a>(
+    analysis: &'a Analysis,
+    ty: &NodeKey,
+    f: &Functionality,
+    kind: TriggerKind,
+    member: &NodeKey,
+) -> (usize, &'a TriggerRow) {
+    let rows = rows_to(analysis, ty, f);
+    let found: Vec<(usize, &TriggerRow)> = rows
+        .iter()
+        .copied()
+        .filter(|(_, r)| r.trigger.kind == kind && &r.trigger.member == member)
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "{kind:?} of {member:?} to {}: {:?}",
+        f.key,
+        rows.iter()
+            .map(|(_, r)| (r.trigger.kind, r.trigger.member.as_str()))
+            .collect::<Vec<_>>()
+    );
+    found[0]
+}
+
+fn context_of<'a>(
+    analysis: &'a Analysis,
+    ty: &NodeKey,
+    f: &Functionality,
+) -> &'a FunctionalityContext {
+    type_of(analysis, ty)
+        .context
+        .of(&f.key)
+        .unwrap_or_else(|| panic!("no context of {}", f.key))
+}
+
+/// The flow of the row `row` at `context`, and the part it shares.
+fn flow_of(context: &FunctionalityContext, row: usize) -> (&TriggerFlow, &CommonPart) {
+    let flow = context
+        .flows
+        .iter()
+        .find(|f| f.row == row)
+        .unwrap_or_else(|| panic!("no flow of row {row} at {}", context.key));
+    (flow, &context.common[flow.common])
+}
+
+fn line_in(src: &str, needle: &str) -> u32 {
+    src.lines()
+        .position(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("{needle} is not in the source")) as u32
+        + 1
+}
+
+fn owner(k: &NodeKey) -> &str {
+    k.as_str()
+        .rsplit_once('#')
+        .map_or(k.as_str(), |(_, m)| m)
+        .split('.')
+        .next()
+        .unwrap_or_default()
+}
+
+/// AE1: the flow of F4 in the old editor, at the check of `EditorViewModel`:
+/// the key branch's condition as the trigger's precondition, the one step of
+/// the view that executes the command, the CanExecute of the command, the
+/// command class as one step `Execute → Check()`, the branch on Shift of the
+/// argument `Check()` passes, `Parser.Parse()` as one step with its card, and
+/// the results of AE10 — every line with its anchor.
+#[test]
+fn the_f4_flow_of_the_old_editor_goes_through_the_command_to_the_results() {
+    let (_, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    let f = holding(&analysis, &vm, &check_bool);
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let (i, row) = row_to(&analysis, &vm, f, TriggerKind::Key, &on_key);
+    assert_eq!(row.trigger.key, "Key.F4");
+    assert_eq!(row.state, PathState::Active);
+    assert_eq!(row.grade, Some(Confidence::RulesBacked));
+    assert_eq!(
+        names(&row.entries),
+        [format!("{EDITOR_MODELS}EditorViewModel.CheckCommand").as_str()]
+    );
+    assert_eq!(
+        row.trigger.place.as_ref().unwrap().path,
+        "src/Views/EditorView.cs"
+    );
+
+    let context = context_of(&analysis, &vm, f);
+    let (flow, common) = flow_of(context, i);
+    let condition = flow.condition.as_ref().expect("the key branch's condition");
+    assert_eq!(
+        condition.text,
+        "e.Key == Key.F4 && (viewModel.ShowErrors || viewModel.CanErrors)"
+    );
+    // The view's one step: the call that executes the command.
+    assert_eq!(flow.path.len(), 1, "{:?}", flow.path);
+    let through = &flow.path[0];
+    assert_eq!(through.member, on_key);
+    assert_eq!(through.kind, FlowStepKind::Through);
+    let place = through.place.as_ref().unwrap();
+    assert_eq!(place.path, "src/Views/EditorView.cs");
+    assert_eq!(
+        place.range.start.line,
+        line_in(
+            editor_fixture::VIEW,
+            "this.viewModel.CheckCommand.Execute(null)"
+        )
+    );
+
+    // CanExecute of the command, and the check's own guards.
+    let can_execute: Vec<&str> = common
+        .preconditions
+        .iter()
+        .filter(|p| p.occurrence.source == Source::CanExecute)
+        .map(|p| p.text.as_str())
+        .collect();
+    assert_eq!(
+        can_execute,
+        [
+            "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+            "!canErrors"
+        ]
+    );
+    assert!(common
+        .preconditions
+        .iter()
+        .any(|p| p.occurrence.source == Source::Guard && p.occurrence.member == check_bool));
+
+    // The command class is one step: Execute → Check().
+    let check = key(EDITOR_MODELS, "EditorViewModel.Check()");
+    let execute = key(EDITOR_MODELS, "RelayCommand.Execute(object)");
+    assert!(
+        common.steps.iter().any(|s| matches!(&s.kind,
+            FlowStepKind::Delegate { invoker, targets, can_execute: false, .. }
+                if invoker == &execute && targets == std::slice::from_ref(&check))),
+        "{:?}",
+        common.steps
+    );
+    // The branch on Shift, at the call of `Check()`.
+    let shift = common
+        .steps
+        .iter()
+        .find(|s| matches!(s.kind, FlowStepKind::ArgumentChoice { .. }))
+        .expect("the argument chooses the mode");
+    let FlowStepKind::ArgumentChoice {
+        callee,
+        parameter,
+        enum_refs,
+        ..
+    } = &shift.kind
+    else {
+        unreachable!()
+    };
+    assert_eq!(shift.member, check);
+    assert_eq!(callee, &check_bool);
+    assert_eq!(parameter.as_deref(), Some("syntaxOnly"));
+    assert_eq!(enum_refs, &["ModifierKeys.Shift".to_string()]);
+    assert_eq!(
+        shift.place.as_ref().unwrap().range.start.line,
+        line_in(editor_fixture::VIEW_MODEL, "public void Check() {")
+    );
+    // The parser is one step, with its card.
+    let parse = key(PARSING, "Parser.Parse(string,bool)");
+    assert!(
+        common.steps.iter().any(|s| s.member == check_bool
+            && matches!(&s.kind,
+                FlowStepKind::Call { target, owner, grade: Confidence::RulesBacked }
+                    if target == &parse && owner == &key(PARSING, "Parser"))),
+        "{:?}",
+        common.steps
+    );
+    // The results of AE10.
+    let results: Vec<&FlowResult> = common.results.iter().collect();
+    assert_eq!(
+        described(&results),
+        [
+            "notifies EditorViewModel.Errors",
+            "notifies EditorViewModel.ShowErrors",
+            "notifies EditorViewModel.MessageErrors",
+            "notifies EditorViewModel.SelectedIndex = 0",
+            "read elsewhere EditorViewModel.CheckWasDone = false",
+            "read elsewhere EditorViewModel.CheckWasDone = true",
+        ]
+    );
+    // Every step and result has its anchor.
+    assert!(common.steps.iter().all(|s| s.place.is_some()));
+    assert!(common.results.iter().all(|r| r.place.is_some()));
+    // The command class's own guard is not repeated in the flow (AE9).
+    assert!(common
+        .preconditions
+        .iter()
+        .all(|p| owner(&p.occurrence.member) != "RelayCommand"));
+}
+
+const PARSING: &str = editor_fixture::PARSING_NS;
+
+/// AE2: F4 in the new editor ends in "nothing happens" at `CanCheck()`, which
+/// returns `false`; its row is dead with the same anchor, and so is the row of
+/// the view's own key branch, which refers to it.
+#[test]
+fn the_f4_flow_of_the_new_editor_is_dead_at_can_check() {
+    let (_, analysis) = editor_2b();
+    let vm_new = key(EDITOR_MODELS, "EditorViewModelNew");
+    let command = key(EDITOR_MODELS, "EditorViewModelNew.CheckCommand");
+    let f = holding(&analysis, &vm_new, &command);
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorViewNew.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let (i, row) = row_to(&analysis, &vm_new, f, TriggerKind::Key, &on_key);
+    let can_check = key(EDITOR_MODELS, "EditorViewModelNew.CanCheck()");
+    let PathState::Dead { member, place } = &row.state else {
+        panic!("{:?}", row.state)
+    };
+    assert_eq!(member, &can_check);
+    assert_eq!(place.path, "src/ViewModels/EditorViewModelNew.cs");
+    assert_eq!(
+        place.range.start.line,
+        line_in(editor_fixture::VIEW_MODEL_NEW, "bool CanCheck()")
+    );
+    let (_, common) = flow_of(context_of(&analysis, &vm_new, f), i);
+    assert_eq!(
+        common.dead.as_ref(),
+        Some(&(can_check.clone(), place.clone()))
+    );
+    assert!(common
+        .stops
+        .iter()
+        .any(|s| s.member == can_check && matches!(s.cause, StopCause::Dead(_))));
+
+    // The view's own key branch refers to the view model's flow, and is dead
+    // with it.
+    let view_new = key(EDITOR_VIEWS, "EditorViewNew");
+    let own = type_of(&analysis, &view_new)
+        .functionalities
+        .iter()
+        .find(|f| f.entry_points.iter().any(|e| e.member == on_key))
+        .unwrap();
+    let (j, own_row) = row_to(&analysis, &view_new, own, TriggerKind::Key, &on_key);
+    assert!(own_row.own);
+    assert_eq!(own_row.state, row.state);
+    let context = context_of(&analysis, &view_new, own);
+    assert!(context.flows.iter().all(|fl| fl.row != j));
+    assert_eq!(context.refers, [target_of(&vm_new, f)]);
+}
+
+/// AE3 and the stop condition of the plan: F4 of `EditorView` and F4 of
+/// `EditorViewNew` are two rows, and no flow of F4 ever leads to both view
+/// models — the walk never goes back through the command class's `Execute`,
+/// which every command shares.
+#[test]
+fn the_f4_flow_never_leads_to_both_view_models() {
+    let (_, analysis) = editor_2b();
+    let old = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let new = key(
+        EDITOR_VIEWS,
+        "EditorViewNew.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let vm_new = key(EDITOR_MODELS, "EditorViewModelNew");
+    let in_type = |m: &NodeKey, ty: &str| m.as_str().contains(&format!("#{ty}."));
+    for r in &analysis.triggers {
+        let from_old =
+            r.trigger.member == old || r.path.iter().any(|h| in_type(&h.member, "EditorView"));
+        let from_new =
+            r.trigger.member == new || r.path.iter().any(|h| in_type(&h.member, "EditorViewNew"));
+        if r.target.ty == vm {
+            assert!(!from_new, "{r:?}");
+            assert!(
+                r.path
+                    .iter()
+                    .all(|h| !in_type(&h.member, "EditorViewModelNew")),
+                "{r:?}"
+            );
+        }
+        if r.target.ty == vm_new {
+            assert!(!from_old, "{r:?}");
+            assert!(
+                r.path
+                    .iter()
+                    .all(|h| !in_type(&h.member, "EditorViewModel")),
+                "{r:?}"
+            );
+        }
+    }
+    // Two F4 rows of the registry: one of each view, to its own view model.
+    let f4: Vec<(&NodeKey, &NodeKey)> = analysis
+        .triggers
+        .iter()
+        .filter(|r| {
+            r.trigger.kind == TriggerKind::Key
+                && r.trigger.key == "Key.F4"
+                && (r.target.ty == vm || r.target.ty == vm_new)
+        })
+        .map(|r| (&r.trigger.member, &r.target.ty))
+        .collect();
+    assert_eq!(f4, [(&old, &vm), (&new, &vm_new)]);
+}
+
+/// AE4: `ExternalCheck`, nothing calls it, is an entry from another component
+/// of the check; its flow enters at `Check(bool)`: no F4, no CanExecute, no
+/// branch on Shift.
+#[test]
+fn the_external_check_is_an_entry_from_another_component_without_the_commands_steps() {
+    let (_, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    let f = holding(&analysis, &vm, &check_bool);
+    let run = key(EDITOR_MODELS, "ExternalCheck.Run()");
+    let (i, row) = row_to(&analysis, &vm, f, TriggerKind::External, &run);
+    assert_eq!(row.state, PathState::Active);
+    assert_eq!(row.trigger.key, run.as_str());
+    assert_eq!(names(&row.entries), [check_bool.as_str()]);
+    let (flow, common) = flow_of(context_of(&analysis, &vm, f), i);
+    assert!(flow.condition.is_none());
+    assert!(common
+        .preconditions
+        .iter()
+        .all(|p| p.occurrence.source == Source::Guard));
+    assert!(!common.preconditions.is_empty());
+    assert!(common.steps.iter().all(|s| !matches!(
+        s.kind,
+        FlowStepKind::Delegate { .. } | FlowStepKind::ArgumentChoice { .. }
+    )));
+    // The two ways in share nothing: two parts, one per entry.
+    assert_ne!(flow.common, {
+        let on_key = key(
+            EDITOR_VIEWS,
+            "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+        );
+        let (k, _) = row_to(&analysis, &vm, f, TriggerKind::Key, &on_key);
+        flow_of(context_of(&analysis, &vm, f), k).0.common
+    });
+}
+
+/// AE5: a key gesture constructed into a command in C# is the key row
+/// "Ctrl+F4" of the command's functionality, anchored at the gesture.
+#[test]
+fn a_key_gesture_given_to_a_command_is_a_key_row() {
+    let (_, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let close = key(EDITOR_MODELS, "EditorViewModel.CloseErrors()");
+    let f = holding(&analysis, &vm, &close);
+    let property = key(EDITOR_MODELS, "EditorViewModel.CloseErrorsCommand");
+    let (i, row) = row_to(&analysis, &vm, f, TriggerKind::Key, &property);
+    assert_eq!(row.trigger.key, "Key.F4+ModifierKeys.Control");
+    assert_eq!(row.trigger.modifiers, ["ModifierKeys.Control"]);
+    assert_eq!(row.state, PathState::Active);
+    let place = row.trigger.place.as_ref().unwrap();
+    assert_eq!(place.path, "src/ViewModels/EditorViewModel.cs");
+    assert_eq!(
+        place.range.start.line,
+        line_in(
+            editor_fixture::VIEW_MODEL,
+            "closeErrorsCommand.KeyGestures ="
+        )
+    );
+    // Its flow reaches the command's target.
+    let (_, common) = flow_of(context_of(&analysis, &vm, f), i);
+    assert!(common.steps.iter().any(|s| matches!(&s.kind,
+        FlowStepKind::Delegate { targets, .. } if targets == std::slice::from_ref(&close))));
+    // The command property is no root of its own: the gesture is its way in.
+    assert!(rows_to(&analysis, &vm, f)
+        .iter()
+        .all(|(_, r)| r.trigger.kind != TriggerKind::External));
+}
+
+/// A member only a `NameOnly` relation calls is an entry from another
+/// component with the state "unresolved"; the weak caller is never followed.
+#[test]
+fn a_member_called_by_name_alone_is_an_unresolved_entry() {
+    let (mut generated, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    let run = key(EDITOR_MODELS, "ExternalCheck.Run()");
+    let f = holding(&analysis, &vm, &check_bool).clone();
+    assert_eq!(
+        row_to(&analysis, &vm, &f, TriggerKind::External, &run)
+            .1
+            .state,
+        PathState::Active
+    );
+    let store = key(EDITOR_VIEWS, "EditorView.Store()");
+    assert!(generated
+        .graph
+        .add_edge(&store, &run, rated(Confidence::NameOnly, Rule::NameMatch)));
+    let analysis = layer2::analyze(&generated.graph, generated.bodies.as_ref().unwrap());
+    let (_, row) = row_to(&analysis, &vm, &f, TriggerKind::External, &run);
+    assert_eq!(
+        row.state,
+        PathState::Unresolved {
+            callers: vec![store.clone()]
+        }
+    );
+    assert!(analysis
+        .triggers
+        .iter()
+        .all(|r| r.trigger.member != store && r.path.iter().all(|h| h.member != store)));
+}
+
+/// The save comes into the registry through the trigger of the save — the
+/// public `Save()` nothing calls — never as a root of its own `BeforeSave()`.
+#[test]
+fn the_save_reaches_the_registry_through_the_save_trigger() {
+    let (_, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    let f = holding(&analysis, &vm, &check_bool);
+    let save = key(EDITOR_VIEWS, "EditorView.Save()");
+    let before_save = key(EDITOR_VIEWS, "EditorView.BeforeSave()");
+    let (i, row) = row_to(&analysis, &vm, f, TriggerKind::External, &save);
+    let path: Vec<&NodeKey> = row.path.iter().map(|h| &h.member).collect();
+    assert_eq!(path, [&save, &before_save]);
+    assert!(rows_to(&analysis, &vm, f)
+        .iter()
+        .all(|(_, r)| r.trigger.member != before_save));
+    // It enters through the command: the CanExecute is its precondition too.
+    let (_, common) = flow_of(context_of(&analysis, &vm, f), i);
+    assert!(common
+        .preconditions
+        .iter()
+        .any(|p| p.occurrence.source == Source::CanExecute));
+}
+
+/// A utility three types share, called in the middle of a flow.
+const SHARED: &str = r#"namespace Acme.Shared
+{
+    public class TextUtil
+    {
+        public string Trim(string s) { return s; }
+    }
+
+    public class Formatter
+    {
+        private TextUtil util;
+        public string Format(string s) { return util.Trim(s); }
+    }
+
+    public class Exporter
+    {
+        private Formatter formatter;
+        public void Export() { formatter.Format("x"); }
+    }
+}
+"#;
+
+const SHARED_NS: &str = "sym:csharp:Acme.Shared#";
+
+/// The call into a shared utility in the middle of a flow is no trigger: the
+/// utility's one row is the root its chain of callers ends at.
+#[test]
+fn a_call_of_a_shared_utility_in_the_middle_of_a_flow_is_no_trigger() {
+    let (_, analysis) = analyzed(&[("src/Shared.cs", SHARED)]);
+    let util = key(SHARED_NS, "TextUtil");
+    let f = holding(&analysis, &util, &key(SHARED_NS, "TextUtil.Trim(string)"));
+    let rows = rows_to(&analysis, &util, f);
+    let found: Vec<(TriggerKind, &str)> = rows
+        .iter()
+        .map(|(_, r)| (r.trigger.kind, r.trigger.member.as_str()))
+        .collect();
+    let export = key(SHARED_NS, "Exporter.Export()");
+    assert_eq!(found, [(TriggerKind::External, export.as_str())]);
+    let path: Vec<&str> = rows[0].1.path.iter().map(|h| h.member.as_str()).collect();
+    assert_eq!(
+        path,
+        [
+            export.as_str(),
+            key(SHARED_NS, "Formatter.Format(string)").as_str()
+        ]
+    );
+}
+
+/// Callers that call each other end the walk: each member is walked once per
+/// set of members it leads to, and the one root gets one row.
+const CYCLE: &str = r#"namespace Acme.Cycle
+{
+    public class Target
+    {
+        public int Count;
+        public void Hit() { Count++; }
+    }
+
+    public class Ping
+    {
+        private Target target;
+        private Pong pong;
+        public void Go() { target.Hit(); pong.Back(); }
+    }
+
+    public class Pong
+    {
+        private Ping ping;
+        public void Back() { ping.Go(); }
+    }
+
+    public class Starter
+    {
+        private Ping ping;
+        public void Start() { ping.Go(); }
+    }
+}
+"#;
+
+const CYCLE_NS: &str = "sym:csharp:Acme.Cycle#";
+
+#[test]
+fn a_cycle_of_callers_ends_the_walk_without_repeating() {
+    let (_, analysis) = analyzed(&[("src/Cycle.cs", CYCLE)]);
+    let target = key(CYCLE_NS, "Target");
+    let f = holding(&analysis, &target, &key(CYCLE_NS, "Target.Hit()"));
+    let found: Vec<(TriggerKind, String)> = rows_to(&analysis, &target, f)
+        .iter()
+        .map(|(_, r)| (r.trigger.kind, r.trigger.member.as_str().to_string()))
+        .collect();
+    assert_eq!(
+        found,
+        [(TriggerKind::External, format!("{CYCLE_NS}Starter.Start()"))]
+    );
+}
+
+/// A member with a dynamic-call marker with a place (the model of step 2c,
+/// simulated) gets no row: the trigger that calls it is written elsewhere.
+#[test]
+fn a_member_with_a_dynamic_call_marker_gets_no_row() {
+    let (generated, analysis) = analyzed(&[("src/Shared.cs", SHARED)]);
+    let util = key(SHARED_NS, "TextUtil");
+    let export = key(SHARED_NS, "Exporter.Export()");
+    let f = holding(&analysis, &util, &key(SHARED_NS, "TextUtil.Trim(string)")).clone();
+    assert_eq!(rows_to(&analysis, &util, &f).len(), 1);
+    let marks: std::collections::BTreeSet<NodeKey> = [export.clone()].into();
+    let marked = layer2::analyze_with(
+        &generated.graph,
+        generated.bodies.as_ref().unwrap(),
+        DEFAULT_AMBIGUITY_CEILING,
+        &marks,
+    );
+    assert!(rows_to(&marked, &util, &f).is_empty());
+    assert!(marked.triggers.iter().all(|r| r.trigger.member != export));
+}
+
+/// AE9: the functionality of the command class carries one flow — from its
+/// `Execute` on, with its guard and the event it raises — and the number of
+/// the triggers that lead to it, not a flow per trigger.
+#[test]
+fn the_command_class_has_one_flow_and_the_number_of_its_triggers() {
+    let (_, analysis) = editor_2b();
+    let command = key(EDITOR_MODELS, "RelayCommand");
+    let execute = key(EDITOR_MODELS, "RelayCommand.Execute(object)");
+    let f = holding(&analysis, &command, &execute);
+    let context = context_of(&analysis, &command, f);
+    let class = context.command_class.as_ref().expect("a command class");
+    assert!(context.flows.is_empty());
+    assert_eq!(context.common.len(), 1);
+    let rows = rows_to(&analysis, &command, f);
+    assert_eq!(class.triggers, rows.len());
+    let kinds: Vec<(TriggerKind, &str)> = rows
+        .iter()
+        .map(|(_, r)| (r.trigger.kind, r.trigger.member.as_str()))
+        .collect();
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let menu = key(EDITOR_VIEWS, "EditorView.BuildMenu()");
+    assert!(
+        kinds.contains(&(TriggerKind::Key, on_key.as_str())),
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.contains(&(TriggerKind::MenuItem, menu.as_str())),
+        "{kinds:?}"
+    );
+    let common = &context.common[class.common];
+    let results: Vec<&FlowResult> = common
+        .results
+        .iter()
+        .filter(|r| matches!(r.kind, ResultKind::RaisesEvent { .. }))
+        .collect();
+    assert_eq!(
+        described(&results),
+        [
+            "raises RelayCommand.ExecutingStarted (0)",
+            "raises RelayCommand.Executed (1)"
+        ]
+    );
+    assert!(common.preconditions.iter().any(|p| p.text == "evt.Cancel"));
+}
+
+/// R9: the view's functionality of F4 and the menu item refers to the flow of
+/// the check it leads to; the flow is drawn there, not twice. A trigger whose
+/// code never leaves the view (the event its handler stores on) keeps its flow
+/// at the view.
+#[test]
+fn the_views_entry_refers_to_the_flow_of_its_target() {
+    let (_, analysis) = editor_2b();
+    let view = key(EDITOR_VIEWS, "EditorView");
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let own = type_of(&analysis, &view)
+        .functionalities
+        .iter()
+        .find(|f| f.entry_points.iter().any(|e| e.member == on_key))
+        .unwrap();
+    let (j, row) = row_to(&analysis, &view, own, TriggerKind::Key, &on_key);
+    assert!(row.own);
+    let context = context_of(&analysis, &view, own);
+    assert!(context.flows.iter().all(|f| f.row != j));
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let check = holding(
+        &analysis,
+        &vm,
+        &key(EDITOR_MODELS, "EditorViewModel.Check(bool)"),
+    );
+    assert!(
+        context.refers.contains(&target_of(&vm, check)),
+        "{:?}",
+        context.refers
+    );
+    // The command class is counted, never referred to.
+    assert!(context
+        .refers
+        .iter()
+        .all(|r| r.ty != key(EDITOR_MODELS, "RelayCommand")));
+    // The event `Executed` the view's handler stores on stays in the view.
+    let ctor = key(EDITOR_VIEWS, "EditorView.EditorView()");
+    let (k, event) = row_to(&analysis, &view, own, TriggerKind::Event, &ctor);
+    assert_eq!(event.trigger.key, "Executed");
+    assert!(context.flows.iter().any(|f| f.row == k));
+}
+
+/// R-25: a 2a entry point's target follows the external index's relation at
+/// the access, as the links of 2b do — `Lookup().Run()` is told only so.
+const PINNED: &str = r#"namespace Acme.Pinned
+{
+    public class Worker
+    {
+        public int Runs;
+        public void Run() { Runs++; }
+    }
+
+    public class Panel
+    {
+        Worker Lookup() { return null; }
+
+        void OnKey(KeyEventArgs e)
+        {
+            if (e.Key == Key.F4) { Lookup().Run(); }
+        }
+    }
+}
+"#;
+
+const PINNED_NS: &str = "sym:csharp:Acme.Pinned#";
+
+#[test]
+fn an_entry_points_target_follows_the_index_relation_like_a_link() {
+    let (mut generated, analysis) = analyzed(&[("src/Pinned.cs", PINNED)]);
+    let panel = key(PINNED_NS, "Panel");
+    let on_key = key(PINNED_NS, "Panel.OnKey(KeyEventArgs)");
+    let run = key(PINNED_NS, "Worker.Run()");
+    let target_of_f4 = |analysis: &Analysis| {
+        entry(
+            type_of(analysis, &panel),
+            &format!("{}#Key.F4", on_key.as_str()),
+        )
+        .targets
+        .iter()
+        .find(|t| t.path.segments == ["Run"])
+        .expect("the call of Run")
+        .clone()
+    };
+    let before = target_of_f4(&analysis);
+    assert_eq!(before.member, None);
+    assert_eq!(before.unresolved(), Some(&Unresolved::NoReceiverChain));
+
+    let line = line_in(PINNED, "Lookup().Run();");
+    assert!(generated
+        .graph
+        .add_edge(&on_key, &run, indexed("src/Pinned.cs", line)));
+    let analysis = layer2::analyze(&generated.graph, generated.bodies.as_ref().unwrap());
+    let after = target_of_f4(&analysis);
+    assert_eq!(after.member.as_ref(), Some(&run));
+    // The link of 2b says the same.
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let links = Links::new(&ix, DEFAULT_AMBIGUITY_CEILING);
+    let sites = links.sites_of(&on_key);
+    let r = &site(&sites, "Run", true).resolution;
+    assert_eq!(r.target(), Some(&run));
+    assert_eq!(r.grade(), Some(Confidence::ResolvedByIndex));
+}
+
+/// KTD13: two runs over the same repository give the same registry and the
+/// same flows.
+#[test]
+fn two_runs_give_the_same_triggers_and_flows() {
+    let (_, first) = editor_2b();
+    let (_, again) = editor_2b();
+    assert_eq!(first.triggers, again.triggers);
+    assert_eq!(first, again);
+    let order: Vec<(TriggerKind, &str)> = first
+        .triggers
+        .iter()
+        .map(|r| (r.trigger.kind, r.trigger.key.as_str()))
+        .collect();
+    assert!(order.windows(2).all(|w| w[0] <= w[1]), "{order:?}");
 }

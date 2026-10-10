@@ -1102,7 +1102,7 @@ fn overridable(ix: &Index<'_>, member: &NodeKey) -> bool {
 
 /// Whether a bound delegate is the command's CanExecute (see the module
 /// docs).
-fn is_can_execute(ix: &Index<'_>, d: &BoundDelegate) -> bool {
+pub(crate) fn is_can_execute(ix: &Index<'_>, d: &BoundDelegate) -> bool {
     d.invoked_by.iter().any(|m| ix.name_of(m) == "CanExecute")
         || ix.declared_type(&d.field).is_ok_and(|(name, args)| {
             let last = name.rsplit('.').next().unwrap_or(&name);

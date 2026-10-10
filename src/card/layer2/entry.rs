@@ -34,6 +34,7 @@
 //! every class of the shape; step 2b generalizes it to delegates and events.
 
 use super::binding::field_call_arity;
+use super::link::Links;
 use super::resolve::{within, ByArity, Chain, Index, Scope, Unresolved};
 use crate::extract::bodies::{
     AccessMode, AccessPath, Argument, BodyKind, CallKind, Condition, FlowTarget, Handler,
@@ -459,33 +460,71 @@ pub(crate) fn bodies<'l>(ix: &Index<'l>, member: &NodeKey) -> Vec<At<'l>> {
         .collect()
 }
 
+/// Where an access of an entry point is written: the member whose body holds
+/// it and the body — what the external index's relations are read by (R-25).
+#[derive(Clone, Copy)]
+struct Written<'w> {
+    links: &'w Links<'w, 'w>,
+    caller: &'w NodeKey,
+    ty: &'w NodeKey,
+    path: &'w str,
+}
+
+impl Written<'_> {
+    /// The chain of `path` at `range`: the index's relation at the access
+    /// first, then the rules ([`Links::chain`]) — without such a relation the
+    /// chain [`Index::resolve`] gives.
+    fn chain(
+        &self,
+        scope: &Scope<'_>,
+        path: &AccessPath,
+        call: Option<u32>,
+        range: Range,
+    ) -> Chain {
+        let place = Place {
+            path: self.path.to_string(),
+            range,
+        };
+        self.links.chain(self.caller, scope, path, call, &place)
+    }
+}
+
 fn target(
-    ix: &Index<'_>,
-    ty: &NodeKey,
+    w: Written<'_>,
     scope: &Scope<'_>,
     path: &AccessPath,
     place: Range,
     call: Option<u32>,
 ) -> Target {
-    let chain = ix.resolve(scope, path, call);
+    let ix = w.links.index();
+    let chain = w.chain(scope, path, call, place);
     Target {
         path: path.clone(),
         place,
-        member: chain.used(ix, ty).cloned(),
+        member: chain.used(ix, w.ty).cloned(),
         chain,
     }
 }
 
 /// What the code of `at` under `include` calls (as targets) and uses (calls,
-/// and reads and writes of `ty`'s own members).
+/// and reads and writes of `ty`'s own members); `caller` is the member `at`
+/// is a body of.
 fn region_uses(
-    ix: &Index<'_>,
+    links: &Links<'_, '_>,
+    caller: &NodeKey,
     ty: &NodeKey,
     at: At<'_>,
     include: &dyn Fn(Option<u32>) -> bool,
     uses: &mut BTreeSet<NodeKey>,
     targets: &mut Vec<Target>,
 ) {
+    let ix = links.index();
+    let w = Written {
+        links,
+        caller,
+        ty,
+        path: at.path,
+    };
     for inv in &at.body.invocations {
         if inv.kind != CallKind::Call || !include(inv.node) {
             continue;
@@ -495,7 +534,7 @@ fn region_uses(
             body: Some(at.body),
             node: inv.node,
         };
-        let t = target(ix, ty, &scope, &inv.callee, inv.place, Some(inv.arity));
+        let t = target(w, &scope, &inv.callee, inv.place, Some(inv.arity));
         if let Some(m) = &t.member {
             uses.insert(m.clone());
         }
@@ -510,7 +549,7 @@ fn region_uses(
             body: Some(at.body),
             node: a.node,
         };
-        let chain = ix.resolve(&scope, &a.target, None);
+        let chain = w.chain(&scope, &a.target, None, a.place);
         if let Some(m) = chain.used(ix, ty) {
             if ix.symbol(m).and_then(|s| s.owner.as_ref()) == Some(ty) {
                 uses.insert(m.clone());
@@ -582,22 +621,16 @@ pub(crate) fn delegate_sites<'b>(
 
 /// What a delegate argument leads to: the calls under a lambda's body, or
 /// the method group.
-fn delegate_targets(
-    ix: &Index<'_>,
-    ty: &NodeKey,
-    at: At<'_>,
-    arg: &Argument,
-    group: Option<u32>,
-) -> Vec<Target> {
+fn delegate_targets(w: Written<'_>, at: At<'_>, arg: &Argument, group: Option<u32>) -> Vec<Target> {
     delegate_sites(at, arg, group)
         .into_iter()
         .map(|site| {
             let scope = Scope {
-                ty,
+                ty: w.ty,
                 body: Some(at.body),
                 node: site.node,
             };
-            target(ix, ty, &scope, site.path, site.place, site.call)
+            target(w, &scope, site.path, site.place, site.call)
         })
         .collect()
 }
@@ -626,12 +659,12 @@ pub(crate) fn construction_class(
 /// field some method calls. A construction of a class of the repository
 /// whose binding is ambiguous is `Err`: the class and why.
 fn command_site(
-    ix: &Index<'_>,
-    ty: &NodeKey,
+    w: Written<'_>,
     at: At<'_>,
     inv: &Invocation,
     declared: Option<&NodeKey>,
 ) -> Option<Result<CommandSite, (NodeKey, Unresolved)>> {
+    let ix = w.links.index();
     let class = construction_class(ix, inv, declared)?;
     let binding = match bind_construction(ix, &class, inv.arity) {
         Ok(binding) => binding,
@@ -654,13 +687,7 @@ fn command_site(
                 field: slot.field.clone(),
                 invoked_by: slot.invoked_by.clone(),
                 value: arg.value.clone(),
-                targets: delegate_targets(
-                    ix,
-                    ty,
-                    at,
-                    arg,
-                    field_call_arity(ix, &class, &slot.field),
-                ),
+                targets: delegate_targets(w, at, arg, field_call_arity(ix, &class, &slot.field)),
             })
         })
         .collect();
@@ -752,7 +779,7 @@ fn is_local(p: &AccessPath, segments: &[&str]) -> bool {
 }
 
 /// The statements of `body` that touch the local `v`.
-fn statements_of(body: &MemberBody, v: &str) -> BTreeSet<u32> {
+pub(crate) fn statements_of(body: &MemberBody, v: &str) -> BTreeSet<u32> {
     let mut out = BTreeSet::new();
     let touches = |p: &AccessPath| local_root(p) == Some(v);
     for a in &body.accesses {
@@ -849,6 +876,7 @@ struct Found {
 /// one detector per kind of entry point written in a body: key branches,
 /// menu items, subscriptions and command properties.
 struct SeedCollector<'i, 'l> {
+    links: &'i Links<'i, 'l>,
     ix: &'i Index<'l>,
     ty: &'i NodeKey,
     /// Regions of the entry points inside a body, by (path, body index): what
@@ -864,9 +892,10 @@ struct SeedCollector<'i, 'l> {
 }
 
 impl<'i, 'l> SeedCollector<'i, 'l> {
-    fn new(ix: &'i Index<'l>, ty: &'i NodeKey) -> SeedCollector<'i, 'l> {
+    fn new(links: &'i Links<'i, 'l>, ty: &'i NodeKey) -> SeedCollector<'i, 'l> {
         SeedCollector {
-            ix,
+            links,
+            ix: links.index(),
             ty,
             excluded: BTreeMap::new(),
             found: Vec::new(),
@@ -896,7 +925,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
 
     /// Key branches.
     fn key_branches(&mut self, m: &NodeKey, at: At<'_>) {
-        let (ix, ty) = (self.ix, self.ty);
+        let (links, ty) = (self.links, self.ty);
         let body = at.body;
         let place = |range: Range| Place {
             path: at.path.to_string(),
@@ -918,7 +947,8 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                 let mut targets = Vec::new();
                 let arm = node.id;
                 region_uses(
-                    ix,
+                    links,
+                    m,
                     ty,
                     at,
                     &|n| n.is_some_and(|n| within(body, n, arm)),
@@ -954,7 +984,13 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
 
     /// Menu items, and the labels of every item variable of the body.
     fn menu_items(&mut self, m: &NodeKey, at: At<'_>) -> BTreeMap<String, Option<Label>> {
-        let (ix, ty) = (self.ix, self.ty);
+        let (links, ty) = (self.links, self.ty);
+        let w = Written {
+            links,
+            caller: m,
+            ty,
+            path: at.path,
+        };
         let body = at.body;
         let place = |range: Range| Place {
             path: at.path.to_string(),
@@ -997,7 +1033,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                 match &a.rhs {
                     Some(ValueRef::Access(path)) => {
                         command = Some(path.clone());
-                        let t = target(ix, ty, &scope, path, a.place, None);
+                        let t = target(w, &scope, path, a.place, None);
                         uses.extend(t.member.clone());
                         targets.push(t);
                     }
@@ -1005,7 +1041,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                         let Some(inv) = body.invocations.get(*id as usize) else {
                             continue;
                         };
-                        match command_site(ix, ty, at, inv, None) {
+                        match command_site(w, at, inv, None) {
                             Some(Ok(site)) => {
                                 for d in &site.delegates {
                                     for t in &d.targets {
@@ -1045,7 +1081,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                             body: Some(body),
                             node: s.node,
                         };
-                        let t = target(ix, ty, &scope, path, s.place, None);
+                        let t = target(w, &scope, path, s.place, None);
                         uses.extend(t.member.clone());
                         targets.push(t);
                     }
@@ -1053,7 +1089,8 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                         if let Some(l) = body.lambdas.get(*id as usize) {
                             let root = l.body;
                             region_uses(
-                                ix,
+                                links,
+                                m,
                                 ty,
                                 at,
                                 &|n| n.is_some_and(|n| within(body, n, root)),
@@ -1108,7 +1145,13 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
     /// Subscriptions (`-=` is the same subscription as its `+=`); a menu
     /// item's own are its own.
     fn subscriptions(&mut self, m: &NodeKey, at: At<'_>, labels: &BTreeMap<String, Option<Label>>) {
-        let (ix, ty) = (self.ix, self.ty);
+        let (links, ix, ty) = (self.links, self.ix, self.ty);
+        let w = Written {
+            links,
+            caller: m,
+            ty,
+            path: at.path,
+        };
         let body = at.body;
         let place = |range: Range| Place {
             path: at.path.to_string(),
@@ -1140,7 +1183,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
             };
             let own_handler = match &s.handler {
                 Handler::MethodGroup(path) => {
-                    let t = target(ix, ty, &scope, path, s.place, None);
+                    let t = target(w, &scope, path, s.place, None);
                     match t.member {
                         Some(h)
                             if ix
@@ -1158,7 +1201,8 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
                         let mut targets = Vec::new();
                         let root = l.body;
                         region_uses(
-                            ix,
+                            links,
+                            m,
                             ty,
                             at,
                             &|n| n.is_some_and(|n| within(body, n, root)),
@@ -1211,7 +1255,13 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
 
     /// Command properties.
     fn command_properties(&mut self, m: &NodeKey, at: At<'_>) {
-        let (ix, ty) = (self.ix, self.ty);
+        let (links, ix, ty) = (self.links, self.ix, self.ty);
+        let w = Written {
+            links,
+            caller: m,
+            ty,
+            path: at.path,
+        };
         let body = at.body;
         let place = |range: Range| Place {
             path: at.path.to_string(),
@@ -1221,7 +1271,7 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
             if !flows_out_of(ix, m, body, inv) {
                 continue;
             }
-            match command_site(ix, ty, at, inv, Some(m)) {
+            match command_site(w, at, inv, Some(m)) {
                 Some(Ok(site)) => self.commands.entry(m.clone()).or_default().push(site),
                 Some(Err((class, reason))) => self.unbound.push(UnboundCommand {
                     member: m.clone(),
@@ -1235,14 +1285,16 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
     }
 }
 
-/// Every entry point of `ty` and the uses of its members.
-pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
+/// Every entry point of `ty` and the uses of its members, every access
+/// resolved by `links`' walk — the index's relation first (R-25).
+pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
+    let ix = links.index();
     let members: Vec<&NodeKey> = ix
         .members_of(ty)
         .iter()
         .filter(|k| ix.symbol(k).is_some_and(|s| !s.is_type()))
         .collect();
-    let mut collector = SeedCollector::new(ix, ty);
+    let mut collector = SeedCollector::new(links, ty);
     for &m in &members {
         for at in bodies(ix, m) {
             collector.body(m, at);
@@ -1275,7 +1327,8 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
                 .unwrap_or_default();
             let body = at.body;
             region_uses(
-                ix,
+                links,
+                m,
                 ty,
                 at,
                 &|n| match n {
@@ -1285,7 +1338,7 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
                 own,
                 targets,
             );
-            region_uses(ix, ty, at, &|_| true, all, &mut Vec::new());
+            region_uses(links, m, ty, at, &|_| true, all, &mut Vec::new());
         }
         own.remove(m);
         all.remove(m);

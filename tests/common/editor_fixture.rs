@@ -3,7 +3,11 @@
 //! generic base, a command class bound from its own code that raises an event,
 //! the view model's check with its three silent returns and the properties it
 //! writes, an external caller of the check, and a save that clears the check's
-//! state before it reads it.
+//! state before it reads it. U5 adds a menu item of the view given the check
+//! command, a command whose key gesture (`Ctrl+F4`) is assigned in C#, and the
+//! new editor: a view and a view model with the same names of command and key,
+//! whose `CanCheck()` returns `false` — an independent component, never to be
+//! mixed with the old one (AE2, AE3, AE5).
 //!
 //! Loaded with `#[path = "common/editor_fixture.rs"] mod editor_fixture;` by the
 //! test crates that use it, so `tests/common/mod.rs` stays as it is. Units U5–U9
@@ -57,6 +61,62 @@ namespace Acme.Views
         {
             Db.Apply("UPDATE dbo.Documents SET Body = @body");
         }
+
+        void BuildMenu()
+        {
+            var check = new MenuItem();
+            check.Header = "Check errors";
+            check.Command = viewModel.CheckCommand;
+        }
+    }
+}
+"#;
+
+/// The new editor's view: the same key and the same command name as the old
+/// one, over its own view model.
+pub const VIEW_NEW: &str = r#"using Acme.ViewModels;
+
+namespace Acme.Views
+{
+    public class EditorViewNew : ViewBase<EditorViewModelNew>
+    {
+        public EditorViewNew()
+        {
+            PreviewKeyDown += Editor_PreviewKeyDown;
+        }
+
+        void Editor_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F4)
+            {
+                this.viewModel.CheckCommand.Execute(null);
+            }
+        }
+    }
+}
+"#;
+
+/// The new editor's view model: its check can never run.
+pub const VIEW_MODEL_NEW: &str = r#"namespace Acme.ViewModels
+{
+    public class EditorViewModelNew
+    {
+        private RelayCommand checkCommand;
+
+        public bool Checked { get; set; }
+
+        public RelayCommand CheckCommand
+        {
+            get
+            {
+                if (checkCommand == null) checkCommand = new RelayCommand(p => Check(), p => CanCheck());
+                return checkCommand;
+            }
+        }
+
+        public void Check() { Checked = true; }
+
+        bool CanCheck() { return false; }
     }
 }
 "#;
@@ -74,6 +134,7 @@ namespace Acme.ViewModels
         private readonly Predicate<object> _canExecute;
         public event EventHandler Executed;
         public event CancelEventHandler ExecutingStarted;
+        public KeyGesture[] KeyGestures { get; set; }
         public RelayCommand(Action<object> execute) : this(execute, null) { }
         public RelayCommand(Action<object> execute, Predicate<object> canExecute)
         {
@@ -94,6 +155,7 @@ namespace Acme.ViewModels
     public class EditorViewModel
     {
         private RelayCommand checkCommand;
+        private RelayCommand closeErrorsCommand;
         private readonly Parser parser = new Parser();
         private bool canErrors;
         private SyntaxKind syntax;
@@ -138,6 +200,23 @@ namespace Acme.ViewModels
                 return checkCommand;
             }
         }
+
+        public bool ErrorsPanelOpen { get; set; }
+
+        public RelayCommand CloseErrorsCommand
+        {
+            get
+            {
+                if (closeErrorsCommand == null)
+                {
+                    closeErrorsCommand = new RelayCommand(p => CloseErrors());
+                    closeErrorsCommand.KeyGestures = new KeyGesture[] { new KeyGesture(Key.F4, ModifierKeys.Control) };
+                }
+                return closeErrorsCommand;
+            }
+        }
+
+        void CloseErrors() { ErrorsPanelOpen = false; }
 
         public void Check() { Check((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift); }
 
@@ -202,6 +281,8 @@ pub fn files() -> Vec<(&'static str, &'static str)> {
     vec![
         ("src/Parsing/Parser.cs", PARSER),
         ("src/ViewModels/EditorViewModel.cs", VIEW_MODEL),
+        ("src/ViewModels/EditorViewModelNew.cs", VIEW_MODEL_NEW),
         ("src/Views/EditorView.cs", VIEW),
+        ("src/Views/EditorViewNew.cs", VIEW_NEW),
     ]
 }
