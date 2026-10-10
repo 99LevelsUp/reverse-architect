@@ -148,6 +148,7 @@ mod tests {
             "trigger",
             "control-key",
             "key-gesture",
+            "unparsed-markup",
         ] {
             assert!(
                 manifest.emits.iter().any(|e| e == name),

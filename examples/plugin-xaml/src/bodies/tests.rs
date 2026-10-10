@@ -671,6 +671,27 @@ fn a_dictionary_has_a_body_per_style_and_template_and_none_for_other_resources()
     assert!(file.types.is_empty() && file.typed_members.is_empty() && file.metas.is_empty());
 }
 
+/// R19, U8: a value written as a markup extension the parser cannot take
+/// apart is no access and no literal, and its element says so with
+/// `unparsed-markup`, the attribute's name as the value; the `{}` escape and
+/// a well-formed extension beside it carry none.
+#[test]
+fn an_extension_that_cannot_be_parsed_is_tagged_on_its_element() {
+    let source = "<Grid xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" x:Class=\"Acme.V\">\n<TextBlock Text=\"{Binding Title\" Tag=\"{Binding Note}\"/>\n<TextBlock Text=\"{}{Plain}\" ToolTip=\"{ }\"/>\n</Grid>";
+    let file = read(source);
+    let view = &file.members[0];
+    let broken = &view.nodes[1];
+    assert_eq!(tags(broken, UNPARSED_MARKUP), [(Some("Text"), vec![])]);
+    assert_eq!(
+        accesses(view, broken.id),
+        [(vec!["Note"], AccessMode::Read)]
+    );
+    assert!(view.literals.iter().all(|l| !l.value.contains("Title")));
+    let other = &view.nodes[2];
+    assert_eq!(tags(other, UNPARSED_MARKUP), [(Some("ToolTip"), vec![])]);
+    assert!(EMITS.contains(&UNPARSED_MARKUP));
+}
+
 #[test]
 fn the_same_file_gives_the_same_bodies() {
     assert_eq!(read(VIEW), read(VIEW));

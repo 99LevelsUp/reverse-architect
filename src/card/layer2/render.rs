@@ -2382,26 +2382,26 @@ pub const DYNAMIC_ACCESS: &str = "Dynamic access";
 pub fn markup_sentence(state: MarkupState, lang: Lang) -> &'static str {
     match (state, lang) {
         (MarkupState::NotRead, Lang::En) => {
-            "XAML was not read in this run — no plugin of the run reads it — so a member \
-             without a marker from markup may still be bound, commanded or handled from XAML \
-             (coverage.json, `markup`)."
+            "XAML was not read in this run — the corpus holds no XAML file, or no plugin of \
+             the run reads it (coverage.json, `markup`: `files`, `plugins`) — so a member \
+             without a marker from markup may still be bound, commanded or handled from XAML."
         }
         (MarkupState::NotRead, Lang::Cs) => {
-            "XAML se v tomto běhu nečetl — žádný plugin běhu ho nečte —, takže člen bez značky \
-             z markupu může být z XAML přesto vázaný, spouštěný příkazem nebo obsluhovaný \
-             (coverage.json, `markup`)."
+            "XAML se v tomto běhu nečetl — korpus nemá žádný soubor XAML, nebo ho žádný plugin \
+             běhu nečte (coverage.json, `markup`: `files`, `plugins`) —, takže člen bez značky \
+             z markupu může být z XAML přesto vázaný, spouštěný příkazem nebo obsluhovaný."
         }
         (MarkupState::ReadWithUnsupportedConstructs, Lang::En) => {
-            "XAML was read with unsupported constructs in this run — a file failed, or a \
-             component read no bodies; coverage.json lists them under `markup`, and the XAML \
-             plugin's findings its limits — so a missing marker is no evidence that no way \
-             from XAML exists."
+            "XAML was read with unsupported constructs in this run — a file failed, a component \
+             read no bodies, or a markup extension could not be taken apart; coverage.json \
+             lists them under `markup`, and the XAML plugin's findings its limits — so a \
+             missing marker is no evidence that no way from XAML exists."
         }
         (MarkupState::ReadWithUnsupportedConstructs, Lang::Cs) => {
-            "XAML se v tomto běhu přečetl s nepodporovanými konstrukty — soubor selhal nebo \
-             komponenta nečetla těla; coverage.json je vypisuje v oddílu `markup` a kniha \
-             nálezů pluginu pro XAML jeho meze —, takže chybějící značka není doklad, že cesta \
-             z XAML neexistuje."
+            "XAML se v tomto běhu přečetl s nepodporovanými konstrukty — soubor selhal, \
+             komponenta nečetla těla nebo se rozšíření markupu nepodařilo rozebrat; \
+             coverage.json je vypisuje v oddílu `markup` a kniha nálezů pluginu pro XAML jeho \
+             meze —, takže chybějící značka není doklad, že cesta z XAML neexistuje."
         }
         (MarkupState::ReadInFull, Lang::En) => {
             "XAML was read in full in this run, so no binding, command or handler of XAML the \
@@ -2437,14 +2437,16 @@ pub fn markup_document_sentence(state: MarkupState, lang: Lang) -> &'static str 
              (coverage.json, `markup`)."
         }
         (MarkupState::ReadWithUnsupportedConstructs, Lang::En) => {
-            "XAML coverage of this run: read with unsupported constructs — a file failed, or a \
-             component read no bodies; coverage.json lists them under `markup`, and the XAML \
-             plugin's findings its limits."
+            "XAML coverage of this run: read with unsupported constructs — a file failed, a \
+             component read no bodies, or a markup extension could not be taken apart; \
+             coverage.json lists them under `markup`, and the XAML plugin's findings its \
+             limits."
         }
         (MarkupState::ReadWithUnsupportedConstructs, Lang::Cs) => {
-            "Pokrytí XAML v tomto běhu: přečteno s nepodporovanými konstrukty — soubor selhal \
-             nebo komponenta nečetla těla; coverage.json je vypisuje v oddílu `markup` a kniha \
-             nálezů pluginu pro XAML jeho meze."
+            "Pokrytí XAML v tomto běhu: přečteno s nepodporovanými konstrukty — soubor selhal, \
+             komponenta nečetla těla nebo se rozšíření markupu nepodařilo rozebrat; \
+             coverage.json je vypisuje v oddílu `markup` a kniha nálezů pluginu pro XAML jeho \
+             meze."
         }
         (MarkupState::ReadInFull, Lang::En) => {
             "XAML coverage of this run: read in full — every XAML file was read by both layers \

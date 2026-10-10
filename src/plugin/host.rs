@@ -614,6 +614,17 @@ impl Plugin {
         &self.manifest
     }
 
+    /// Whether a corpus whose files end in `extensions` (the text after the
+    /// last dot of every tracked path) holds a file this plugin claims: what
+    /// decides whether it declares its kinds and whether it counts for XAML
+    /// coverage, so a corpus nothing of the plugin reads stays as it was.
+    pub fn claims_any(&self, extensions: &std::collections::BTreeSet<String>) -> bool {
+        self.manifest
+            .extensions()
+            .iter()
+            .any(|e| extensions.contains(*e))
+    }
+
     pub fn id(&self) -> &str {
         &self.manifest.id
     }

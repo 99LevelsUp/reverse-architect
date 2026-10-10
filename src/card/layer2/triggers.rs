@@ -61,6 +61,7 @@
 
 use super::callers::{is_strong, BodySite, Callers, Evidence, Via};
 use super::cluster::Functionality;
+use super::dynamic::KEY_GESTURE;
 use super::entry::{bodies, is_field_path, statements_of, EntryKind, EntryPoint, Label, Place};
 use super::flow::written;
 use super::link::{weakest, Links};
@@ -555,7 +556,7 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
                 }
                 for at in bodies(ix, m) {
                     for n in &at.body.nodes {
-                        for tag in n.tags.iter().filter(|t| t.name == "key-gesture") {
+                        for tag in n.tags.iter().filter(|t| t.name == KEY_GESTURE) {
                             let Some(value) = &tag.value else { continue };
                             let place = Place {
                                 path: at.path.to_string(),

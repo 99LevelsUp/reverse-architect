@@ -35,6 +35,7 @@
 //! functionality's flows (2b), which reads the rows of C# alone.
 
 use super::explain::{code, cs_n, plural, series, NAMED_IN_SENTENCE};
+use super::layer2::dynamic::{CONTROL_KEY, KEY_GESTURE};
 use super::layer2::{
     Analysis, FunctionalityRef, MarkupTriggerKind, PathState, Place, TriggerKind, TriggerRow,
 };
@@ -166,9 +167,9 @@ const ROW_LANGUAGES: &[(&str, &[RegistryKind])] = &[
 fn kind_of(emitted: &str) -> &'static [RegistryKind] {
     match emitted {
         "subscription" => &[RegistryKind::Event],
-        "key-compare" | "key-gesture" => &[RegistryKind::Key],
+        "key-compare" | KEY_GESTURE => &[RegistryKind::Key],
         "menu-item" => &[RegistryKind::MenuItem],
-        "control-key" => &[RegistryKind::Control, RegistryKind::MenuItem],
+        CONTROL_KEY => &[RegistryKind::Control, RegistryKind::MenuItem],
         _ => &[],
     }
 }

@@ -50,6 +50,7 @@ is refused by every pass with a short reason (`err`) and listed as failed, the r
 - **Bodies:** one `markup` body per style, template and `x:Class` root, paired with its declaration by the
   name position, with a node per element; binding paths, `{x:Static}`, attached properties and setters as
   member accesses; event handlers and `EventSetter`s as subscriptions; attribute texts as literals; and the
-  tags `target-type`, `data-source`, `trigger`, `control-key` and `key-gesture`. The rules, including the
+  tags `target-type`, `data-source`, `trigger`, `control-key`, `key-gesture` and `unparsed-markup` (a value
+  written as a markup extension the plugin could not take apart). The rules, including the
   heuristic that tells an event handler from a plain value, are in the comment at the top of
   [`src/bodies.rs`](src/bodies.rs).

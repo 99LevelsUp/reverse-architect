@@ -951,7 +951,7 @@ fn the_xaml_documents_carry_the_state_and_the_references_from_csharp() {
     let unresolved = section(dark, "Unresolved references").expect("the admission");
     assert!(
         unresolved.contains(&format!(
-            "- NoSuchPanelBrush: no xaml:resource declares this name — `{PANELS_DARK}:{}`\n",
+            "- `NoSuchPanelBrush`: no xaml:resource declares this name — `{PANELS_DARK}:{}`\n",
             line_of(PANELS_DARK, "NoSuchPanelBrush", 0)
         )),
         "{unresolved}"
@@ -1104,6 +1104,7 @@ fn a_component_that_serves_no_bodies_lowers_the_state() {
         &["rust".to_string()],
         Some(layer),
         None,
+        &[],
     )
     .expect("a markup section");
     assert_eq!(markup.without_bodies, ["rust"]);
@@ -1112,6 +1113,49 @@ fn a_component_that_serves_no_bodies_lowers_the_state() {
     let real = g.coverage.markup.as_ref().expect("a markup section");
     assert!(real.without_bodies.is_empty());
     assert_eq!(real.state, MarkupState::ReadInFull);
+}
+
+/// R19, U8 (review of 2c): a binding written as a markup extension the
+/// plugin cannot take apart (`Text="{Binding Title"`) is lost, not read — so
+/// the run is "read with unsupported constructs", coverage names the file
+/// and how many such values it has, and the cards say so in their sentence.
+#[test]
+fn a_markup_extension_that_cannot_be_parsed_lowers_the_state() {
+    use reverse_architect::coverage::UnparsedMarkup;
+    let path = "Acme.Ui/Screens/Broken.xaml";
+    let view = "<UserControl x:Class=\"Acme.Screens.Broken\"\n    \
+                xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n    \
+                xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n  \
+                <TextBlock Text=\"{Binding Title\" />\n</UserControl>\n";
+    let r = run_with(&[(path, view)], true, Some(2));
+    let g = &r.generated;
+    let markup = g.coverage.markup.as_ref().expect("a markup section");
+    assert_eq!(markup.state, MarkupState::ReadWithUnsupportedConstructs);
+    assert_eq!(
+        markup.unparsed,
+        [UnparsedMarkup {
+            path: path.to_string(),
+            count: 1
+        }]
+    );
+    assert!(markup.failed.is_empty() && markup.without_bodies.is_empty());
+    let json = reverse_architect::coverage::to_json(&g.coverage);
+    assert!(json.contains("\"unparsed\""), "{json}");
+    let lowered = "XAML was read with unsupported constructs in this run — a file failed, a \
+                   component read no bodies, or a markup extension could not be taken apart; \
+                   coverage.json lists them under `markup`, and the XAML plugin's findings its \
+                   limits — so a missing marker is no evidence that no way from XAML exists.";
+    let s = dynamic_of(g, "Acme.Tools/ModelH");
+    assert!(s.trim_end().ends_with(lowered), "{s}");
+    let file = card_at(g, &format!("cards/file/{path}.md"));
+    assert!(
+        file.contains("XAML coverage of this run: read with unsupported constructs"),
+        "{file}"
+    );
+    // The fixture alone has none: the section stays without the field.
+    let clean = &layered().0.generated;
+    let json = reverse_architect::coverage::to_json(&clean.coverage);
+    assert!(!json.contains("\"unparsed\""), "{json}");
 }
 
 // ---- U9: the rows of XAML in the registry of triggers ----
@@ -1258,6 +1302,102 @@ fn a_secret_in_a_controls_identity_is_left_out_of_the_registry() {
         "{}",
         rows[0]
     );
+}
+
+/// Every file under `dir`, by path.
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            out.extend(files_under(&path));
+        } else {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// KTD16, review of 2c (CWE-532): in a view with `x:Class` an attribute
+/// whose value the plugin takes for a handler (`Token="ghp_…"`,
+/// `Password="Admin_Pass2024"`) is a subscription, not a literal; the host
+/// decides its name like a literal of the attribute, so neither value is in
+/// the stored model of the second layer, on a card, in the manifest, in the
+/// registry or in coverage — and a handler named like one keeps its mark.
+#[test]
+fn a_secret_taken_for_a_handler_reaches_no_record_and_no_document() {
+    let token = "ghp_Q7rT2mX9vB4nL6kP1sD8fH3jW5zC0aE";
+    let password = "Admin_Pass2024";
+    let path = "Acme.Ui/Screens/Vault.xaml";
+    let view = format!(
+        "<UserControl x:Class=\"Acme.Screens.Vault\"\n    \
+         xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n    \
+         xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n    \
+         xmlns:local=\"clr-namespace:Acme.Screens\">\n  \
+         <local:Holder Token=\"{token}\" Password=\"{password}\" />\n  \
+         <Button Click=\"OnSave\" />\n</UserControl>\n"
+    );
+    let r = run_with(&[(path, view.as_str())], true, Some(2));
+    let g = &r.generated;
+    let records = files_under(&r._dir.path().join("out/.ra-cache/languages-bodies"));
+    let stored: Vec<String> = records
+        .iter()
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    assert!(
+        stored
+            .iter()
+            .any(|s| s.contains("\"Token\"") && s.contains("[redacted: token")),
+        "the subscription was stored, its handler withheld: {stored:?}"
+    );
+    assert!(stored
+        .iter()
+        .any(|s| s.contains("\"Password\"") && s.contains("[redacted: password")));
+    let mut texts: Vec<(String, String)> = stored
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| (format!("record {i}"), s))
+        .collect();
+    for f in g
+        .cards
+        .iter()
+        .chain(&g.details)
+        .chain(&g.maps)
+        .chain(&g.corpus.files)
+        .chain(g.triggers.iter())
+    {
+        texts.push((f.path.clone(), f.contents.clone()));
+    }
+    texts.push((
+        "manifest".into(),
+        reverse_architect::manifest::to_json(&g.manifest),
+    ));
+    texts.push((
+        "coverage".into(),
+        reverse_architect::coverage::to_json(&g.coverage),
+    ));
+    for (name, text) in &texts {
+        assert!(!text.contains(token), "{name}: {text}");
+        assert!(!text.contains(password), "{name}: {text}");
+    }
+    // A handler named like one is still read by the name it has.
+    let analysis = analysis_of(g);
+    let named: Vec<String> = analysis
+        .dynamic
+        .sites()
+        .iter()
+        .filter(|s| s.place.path == path && s.kind == MarkKind::Handler)
+        .map(|s| s.path.join("."))
+        .collect();
+    assert_eq!(named.len(), 3, "{named:?}");
+    assert!(named.contains(&"OnSave".to_string()), "{named:?}");
+    assert!(named
+        .iter()
+        .all(|n| !n.contains(token) && !n.contains(password)));
 }
 
 /// AE6: without the XAML component the registry keeps its admission that

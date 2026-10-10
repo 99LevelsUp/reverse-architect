@@ -1124,7 +1124,16 @@ pub fn add_markup_documents(
                 span,
             }
             .anchor();
-            section.push_str(&format!("- {text} — `{anchor}`\n"));
+            // The name as the analyzed file spells it is code, as every other
+            // XAML name on a card: a key may hold Markdown. The rest is the
+            // host's own sentence (`<name>: no <kind> declares this name`).
+            let line = match text.rsplit_once(": no ") {
+                Some((name, rest)) => {
+                    format!("{}: no {rest}", super::explain::code(name))
+                }
+                None => super::explain::code(&text),
+            };
+            section.push_str(&format!("- {line} — `{anchor}`\n"));
         }
         insert_section(&mut file.contents, &section);
     }

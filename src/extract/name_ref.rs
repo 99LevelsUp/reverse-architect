@@ -479,7 +479,9 @@ fn collect_candidates(
 ) -> Collected {
     let mut by_name: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
     let mut top_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for node in graph.nodes_sorted() {
+    // Every list is sorted below and the names go into sets: no order of the
+    // graph's.
+    for node in graph.nodes_unordered() {
         let NodeKind::Declared(id) = node.kind else {
             continue;
         };
@@ -561,8 +563,7 @@ impl GraphScopes {
         let targets = BTreeSet::from([target]);
         let (by_name, _) = collect_candidates(graph, &targets, &|_, _| None, &HashMap::new());
         let projects: BTreeSet<String> = graph
-            .nodes_sorted()
-            .into_iter()
+            .nodes_unordered()
             .filter(|n| {
                 n.kind == NodeKind::File && n.key.as_str().to_ascii_lowercase().ends_with(".csproj")
             })

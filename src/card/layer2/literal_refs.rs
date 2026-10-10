@@ -40,7 +40,7 @@
 //! markup itself — and two candidates are variants only by their paths under
 //! sibling project roots, never by the same set of keys.
 
-use super::dynamic::{Builder, Mark, MarkKind, MarkUse, XamlRef, XamlRefKind};
+use super::dynamic::{Builder, Mark, MarkKind, MarkUse, XamlRef, XamlRefKind, TARGET_TYPE};
 use super::entry::Place;
 use super::link::{Links, Outcome};
 use super::resolve::{full_name, Scope};
@@ -51,9 +51,6 @@ use crate::extract::bodies::{
 use crate::extract::name_ref::{GraphScopes, RESOURCE_KIND};
 use crate::graph::{Confidence, NodeKey};
 use std::collections::{BTreeMap, BTreeSet};
-
-/// The tag a markup body names the type it is about with.
-const TARGET_TYPE: &str = "target-type";
 
 /// Whether `s` is spelled like a C# identifier — the only values a member's
 /// or an element's name can be.
@@ -180,14 +177,16 @@ fn literal(
 ) {
     let ix = b.index();
     let value = literal.value.as_str();
+    // The C# members of that name, by key, looked up once: those the
+    // nearest type of the line declares.
+    let named = ix.members_named(value);
     let found: Option<Vec<NodeKey>> = at.line.iter().find_map(|t| {
-        let named: Vec<NodeKey> = ix
-            .members_of(t)
+        let declared: Vec<NodeKey> = named
             .iter()
-            .filter(|m| ix.symbol(m).is_some_and(|s| s.name == value))
+            .filter(|m| ix.owner_of(m) == Some(t))
             .cloned()
             .collect();
-        (!named.is_empty()).then_some(named)
+        (!declared.is_empty()).then_some(declared)
     });
     match found.as_deref() {
         Some([one]) => {

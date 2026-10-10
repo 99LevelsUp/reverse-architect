@@ -315,12 +315,7 @@ impl PluginSet {
             let Some(v) = plugin.vocabulary() else {
                 continue;
             };
-            if !plugin
-                .manifest()
-                .extensions()
-                .iter()
-                .any(|e| corpus_extensions.contains(*e))
-            {
+            if !plugin.claims_any(corpus_extensions) {
                 continue;
             }
             let id = plugin.id().to_string();

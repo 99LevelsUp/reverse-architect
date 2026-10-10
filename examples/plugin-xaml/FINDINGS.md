@@ -17,7 +17,10 @@ against. The column *State* says what 0.3 changed:
 
 - **closed in 0.3** — the contract carries it and the host takes it in as it says;
 - **carried in 0.3, host pending** — the plugin reports it in the 0.3 records, but the host does not yet do
-  anything with it in a run (the XAML side of the second layer comes with the later units of step 2c);
+  anything with it in a run beyond redacting and storing it;
+- **read by the host** — the plugin reports it in the 0.3 records and a run with the second layer pairs it with
+  the C# members it reads, writes or calls (step 2c: the dynamic-call markers and `## Dynamic access` of the
+  cards, the rows of XAML in the registry of triggers);
 - **resolved by the host** — the host looks the reference up after all files are read (`docs/plugins.md`,
   *References by name*).
 
@@ -44,14 +47,14 @@ against. The column *State* says what 0.3 changed:
 | Block a resource or a reference sits in | not reported | needs-ra-change | Nothing in 0.2 says which block a definition or a reference is written in, so nearest-block lookup is impossible. Proposal: a list of the file's lookup blocks with line ranges and parent index, and a `block` index on a resource declaration and on a reference | resolved by the host: nearest block and its parents first |
 | `{StaticResource K}`, `{DynamicResource K}` | not reported | needs-ra-change | No usage kind resolves to a resource (docs 64). Proposal: a reference by name to a declaration of the plugin's own kind, resolved by the host after all files are read, nearest scope first | resolved by the host (`name-ref`: block, file, merged dictionaries, project, repository; variants and ambiguity; an unresolved key is a fact on the file) |
 | `BasedOn` | only `{StaticResource {x:Type T}}` naming a type-keyed style of the same file became an `extends` relation | needs-ra-change | both ends were cardless kinds, so the host lifted the relation onto the file and the file card said it extends itself. Proposal: a `name-ref` with relation `extends` between nodes of the plugin's own kinds | resolved by the host (`name-ref.relation = extends` becomes an `extends` edge, any base, any file; the 0.2 relation is gone) |
-| Binding paths | not reported | needs-ra-change | No usage kind expresses reading a property on a type the file does not name (WIT 136–146). Proposal: member accesses with a path and a mode, read in a pass over element bodies, and a tag saying where the binding's data comes from | carried in 0.3, host pending (`member-access`, `data-source`) |
-| `Command=` | not reported | needs-ra-change | a binding path (above); a command is also a trigger | carried in 0.3, host pending (`member-access`, `trigger`, `control-key`) |
-| Event handlers (`Click="OnSave"`) | not reported | needs-ra-change | not a call but a delegate binding to a method of the class. Proposal: a subscription record | carried in 0.3, host pending (`subscription`); see *Which attribute is an event* below |
-| `{x:Static T.M}` | `reference` to `T` | fits; the member `M` sacrificed | no usage kind for a static member read (docs 64) | member: carried in 0.3, host pending (`member-access` `read` of `[T, M]`) |
-| Attached properties (`a:Owner.Prop=`) | not reported | fits (deferred) | the owner type would fit as a `reference`; the write through its accessors needs a member access | carried in 0.3, host pending (`member-access` `write` of `[Owner, Prop]`) |
-| `Setter Property=` | not reported | needs-ra-change | the property is a member of the style's `TargetType`; needs a member access | carried in 0.3, host pending (`member-access` `write` of `[TargetType, Prop]`) |
-| String literals in attributes | not reported | sacrificed | the host's lexer does not read `.xaml`, so attribute values never become keywords; reporting them needs a literal record the host redacts | carried in 0.3, host pending (`string-literal`, `attribute-arg`) |
-| `KeyBinding` in `InputBindings` | not reported | sacrificed | the command is a binding, the gesture a literal | carried in 0.3, host pending (`key-gesture`) |
+| Binding paths | not reported | needs-ra-change | No usage kind expresses reading a property on a type the file does not name (WIT 136–146). Proposal: member accesses with a path and a mode, read in a pass over element bodies, and a tag saying where the binding's data comes from | read by the host (`member-access`, `data-source`: a binding marks the member of the source's type, through a view's model; an unpaired source is counted, not guessed) |
+| `Command=` | not reported | needs-ra-change | a binding path (above); a command is also a trigger | read by the host (`member-access`, `trigger`, `control-key`: a control or menu-item row in the registry of triggers, with the command its binding names) |
+| Event handlers (`Click="OnSave"`) | not reported | needs-ra-change | not a call but a delegate binding to a method of the class. Proposal: a subscription record | read by the host (`subscription`: a handler mark on the method of the `x:Class` type; the handler's name is redacted like a literal of its attribute); see *Which attribute is an event* below |
+| `{x:Static T.M}` | `reference` to `T` | fits; the member `M` sacrificed | no usage kind for a static member read (docs 64) | member: read by the host (`member-access` `read` of `[T, M]`, a static mark on `M`) |
+| Attached properties (`a:Owner.Prop=`) | not reported | fits (deferred) | the owner type would fit as a `reference`; the write through its accessors needs a member access | read by the host (`member-access` `write` of `[Owner, Prop]`, a mark on `GetProp`/`SetProp`) |
+| `Setter Property=` | not reported | needs-ra-change | the property is a member of the style's `TargetType`; needs a member access | read by the host (`member-access` `write` of `[TargetType, Prop]`, a setter mark) |
+| String literals in attributes | not reported | sacrificed | the host's lexer does not read `.xaml`, so attribute values never become keywords; reporting them needs a literal record the host redacts | carried in 0.3, host pending (`string-literal`, `attribute-arg`: redacted and stored; no analysis reads them yet — a C# literal that names an element or a resource of XAML is read, from the C# side) |
+| `KeyBinding` in `InputBindings` | not reported | sacrificed | the command is a binding, the gesture a literal | read by the host (`key-gesture`: a key row in the registry of triggers) |
 | Implicit two-way bindings | not reported | sacrificed | the default mode lives in the framework's property metadata, which no file states (WIT 226–227: everything is read from the one file) | — (still: only an explicit `Mode` writes) |
 | Why a file failed | the file traps; coverage says it failed | needs-ra-change | `declarations` and `usages` returned plain lists, so the only failure a plugin could report was a trap, and the panic text was lost. Proposal: a `result<…, string>` or an error record per pass | closed in 0.3 (every pass returns `result<…, string>`; the plugin no longer panics) |
 
@@ -73,6 +76,7 @@ was built against.
 | Literals outside a body | only attributes inside a style's, a template's or the `x:Class` root's body are reported | sacrificed | A literal belongs to a `member-body` (WIT 698), and only styles, templates and views have bodies here. The attributes of other resources (a `sys:String`, a brush) and of a dictionary's own elements have no body to go in. Element text content (`<TextBlock>Save</TextBlock>`) is not reported either: the literal contexts name attribute arguments, not content |
 | Values also read as something else | every attribute value that passes the syntactic rule is a literal, also when the plugin reports it as another record too (`Setter Property="IsBusy"`, `Gesture="Ctrl+S"`, `Value="True"`, `TargetType="local:ViewA"`); only `xmlns`, attributes of the XAML language namespace and values taken for an event handler are left out | fits, with noise | The rule (plan, KTD9) is syntactic, with no list of attribute names, so enumeration values (`Visibility="Collapsed"`), type names and gestures are literals beside what they also are; the host's reading of literals has to live with it |
 | Element names in a body | `element(<name>)` carries the element's type name, qualified by the CLR namespace of a `clr-namespace` prefix (`Acme.Views.ViewA`), as written without prefix under a URI mapping | fits | the host has no `xmlns` map, so a name it can match against a declared type is the one with the namespace |
+| A markup extension the parser cannot take apart | `Text="{Binding Title"` gives no access and no literal; its element carries `unparsed-markup` with the attribute's name as the value | fits, after a fix | The first 0.3 build dropped such a value silently, and a run reported XAML as read in full while a binding was lost. Nothing in the contract says how a body reports a construct it read but could not understand; a tag of the component's own is enough, because the host counts it per file and lowers the state of XAML coverage to "read with unsupported constructs" (`coverage.json`, `markup.unparsed`) |
 
 ## Verdict on the architecture
 
@@ -80,8 +84,9 @@ A declarative language fits the plugin model as far as declarations, type refere
 coverage go: all of that came through 0.2 with no change to the host. What did not fit is the declarative
 graph itself — resources referenced by name, blocks, the kinds that should carry a card, and everything a binding
 says about members. Contract 0.3 adds those as typed records rather than as text, and the plugin now reports all
-of them, and the host now resolves the references by name. What 0.3 does not yet settle is the host's reading of
-the XAML side of the second layer (bindings, triggers) and two places of the contract's wording: one target kind
-per reference (the host widens `xaml:resource` to styles and templates for now) and how `symbol_kind` relates to a
-node kind. The rule over a namespace `qualifier`
-stays a proposal for the host.
+of them; the host resolves the references by name and, in a run with the second layer, reads the XAML side of
+it — bindings, static members, attached properties, setters, handlers and triggers become dynamic-call markers on
+the C# members and rows of the registry of triggers. What is left is the literals of attributes, which the host
+stores redacted but reads with no analysis yet, and two places of the contract's wording: one target kind per
+reference (the host widens `xaml:resource` to styles and templates for now) and how `symbol_kind` relates to a
+node kind. The rule over a namespace `qualifier` stays a proposal for the host.

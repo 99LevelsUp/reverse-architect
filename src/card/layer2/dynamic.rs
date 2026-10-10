@@ -64,6 +64,11 @@
 //! outermost body around it in its file — the view's root carries its
 //! `x:Class`.
 //!
+//! A node tagged `unparsed-markup` holds a value written as a markup
+//! extension the plugin could not take apart: what it says is lost, so it is
+//! counted per file ([`DynamicAccess::unparsed`]) and lowers the run's state
+//! of XAML coverage (R19).
+//!
 //! # Grades (KTD8)
 //!
 //! A link the walk told is [`Confidence::RulesBacked`]: a mark with a place.
@@ -96,7 +101,7 @@ use super::entry::Place;
 use super::link::{Links, Outcome};
 use super::resolve::{Index, Scope, Unresolved};
 use super::triggers::DynamicMarks;
-use crate::coverage::{MarkupSites, MarkupState};
+use crate::coverage::{MarkupSites, MarkupState, UnparsedMarkup};
 use crate::extract::bodies::{
     AccessMode, AccessPath, BodyKind, Handler, MemberAccess, MemberBody, NodeKind as BodyNodeKind,
     PathRoot, Range, Subscription, Tag,
@@ -110,14 +115,27 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const VIEW_MODEL_FIELD: &str = "viewModel";
 
 /// The tag a markup body names the type it is about with.
-const TARGET_TYPE: &str = "target-type";
+pub(crate) const TARGET_TYPE: &str = "target-type";
 
 /// How the key of a view's root ends: the plugin keys it `<file>#x:Class`
 /// (plan 2c, KTD3).
 const X_CLASS_KEY: &str = "#x:Class";
 
 /// The tag a markup node names the source of its bindings' data with.
-const DATA_SOURCE: &str = "data-source";
+pub(crate) const DATA_SOURCE: &str = "data-source";
+
+/// The tag of an element with a command: `trigger: control` (U9).
+pub(crate) const TRIGGER: &str = "trigger";
+
+/// The tag that names a control's identity and how it was found (U9).
+pub(crate) const CONTROL_KEY: &str = "control-key";
+
+/// The tag of a key binding: its gesture, and the command (step 2b, U9).
+pub(crate) const KEY_GESTURE: &str = "key-gesture";
+
+/// The tag of an element with a value written as a markup extension the
+/// plugin could not take apart (R19): its file was not read in full.
+pub(crate) const UNPARSED_MARKUP: &str = "unparsed-markup";
 
 /// What wrote a mark (R16).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -381,6 +399,14 @@ pub struct DynamicAccess {
     generic: Vec<GenericMarks>,
     /// By kind, key, place and member.
     triggers: Vec<MarkupTrigger>,
+    /// The markup files with a value the plugin could not take apart, by
+    /// path (R19: what lowers the state of XAML coverage).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unparsed: Vec<UnparsedMarkup>,
+    /// The indexes into `generic` and into `members` of every type's
+    /// members, by type: [`DynamicAccess::lines_of`] reads one type's.
+    #[serde(skip)]
+    by_owner: BTreeMap<NodeKey, (Vec<usize>, Vec<usize>)>,
 }
 
 impl DynamicAccess {
@@ -397,6 +423,7 @@ impl DynamicAccess {
             refs: Vec::new(),
             generic: Vec::new(),
             triggers: Vec::new(),
+            unparsed: BTreeMap::new(),
         };
         b.markup();
         super::literal_refs::collect(&mut b);
@@ -419,6 +446,9 @@ impl DynamicAccess {
     /// its declaration, a mark, a match by name — by key: the lines of the
     /// `## Dynamic access` of its card (U8).
     pub fn lines_of(&self, ty: &NodeKey) -> Vec<MemberLine> {
+        let Some((generic, members)) = self.by_owner.get(ty) else {
+            return Vec::new();
+        };
         let mut lines: BTreeMap<&NodeKey, MemberLine> = BTreeMap::new();
         let blank = |member: &NodeKey| MemberLine {
             member: member.clone(),
@@ -426,18 +456,24 @@ impl DynamicAccess {
             marks: Vec::new(),
             name_matches: 0,
         };
-        for g in self.generic.iter().filter(|g| &g.owner == ty) {
+        for g in generic.iter().map(|&i| &self.generic[i]) {
             lines
                 .entry(&g.member)
                 .or_insert_with(|| blank(&g.member))
                 .generic = g.marks.clone();
         }
-        for m in self.members.iter().filter(|m| m.owner.as_ref() == Some(ty)) {
+        for m in members.iter().map(|&i| &self.members[i]) {
             let line = lines.entry(&m.member).or_insert_with(|| blank(&m.member));
             line.marks = m.marks.clone();
             line.name_matches = m.name_matches;
         }
         lines.into_values().collect()
+    }
+
+    /// The markup files with a value written as a markup extension the
+    /// plugin could not take apart, by path, with how many (R19).
+    pub fn unparsed(&self) -> &[UnparsedMarkup] {
+        &self.unparsed
     }
 
     /// Every trigger written in markup (U9), by kind, key, place and member.
@@ -567,6 +603,8 @@ pub(super) struct Builder<'b, 'i, 'a> {
     refs: Vec<XamlRef>,
     generic: Vec<GenericMarks>,
     triggers: Vec<MarkupTrigger>,
+    /// The values markup could not take apart, by file.
+    unparsed: BTreeMap<String, u64>,
 }
 
 /// The parameter types a member's key spells (`OnSave(object,EventArgs)`),
@@ -684,18 +722,33 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                     owner,
                 }
             })
-            .collect();
+            .collect::<Vec<MemberMarks>>();
         self.refs.sort();
         self.refs.dedup();
         self.generic.sort_by(|a, b| a.member.cmp(&b.member));
         self.triggers.sort();
         self.triggers.dedup();
+        let mut by_owner: BTreeMap<NodeKey, (Vec<usize>, Vec<usize>)> = BTreeMap::new();
+        for (i, g) in self.generic.iter().enumerate() {
+            by_owner.entry(g.owner.clone()).or_default().0.push(i);
+        }
+        for (i, m) in members.iter().enumerate() {
+            if let Some(owner) = &m.owner {
+                by_owner.entry(owner.clone()).or_default().1.push(i);
+            }
+        }
         DynamicAccess {
             members,
             sites: self.sites,
             refs: self.refs,
             generic: self.generic,
             triggers: self.triggers,
+            unparsed: self
+                .unparsed
+                .into_iter()
+                .map(|(path, count)| UnparsedMarkup { path, count })
+                .collect(),
+            by_owner,
         }
     }
 
@@ -705,10 +758,10 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
     fn generic(&mut self) {
         let ix = self.index();
         // The interfaces each type implements, by the relation the first
-        // layer read.
+        // layer read — gathered into the set of faces below, whose order is
+        // its own, so in no order of the graph's.
         let mut implements: BTreeMap<&NodeKey, Vec<&NodeKey>> = BTreeMap::new();
-        let edges = self.graph.edges_sorted();
-        for e in &edges {
+        for e in self.graph.edges_unordered() {
             if e.edge.kind == EdgeKind::Implements {
                 implements.entry(e.from).or_default().push(e.to);
             }
@@ -810,8 +863,8 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                     let BodyNodeKind::Element(element) = &node.kind else {
                         continue;
                     };
-                    let control = tag_value(&node.tags, "trigger") == Some("control");
-                    if !control && !node.tags.iter().any(|t| t.name == "key-gesture") {
+                    let control = tag_value(&node.tags, TRIGGER) == Some("control");
+                    if !control && !node.tags.iter().any(|t| t.name == KEY_GESTURE) {
                         continue;
                     }
                     let place = Place {
@@ -834,7 +887,7 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                         v
                     };
                     if control {
-                        let key = tag_value(&node.tags, "control-key")
+                        let key = tag_value(&node.tags, CONTROL_KEY)
                             .unwrap_or_else(|| last_type_name(element));
                         let kind = if self.is_menu_item(element) {
                             MarkupTriggerKind::MenuItem
@@ -849,7 +902,7 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                             targets: last(&told),
                         });
                     }
-                    for gesture in tags(&node.tags, "key-gesture") {
+                    for gesture in tags(&node.tags, KEY_GESTURE) {
                         let Some(value) = &gesture.value else {
                             continue;
                         };
@@ -925,6 +978,15 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                 }
                 for s in &body.subscriptions {
                     self.handler(&at, bodies, s);
+                }
+                let unparsed = body
+                    .nodes
+                    .iter()
+                    .flat_map(|n| &n.tags)
+                    .filter(|t| t.name == UNPARSED_MARKUP)
+                    .count() as u64;
+                if unparsed > 0 {
+                    *self.unparsed.entry(path.to_string()).or_default() += unparsed;
                 }
             }
         }

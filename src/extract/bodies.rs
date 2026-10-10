@@ -81,11 +81,13 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 4 cuts key-shaped words out of a quoted
+/// conversion of a model raises it: 5 decides the handler a markup body
+/// subscribes like a literal and filters every subscription's texts (plan 2c,
+/// review), 4 cuts key-shaped words out of a quoted
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 4;
+pub const BODY_REDACTION_VERSION: u32 = 5;
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
 /// rendering (KTD7): it decides what later units show, not what this pass
@@ -1138,10 +1140,18 @@ fn written_names(member: &MemberBody) -> BTreeMap<u32, String> {
 /// a key-shaped word in it, [`without_long_tokens`]). A
 /// withheld literal's value is replaced by the marker ([`withheld`]).
 ///
+/// **Handlers of markup.** A markup body's subscription names its handler
+/// by an attribute's value the plugin took for a method's name, so that name
+/// is decided like a literal of the attribute: by the event's name
+/// ([`named_secret`]) and by its own shape ([`secret_pattern`]) — not by a
+/// key-shaped word in it, which a designer's handler name has. A withheld
+/// name is replaced by the marker, as a literal's value is.
+///
 /// **Every text.** The texts the contract marks "redacted by the host" — a
 /// string literal's value, a condition's text and every `other` node of its
-/// expression, a `nameof`'s text, an attribute's arguments, and the value and
-/// arguments of every tag — lose every withheld literal as written and every
+/// expression, a `nameof`'s text, an attribute's arguments, a subscription's
+/// event, source and handler, and the value and arguments of every tag —
+/// lose every withheld literal as written and every
 /// comment the source names a secret in, and then go through the filter the
 /// first layer gives every text. What is left is names the syntax spells
 /// (paths, types, enum members), which the first layer stores unredacted too.
@@ -1188,6 +1198,33 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
             }
             literal.value = withheld(pattern);
         }
+        // A markup body's handler is an attribute's value the plugin took for
+        // a method's name (XAML does not say which attribute is an event), so
+        // it is decided like a literal of that attribute: by the event's name
+        // and by its own shape. Not by the key-shaped word: a designer's
+        // handler name (`comboBox1_SelectedIndexChanged`) is shaped like one.
+        // A C# handler is a name the syntax spells and goes through the filter
+        // below alone.
+        if member.kind != BodyKind::Markup {
+            continue;
+        }
+        for subscription in &mut member.subscriptions {
+            let Handler::MethodGroup(handler) = &mut subscription.handler else {
+                continue;
+            };
+            let name = handler.segments.join(".");
+            let Some(pattern) = named_secret(&subscription.event, &name)
+                .or_else(|| secret_pattern(&name, prefixes))
+            else {
+                continue;
+            };
+            if !name.is_empty() {
+                spellings.push((format!("\"{name}\""), pattern));
+                spellings.push((format!("'{name}'"), pattern));
+                values.insert(name, pattern);
+            }
+            handler.segments = vec![withheld(pattern)];
+        }
     }
     let filter = Withheld::new(prefixes, spellings, values);
     for member in &mut model.members {
@@ -1207,6 +1244,15 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
         }
         for name_of in &mut member.name_ofs {
             filter.text(&mut name_of.text);
+        }
+        for subscription in &mut member.subscriptions {
+            filter.text(&mut subscription.event);
+            if let Some(source) = &mut subscription.source {
+                source.segments.iter_mut().for_each(|s| filter.text(s));
+            }
+            if let Handler::MethodGroup(handler) = &mut subscription.handler {
+                handler.segments.iter_mut().for_each(|s| filter.text(s));
+            }
         }
         filter.tags(&mut member.tags);
     }
@@ -2036,7 +2082,20 @@ mod tests {
                 accesses: Vec::new(),
                 invocations: Vec::new(),
                 lambdas: Vec::new(),
-                subscriptions: Vec::new(),
+                subscriptions: vec![Subscription {
+                    source: Some(AccessPath {
+                        root: PathRoot::Name,
+                        segments: vec![text.into()],
+                    }),
+                    event: text.into(),
+                    handler: Handler::MethodGroup(AccessPath {
+                        root: PathRoot::Name,
+                        segments: vec![text.into()],
+                    }),
+                    mode: SubscriptionMode::Add,
+                    place: range(),
+                    node: Some(0),
+                }],
                 literals: vec![StringLiteral {
                     id: 0,
                     value: text.into(),
@@ -2074,15 +2133,117 @@ mod tests {
             redact_bodies(&mut model, "src/View.xaml", b"", &prefixes());
             let text = serde_json::to_string(&model).unwrap();
             assert!(!text.contains(secret), "{text}");
-            // Eleven texts: the condition and its `other` node, the value and
-            // the argument of three tags, the literal, the `nameof`, the
-            // attribute's argument.
+            // Fourteen texts: the condition and its `other` node, the value
+            // and the argument of three tags, the literal, the `nameof`, the
+            // attribute's argument, the subscription's event, source and
+            // handler.
             assert_eq!(
                 text.matches(ra_redact::REDACTION_MARKER).count(),
-                11,
+                14,
                 "{text}"
             );
         }
+    }
+
+    /// A subscription of `event` to the method group `handler`, from `source`.
+    fn subscription(source: Option<&str>, event: &str, handler: &str) -> Subscription {
+        Subscription {
+            source: source.map(|s| AccessPath {
+                root: PathRoot::Name,
+                segments: vec![s.into()],
+            }),
+            event: event.into(),
+            handler: Handler::MethodGroup(AccessPath {
+                root: PathRoot::Name,
+                segments: vec![handler.into()],
+            }),
+            mode: SubscriptionMode::Add,
+            place: range(),
+            node: None,
+        }
+    }
+
+    /// One body of `kind` with `subscriptions` and nothing else.
+    fn subscribing(kind: BodyKind, subscriptions: Vec<Subscription>) -> FileBodies {
+        FileBodies {
+            types: Vec::new(),
+            members: vec![MemberBody {
+                name_position: Position { line: 1, column: 1 },
+                kind,
+                root: 0,
+                nodes: Vec::new(),
+                accesses: Vec::new(),
+                invocations: Vec::new(),
+                lambdas: Vec::new(),
+                subscriptions,
+                literals: Vec::new(),
+                name_ofs: Vec::new(),
+                typed_names: Vec::new(),
+                tags: Vec::new(),
+            }],
+            typed_members: Vec::new(),
+            metas: Vec::new(),
+        }
+    }
+
+    fn handler_of(model: &FileBodies, i: usize) -> String {
+        match &model.members[0].subscriptions[i].handler {
+            Handler::MethodGroup(p) => p.segments.join("."),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// Plan 2c review: an attribute value the XAML plugin took for a handler
+    /// (`Token="ghp_…"`, `Password="Admin_Pass2024"`) is withheld like a
+    /// literal of that attribute — by its shape, and by the event's name —
+    /// and so is every other place of the file that spells it; a handler
+    /// named like one stays, a designer's long name and an event that only
+    /// mentions a password (`PasswordChanged`) included.
+    #[test]
+    fn a_markup_handler_is_decided_like_a_literal_of_its_attribute() {
+        let mut model = subscribing(
+            BodyKind::Markup,
+            vec![
+                subscription(Some("box"), "Tag", SECRET),
+                subscription(None, "Password", "Admin_Pass2024"),
+                subscription(None, "Click", "OnSave"),
+                subscription(None, "SelectionChanged", "comboBox1_SelectedIndexChanged"),
+                subscription(None, "PasswordChanged", "OnPasswordChanged"),
+            ],
+        );
+        // Another text of the file that quotes a withheld handler loses it.
+        model.members[0].tags = vec![tag("Login('Admin_Pass2024')")];
+        redact_bodies(&mut model, "src/View.xaml", b"", &prefixes());
+        let text = serde_json::to_string(&model).unwrap();
+        assert!(!text.contains(SECRET), "{text}");
+        assert!(!text.contains("Admin_Pass2024"), "{text}");
+        assert_eq!(handler_of(&model, 0), withheld("provider token"));
+        assert_eq!(handler_of(&model, 1), withheld("password"));
+        assert_eq!(handler_of(&model, 2), "OnSave");
+        assert_eq!(handler_of(&model, 3), "comboBox1_SelectedIndexChanged");
+        assert_eq!(handler_of(&model, 4), "OnPasswordChanged");
+        assert_eq!(model.members[0].subscriptions[0].event, "Tag");
+    }
+
+    /// A C# handler is a method's name the syntax spells: it is no literal,
+    /// so the event's name decides nothing and a designer's name stays —
+    /// the model of a C# file keeps every subscription byte for byte.
+    #[test]
+    fn csharp_handlers_keep_their_method_names() {
+        let subscriptions = vec![
+            subscription(Some("saveButton"), "Click", "OnSave"),
+            subscription(
+                Some("dataGridView1"),
+                "CellValueChanged",
+                "dataGridView1_CellValueChanged",
+            ),
+            subscription(Some("box"), "PasswordChanged", "OnPasswordChanged"),
+            subscription(None, "Token", "Admin_Pass2024"),
+        ];
+        let mut model = subscribing(BodyKind::Method, subscriptions);
+        let before = model.clone();
+        redact_bodies(&mut model, "src/View.cs", b"", &prefixes());
+        assert_eq!(model, before);
     }
 
     /// A text the filter leaves alone stays as the plugin returned it — its

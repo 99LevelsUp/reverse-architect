@@ -2060,19 +2060,21 @@ fn the_second_layer_is_the_same_bytes_across_runs_and_thread_counts() {
 /// Plan 2c, U8 (KTD11, KTD12, R19): with the second layer every analyzed
 /// type's card has `## Dynamic access` on level 1 and on level 3 alike —
 /// after the sections of 2a, before the notes — ending in the state of XAML
-/// coverage, which in a run no plugin of which reads XAML is "not read", as
-/// coverage says; without the second layer no card has it and coverage has
-/// no section of XAML, so those cards stay the bytes the golden snapshots
-/// pin.
+/// coverage, which in a run over a corpus with no XAML file is "not read", as
+/// coverage says — and the sentence says why in words true of that corpus
+/// (no XAML file) as of a run no plugin of which reads XAML; without the
+/// second layer no card has it and coverage has no section of XAML, so those
+/// cards stay the bytes the golden snapshots pin.
 #[test]
 fn the_second_layer_puts_dynamic_access_on_every_level_and_nothing_without_it() {
     use reverse_architect::coverage::MarkupState;
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     init_repo_with_files(&repo, "Alice", &[("src/Editor.cs", EDITOR_LAYERED_CS)]);
-    let not_read = "XAML was not read in this run — no plugin of the run reads it — so a member \
-                    without a marker from markup may still be bound, commanded or handled from \
-                    XAML (coverage.json, `markup`).";
+    let not_read = "XAML was not read in this run — the corpus holds no XAML file, or no plugin \
+                    of the run reads it (coverage.json, `markup`: `files`, `plugins`) — so a \
+                    member without a marker from markup may still be bound, commanded or handled \
+                    from XAML.";
     for level in [1u8, 3] {
         let run = layered_with_threads(&repo, &tmp.path().join(format!("out-{level}")), level, 1);
         let analyzed: Vec<&str> = run

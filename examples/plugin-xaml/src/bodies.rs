@@ -79,6 +79,12 @@
 //! `xmlns` declarations, attributes of the XAML language namespace (`x:Key`,
 //! `x:Name`…) and a value taken for an event handler. The host redacts every
 //! text; this pass filters nothing for secrets.
+//!
+//! **Unparsed markup.** A value written as a markup extension (it opens with
+//! `{`, not with the `{}` escape) that the parser cannot take apart
+//! (`Text="{Binding Title"`) gives no access and no literal; its element
+//! carries `unparsed-markup` with the attribute's name as the value, so the
+//! loss is said rather than silent.
 
 use crate::declare::{local_name, resource, resource_ref, view_class, STYLE, TEMPLATE};
 use crate::parse::{markup, parse, split_prefix, ArgValue, Doc, Element, Error, Markup};
@@ -100,7 +106,14 @@ pub const EMITS: &[&str] = &[
     "trigger",
     "control-key",
     "key-gesture",
+    UNPARSED_MARKUP,
 ];
+
+/// The tag on an element with a value written as a markup extension that
+/// this pass could not take apart (`Text="{Binding Title"`); its value is the
+/// attribute's name. What the extension would have said is lost, so a host
+/// that sees it knows the file was not read in full.
+pub const UNPARSED_MARKUP: &str = "unparsed-markup";
 
 /// How an attribute name ends when it names an event (`Click`,
 /// `SelectionChanged`, `PreviewKeyDown`, `Loaded`).
@@ -266,6 +279,14 @@ fn unescaped(raw: &str) -> String {
     quick_xml::escape::unescape(raw)
         .unwrap_or(Cow::Borrowed(raw))
         .into_owned()
+}
+
+/// Whether an attribute value is written as a markup extension — it opens
+/// with `{`, and not with the `{}` escape — that [`markup`] could not take
+/// apart (`{Binding Title`): it is called only for a value `markup` refused.
+fn is_unparsed_markup(raw: &str) -> bool {
+    let value = raw.trim_start();
+    value.starts_with('{') && !value.starts_with("{}")
 }
 
 /// Whether an attribute value is a literal worth reporting: not a markup
@@ -747,6 +768,12 @@ impl<'a> Body<'_, 'a> {
                     self.attached(index, node, name, attr.name.start, ValueRef::Other);
                 }
                 continue;
+            }
+            if is_unparsed_markup(raw) {
+                push_tag(
+                    &mut self.nodes[node as usize].tags,
+                    tag(UNPARSED_MARKUP, Some(local.to_string()), Vec::new()),
+                );
             }
             let value = raw.trim();
             if self.is_handler(index, local, value) {

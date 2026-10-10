@@ -132,6 +132,7 @@ pub fn generate_reporting(
         options: extract_options,
         registry,
         bodies,
+        corpus_extensions,
     } = build_graph(config, progress)?;
     // The one profile flows into BOTH projections, so the corpus and the manifest
     // always agree on the selected view set (KTD-C5).
@@ -229,24 +230,13 @@ pub fn generate_reporting(
     // layer, before any card renders — the analyzed types' `## Dynamic
     // access` and the XAML documents end in it; coverage carries it.
     //
-    // A plugin counts only when the corpus holds a file it claims: with no
-    // XAML file in the corpus, the run is what it was without the plugin.
-    let file_extensions: std::collections::BTreeSet<&str> = graph
-        .nodes_sorted()
-        .iter()
-        .filter(|n| n.kind == graph::NodeKind::File)
-        .filter_map(|n| n.key.as_str().rsplit_once('.').map(|(_, ext)| ext))
-        .collect();
-    // The run's plugins that have a file of the corpus to read, by id.
+    // A plugin counts only when the corpus holds a file it claims — the same
+    // test that decides whether it declares its kinds: with no XAML file in
+    // the corpus, the run is what it was without the plugin.
     let present: std::collections::BTreeSet<String> = extract_options
         .plugins
         .iter()
-        .filter(|p| {
-            p.manifest()
-                .extensions()
-                .iter()
-                .any(|e| file_extensions.contains(e))
-        })
+        .filter(|p| p.claims_any(&corpus_extensions))
         .map(|p| p.id().to_string())
         .collect();
     let markup_plugins: Vec<String> = extract_options
@@ -267,6 +257,7 @@ pub fn generate_reporting(
         &markup_plugins,
         bodies.as_ref(),
         analysis.as_ref().map(|a| a.dynamic.site_counts()),
+        analysis.as_ref().map_or(&[][..], |a| a.dynamic.unparsed()),
     );
     if let (Some(analysis), Some(markup)) = (&mut analysis, &markup) {
         analysis.set_markup_state(markup.state);
@@ -476,6 +467,11 @@ pub struct Built {
     pub registry: extract::Registry,
     /// The second layer, for a run with `--detail-level` (plan 2a, U4).
     pub bodies: Option<extract::bodies::BodyLayer>,
+    /// The text after the last dot of every tracked path, read once: whether
+    /// the corpus holds a file a plugin claims
+    /// ([`plugin::Plugin::claims_any`]) decides whether the plugin declares
+    /// its kinds and whether it counts for XAML coverage.
+    pub corpus_extensions: std::collections::BTreeSet<String>,
 }
 
 /// Open the repository and build its merged fact graph from `config`: the
@@ -607,5 +603,6 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
         options: extract_options,
         registry,
         bodies,
+        corpus_extensions,
     })
 }

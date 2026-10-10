@@ -74,8 +74,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// since no other artifact changes by a byte. And from plan 2c, U8 (KTD12):
 /// `markup`, the state of XAML coverage for the whole run — not read, read
 /// with unsupported constructs, read in full, or the second layer off — with
-/// the files XAML failed on, the components that read no bodies and the
-/// markup places the second layer could not pair. Present only when a plugin
+/// the files XAML failed on, the components that read no bodies, the files
+/// with a markup extension the plugin could not take apart (`unparsed`,
+/// written only when there is one) and the markup places the second layer
+/// could not pair. Present only when a plugin
 /// of the run claims XAML or the run has the second layer, so every artifact
 /// of a run with neither is byte for byte what it was; for that reason, and
 /// because a declaring corpus is already one version up, no bump either.
@@ -254,8 +256,9 @@ pub enum MarkupState {
     /// The run has the second layer and no plugin reads XAML: a member
     /// without a marker may still be bound from XAML.
     NotRead,
-    /// XAML was read, but a file failed or a component claiming XAML read no
-    /// bodies (contract 0.2): a missing marker proves nothing either.
+    /// XAML was read, but a file failed, a component claiming XAML read no
+    /// bodies (contract 0.2) or a value written as a markup extension could
+    /// not be taken apart: a missing marker proves nothing either.
     ReadWithUnsupportedConstructs,
     /// Every XAML file was read in both layers: a missing marker is evidence
     /// that no way from XAML exists.
@@ -274,6 +277,16 @@ pub struct FailedMarkup {
     pub pass: String,
     /// Redacted, as the plugin's every text.
     pub reason: String,
+}
+
+/// A XAML file with values written as markup extensions its plugin could not
+/// take apart (`Text="{Binding Title"`, the tag `unparsed-markup`): the file
+/// was read, but what those values say was lost (plan 2c, R19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnparsedMarkup {
+    pub path: String,
+    /// How many such values the file has.
+    pub count: u64,
 }
 
 /// The markup places the second layer read, by how they ended (plan 2c,
@@ -303,44 +316,56 @@ pub struct Markup {
     /// second layer — a component on contract 0.2 serves no `bodies` pass.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub without_bodies: Vec<String>,
+    /// The XAML files whose bodies hold a markup extension the plugin could
+    /// not take apart, by path; only in a run with the second layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unparsed: Vec<UnparsedMarkup>,
     /// The markup places of the second layer, by outcome; absent without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sites: Option<MarkupSites>,
 }
 
-/// The state the facts of a run give (R19): only a failed file and a
-/// component that served no bodies lower it — never a known limit.
+/// The state the facts of a run give (R19): only a failed file, a component
+/// that served no bodies and a markup extension the plugin could not take
+/// apart lower it — never a known limit.
 pub fn markup_state(
     second_layer: bool,
     claimed: bool,
     failed: bool,
     without_bodies: bool,
+    unparsed: bool,
 ) -> MarkupState {
     match (second_layer, claimed) {
         (false, _) => MarkupState::SecondLayerOff,
         (true, false) => MarkupState::NotRead,
-        (true, true) if failed || without_bodies => MarkupState::ReadWithUnsupportedConstructs,
+        (true, true) if failed || without_bodies || unparsed => {
+            MarkupState::ReadWithUnsupportedConstructs
+        }
         (true, true) => MarkupState::ReadInFull,
     }
 }
 
 /// The XAML section of coverage (plan 2c, U8): `plugins` are the ids of the
 /// run's plugins that claim XAML, `bodies` the second layer when the run has
-/// one, `sites` how the second layer's markup places ended. `None` for a run
-/// with neither a plugin for XAML nor the second layer.
+/// one, `sites` how the second layer's markup places ended and `unparsed` the
+/// files with a markup extension the plugin could not take apart (both read
+/// only with the second layer). `None` for a run with neither a plugin for
+/// XAML nor the second layer.
 pub fn markup(
     graph: &Graph,
     languages: &Languages,
     plugins: &[String],
     bodies: Option<&crate::extract::bodies::BodyLayer>,
     sites: Option<MarkupSites>,
+    unparsed: &[UnparsedMarkup],
 ) -> Option<Markup> {
     if plugins.is_empty() && bodies.is_none() {
         return None;
     }
     let mut files = 0;
     let mut failed: Vec<FailedMarkup> = Vec::new();
-    for node in graph.nodes_sorted() {
+    // Counted, and the failed files sorted below: no order of the graph's.
+    for node in graph.nodes_unordered() {
         if node.kind != NodeKind::File {
             continue;
         }
@@ -389,18 +414,28 @@ pub fn markup(
             .cloned()
             .collect();
     }
-    failed.sort_by(|a, b| (&a.path, &a.pass).cmp(&(&b.path, &b.pass)));
+    failed.sort_by(|a, b| {
+        (&a.path, &a.pass, &a.plugin, &a.reason).cmp(&(&b.path, &b.pass, &b.plugin, &b.reason))
+    });
+    let mut unparsed: Vec<UnparsedMarkup> = if bodies.is_some() {
+        unparsed.to_vec()
+    } else {
+        Vec::new()
+    };
+    unparsed.sort_by(|a, b| a.path.cmp(&b.path));
     Some(Markup {
         state: markup_state(
             bodies.is_some(),
             !plugins.is_empty(),
             !failed.is_empty(),
             !without_bodies.is_empty(),
+            !unparsed.is_empty(),
         ),
         plugins: plugins.to_vec(),
         files,
         failed,
         without_bodies,
+        unparsed,
         sites: bodies.and(sites),
     })
 }
@@ -1525,20 +1560,28 @@ mod tests {
     /// contract 0.2 — lowers a run with the second layer to "read with
     /// unsupported constructs" even when no file failed; this repository has
     /// no XAML component on 0.2 to run (`plugins/prebuilt/xaml.wasm` was built
-    /// on 0.3), so the case is the one the facts of such a run give.
+    /// on 0.3), so the case is the one the facts of such a run give. A
+    /// markup extension the plugin could not take apart lowers it too.
     #[test]
-    fn only_a_failed_file_or_a_component_without_bodies_lowers_the_state() {
+    fn only_a_failed_file_a_component_without_bodies_or_unparsed_markup_lowers_the_state() {
         use MarkupState::*;
-        assert_eq!(markup_state(false, true, true, true), SecondLayerOff);
-        assert_eq!(markup_state(false, false, false, false), SecondLayerOff);
-        assert_eq!(markup_state(true, false, false, false), NotRead);
-        assert_eq!(markup_state(true, true, false, false), ReadInFull);
+        assert_eq!(markup_state(false, true, true, true, true), SecondLayerOff);
         assert_eq!(
-            markup_state(true, true, true, false),
+            markup_state(false, false, false, false, false),
+            SecondLayerOff
+        );
+        assert_eq!(markup_state(true, false, false, false, false), NotRead);
+        assert_eq!(markup_state(true, true, false, false, false), ReadInFull);
+        assert_eq!(
+            markup_state(true, true, true, false, false),
             ReadWithUnsupportedConstructs
         );
         assert_eq!(
-            markup_state(true, true, false, true),
+            markup_state(true, true, false, true, false),
+            ReadWithUnsupportedConstructs
+        );
+        assert_eq!(
+            markup_state(true, true, false, false, true),
             ReadWithUnsupportedConstructs
         );
         let words: Vec<String> = [
@@ -1574,10 +1617,16 @@ mod tests {
     fn the_section_is_absent_without_xaml_and_the_second_layer() {
         let graph = Graph::new();
         let languages = Languages::bundled();
-        assert_eq!(markup(&graph, &languages, &[], None, None), None);
-        let off = markup(&graph, &languages, &["xaml".into()], None, None).unwrap();
+        assert_eq!(markup(&graph, &languages, &[], None, None, &[]), None);
+        let unparsed = [UnparsedMarkup {
+            path: "a.xaml".into(),
+            count: 1,
+        }];
+        let off = markup(&graph, &languages, &["xaml".into()], None, None, &unparsed).unwrap();
         assert_eq!(off.state, MarkupState::SecondLayerOff);
         assert_eq!(off.sites, None);
+        // Read only with the second layer, like the markup places.
+        assert!(off.unparsed.is_empty());
     }
 
     #[test]
