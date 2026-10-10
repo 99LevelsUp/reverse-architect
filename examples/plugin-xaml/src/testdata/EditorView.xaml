@@ -1,0 +1,16 @@
+<UserControl x:Class="Acme.Views.EditorView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Acme.Views">
+  <UserControl.Resources>
+    <Style x:Key="K" TargetType="TextBlock" />
+  </UserControl.Resources>
+  <Grid>
+    <Grid.Resources>
+      <Style x:Key="K" TargetType="TextBlock" />
+    </Grid.Resources>
+    <TextBox x:Name="TitleBox" Text="{Binding Title, Mode=TwoWay}" />
+    <local:ViewA x:Name="Preview" />
+    <Button Command="{Binding SaveCommand}" Click="OnSave" />
+  </Grid>
+</UserControl>
