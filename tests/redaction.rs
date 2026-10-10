@@ -297,6 +297,71 @@ fn a_body_keeps_its_plain_literals_and_withholds_its_secrets_in_the_record() {
     }
 }
 
+/// A key-shaped word in the comment after a call argument — the label of a
+/// menu item — is cut the way the first layer cuts it in any comment
+/// (`long token`): the quote is withheld whole, in the record of the body,
+/// on the card and in the manifest.
+#[test]
+fn a_long_token_in_a_label_comment_is_withheld_in_the_record_and_on_the_card() {
+    const TOKEN: &str = "9f2b8c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c";
+    let view = format!(
+        "namespace Acme.Menus\n\
+{{\n\
+\x20   public class MenuView\n\
+\x20   {{\n\
+\x20       private ContextMenu menu;\n\
+\x20       public string GetResourceString(string key) {{ return key; }}\n\
+\x20       void BuildMenu()\n\
+\x20       {{\n\
+\x20           ContextMenuItem f4 = new ContextMenuItem();\n\
+\x20           f4.Header = GetResourceString(\"k\") /* {TOKEN} */;\n\
+\x20           f4.Command = CheckCommand;\n\
+\x20           menu.Items.Add(f4);\n\
+\x20       }}\n\
+\x20       public RelayCommand CheckCommand => new RelayCommand(p => Check());\n\
+\x20       public void Check() {{ }}\n\
+\x20   }}\n\
+}}\n"
+    );
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(repo.path(), "Alice", &[("src/Menus.cs", &view)]);
+    let config = Config {
+        detail_level: Some(2),
+        ..config_for(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let artifacts = artifacts_of(&generated, out.path());
+    for (label, contents) in &artifacts {
+        assert!(
+            !contents.contains(TOKEN),
+            "the token is in {label}: {contents}"
+        );
+    }
+    let record = artifacts
+        .iter()
+        .find(|(label, contents)| {
+            label.starts_with("record ") && contents.contains("\"path\":\"src/Menus.cs\"")
+        })
+        .map(|(_, contents)| contents)
+        .unwrap_or_else(|| panic!("a record of the menu file"));
+    assert!(
+        record.contains("[redacted: long token"),
+        "the quote is withheld, not dropped: {record}"
+    );
+    let card = generated
+        .cards
+        .iter()
+        .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("\n# MenuView\n"))
+        .unwrap_or_else(|| panic!("the card of MenuView"));
+    let item = card
+        .contents
+        .lines()
+        .find(|l| l.starts_with("- Menu item `f4`"))
+        .unwrap_or_else(|| panic!("no menu item f4:\n{}", card.contents));
+    assert!(item.contains("[redacted: long token"), "{item}");
+}
+
 /// The card of the type `Gate` of the bodies fixture, from a run at `level`
 /// in `lang`, and every artifact and record of that run.
 fn gate_run(level: u8, lang: &str) -> (String, Vec<(String, String)>) {

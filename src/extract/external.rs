@@ -3173,7 +3173,7 @@ pub(crate) fn is_long_token(word: &str) -> bool {
 /// key line written as `"MIIE…\n"` carries `\` and `n` in its source text,
 /// and no key alphabet holds a backslash — and trimmed of the punctuation
 /// around it, as a comment's word is.
-fn without_long_tokens(text: &str) -> (std::borrow::Cow<'_, str>, bool) {
+pub(crate) fn without_long_tokens(text: &str) -> (std::borrow::Cow<'_, str>, bool) {
     use std::borrow::Cow;
     let trimmed = text.trim();
     // One word — most literals — is tested whole, with no split and no copy.

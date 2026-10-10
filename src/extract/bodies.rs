@@ -59,8 +59,8 @@
 
 use super::cache::CacheStore;
 use super::external::{
-    comments_after_literals, named_secret, redact_secret_block, secret_pattern, SecretPrefixes,
-    SourceSecrets, REDACTION_MARKER,
+    comments_after_literals, named_secret, redact_secret_block, secret_pattern,
+    without_long_tokens, SecretPrefixes, SourceSecrets, REDACTION_MARKER,
 };
 use super::resolve::table::NamePositions;
 use super::treesitter::{Lease, PathKeys, Pool};
@@ -81,10 +81,11 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 3 adds the comments after call arguments
-/// ([`quote_comments`], U7), 2 is the literal-aware filter (U8, KTD16), 1 the
-/// first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 3;
+/// conversion of a model raises it: 4 cuts key-shaped words out of a quoted
+/// comment and out of a literal no lexed one pairs with, 3 adds the comments
+/// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
+/// filter (U8, KTD16), 1 the first layer's filter alone.
+pub const BODY_REDACTION_VERSION: u32 = 4;
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
 /// rendering (KTD7): it decides what later units show, not what this pass
@@ -1133,7 +1134,8 @@ fn written_names(member: &MemberBody) -> BTreeMap<u32, String> {
 /// for a file the host has no lexer for (a `.xaml`), or a literal no lexed
 /// one pairs with — the record names the value: the attribute's argument it
 /// is, the path it is compared with or written to, the parameter a named
-/// argument passes it to; and so does its own shape ([`secret_pattern`]). A
+/// argument passes it to; and so does its own shape ([`secret_pattern`], and
+/// a key-shaped word in it, [`without_long_tokens`]). A
 /// withheld literal's value is replaced by the marker ([`withheld`]).
 ///
 /// **Every text.** The texts the contract marks "redacted by the host" — a
@@ -1169,6 +1171,7 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
                             .and_then(|name| named_secret(name, value))
                     })
                     .or_else(|| secret_pattern(value, prefixes))
+                    .or_else(|| without_long_tokens(value).1.then_some("long token"))
             });
             let Some(pattern) = pattern else {
                 continue;
@@ -1228,7 +1231,9 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
 /// [`redact_bodies`] pairs the lexer's literals: the one whose content starts
 /// inside the model literal's place. A literal already withheld gets none,
 /// and every text goes through [`redact_secret_block`] with the run's
-/// prefixes. A file the host has no lexer for gets none.
+/// prefixes; a text that still holds a key-shaped word
+/// ([`without_long_tokens`]) is withheld whole, as `long token`. A file the
+/// host has no lexer for gets none.
 ///
 /// What this adds to a stored model is part of [`BODY_REDACTION_VERSION`].
 pub fn quote_comments(
@@ -1259,8 +1264,15 @@ pub fn quote_comments(
             let Some(comment) = comments.get(first).filter(|c| c.literal <= end) else {
                 continue;
             };
+            // The cut the first layer makes in a comment (`SourceSecrets`):
+            // a key-shaped word withholds the whole quote, which no reader
+            // could tell from a label once part of it is gone.
+            let (mut text, _) = redact_secret_block(&comment.text, prefixes);
+            if without_long_tokens(&text).1 {
+                text = withheld("long token");
+            }
             literal.comment = Some(LiteralComment {
-                text: redact_secret_block(&comment.text, prefixes).0,
+                text,
                 place: Range {
                     start: comment.start.into(),
                     end: comment.end.into(),
