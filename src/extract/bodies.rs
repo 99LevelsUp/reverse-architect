@@ -16,9 +16,11 @@
 //!    the run's plugin set so it is in no cache fingerprint ([`BodyPass`]).
 //! 2. **Reads** the file through the plugin's sandbox, one session per worker
 //!    from the same pool the first layer uses.
-//! 3. **Redacts** every text of the model against the run's secret prefixes
-//!    ([`redact_bodies`]) — before anything else sees it, so no unredacted
-//!    text reaches the cache or an output (KTD16; U8 refines the filter).
+//! 3. **Redacts** every text of the model ([`redact_bodies`]): the first
+//!    layer's decisions about the file's literals, carried to the model's
+//!    literals by place, and the run's secret prefixes over every text —
+//!    before anything else sees it, so no unredacted text reaches the cache
+//!    or an output (KTD16).
 //! 4. **Stores** the redacted model per file in its own cache phase,
 //!    [`PHASE_BODIES`] (KTD8). Each record is tagged with the digest of the
 //!    component that made it and with [`BODY_REDACTION_VERSION`]
@@ -54,7 +56,10 @@
 //! ([`crate::plugin::host`]) are converted at the boundary and go no further.
 
 use super::cache::CacheStore;
-use super::external::{redact_secret_block, SecretPrefixes};
+use super::external::{
+    named_secret, redact_secret_block, secret_pattern, SecretPrefixes, SourceSecrets,
+    REDACTION_MARKER,
+};
 use super::resolve::table::NamePositions;
 use super::treesitter::{Lease, PathKeys, Pool};
 use super::walk::{walk_files, WalkOutput};
@@ -73,9 +78,10 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// The version of what the host does to a model before it stores it — today
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
-/// nothing of the first layer. U8 (the literal-aware filter, KTD16) raises
-/// it; any change to the redaction or to the conversion of a model does.
-pub const BODY_REDACTION_VERSION: u32 = 1;
+/// nothing of the first layer. Any change to the redaction or to the
+/// conversion of a model raises it: 2 is the literal-aware filter (U8,
+/// KTD16), 1 the first layer's filter alone.
+pub const BODY_REDACTION_VERSION: u32 = 2;
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
 /// rendering (KTD7): it decides what later units show, not what this pass
@@ -974,74 +980,221 @@ impl From<w::FileBodies> for FileBodies {
 
 // ---- Redaction ----
 
-/// Redact one text in place. A text the filter leaves alone stays byte for
-/// byte as the plugin returned it: the filter rebuilds its output line by
-/// line, and a text it did not touch must not lose a trailing newline to that.
-fn redact(text: &mut String, prefixes: &SecretPrefixes) {
-    let (redacted, changed) = redact_secret_block(text, prefixes);
-    if changed {
-        *text = redacted;
+/// What a withheld value is replaced by: the marker the first layer leaves
+/// (`[redacted: password — see the source anchor]`), which names the shape
+/// and sends a reader to the source. It holds nothing a Mermaid label
+/// escapes (`crate::render::mermaid::escape_label`), so a card that quotes
+/// it in a diagram shows it as it is.
+pub(crate) fn withheld(pattern: &str) -> String {
+    format!("{REDACTION_MARKER}{pattern} — see the source anchor]")
+}
+
+/// What one file's model withholds: the spellings to replace inside any
+/// text, longest first, and the values a text that is nothing else is
+/// replaced for whole.
+struct Withheld<'p> {
+    prefixes: &'p SecretPrefixes,
+    spellings: Vec<(String, &'static str)>,
+    values: BTreeMap<String, &'static str>,
+}
+
+impl<'p> Withheld<'p> {
+    /// `spellings` as they are written and with their whitespace collapsed,
+    /// as the plugin collapses a text it quotes; longest first, so a
+    /// spelling inside another is never replaced before it.
+    fn new(
+        prefixes: &'p SecretPrefixes,
+        spellings: Vec<(String, &'static str)>,
+        values: BTreeMap<String, &'static str>,
+    ) -> Withheld<'p> {
+        let mut all: Vec<(String, &'static str)> = Vec::new();
+        for (spelling, pattern) in spellings {
+            let collapsed = spelling.split_whitespace().collect::<Vec<_>>().join(" ");
+            if collapsed != spelling && !collapsed.is_empty() {
+                all.push((collapsed, pattern));
+            }
+            if !spelling.trim().is_empty() {
+                all.push((spelling, pattern));
+            }
+        }
+        all.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.cmp(b)));
+        all.dedup_by(|a, b| a.0 == b.0);
+        Withheld {
+            prefixes,
+            spellings: all,
+            values,
+        }
+    }
+
+    /// Redact one text in place: every withheld spelling in it, the text
+    /// whole when it is a withheld value or its whole shape is a secret's
+    /// ([`secret_pattern`]), and otherwise every line of it a secret's shape
+    /// is on ([`redact_secret_block`]). A text the filter leaves alone stays
+    /// byte for byte as the plugin returned it — a trailing newline too.
+    fn text(&self, text: &mut String) {
+        for (spelling, pattern) in &self.spellings {
+            if text.contains(spelling.as_str()) {
+                *text = text.replace(spelling.as_str(), &withheld(pattern));
+            }
+        }
+        if let Some(pattern) = self
+            .values
+            .get(text.as_str())
+            .copied()
+            .or_else(|| secret_pattern(text, self.prefixes))
+        {
+            *text = withheld(pattern);
+            return;
+        }
+        let (redacted, changed) = redact_secret_block(text, self.prefixes);
+        if changed {
+            *text = redacted;
+        }
+    }
+
+    fn tags(&self, tags: &mut [Tag]) {
+        for tag in tags {
+            if let Some(value) = &mut tag.value {
+                self.text(value);
+            }
+            for arg in &mut tag.args {
+                self.text(arg);
+            }
+        }
     }
 }
 
-fn redact_tags(tags: &mut [Tag], prefixes: &SecretPrefixes) {
-    for tag in tags {
-        if let Some(value) = &mut tag.value {
-            redact(value, prefixes);
-        }
-        for arg in &mut tag.args {
-            redact(arg, prefixes);
-        }
+/// The pattern a literal is withheld under by the name its own record gives
+/// it: the attribute's parameter or the attribute it is an argument of, the
+/// path it is compared with or assigned to (KTD16 rule 5).
+fn context_secret(context: &LiteralContext, value: &str) -> Option<&'static str> {
+    let path = |p: &AccessPath| p.segments.join(".");
+    match context {
+        LiteralContext::AttributeArg(attribute, _, param) => param
+            .as_deref()
+            .and_then(|param| named_secret(param, value))
+            .or_else(|| named_secret(attribute, value)),
+        LiteralContext::Compared(p) | LiteralContext::Assigned(p) => named_secret(&path(p), value),
+        LiteralContext::CallArg(..) | LiteralContext::Returned | LiteralContext::Other => None,
     }
 }
 
-fn redact_condition(condition: &mut Condition, prefixes: &SecretPrefixes) {
-    redact(&mut condition.text, prefixes);
-    for expr in &mut condition.expr {
-        if let Expr::Other(text) = expr {
-            redact(text, prefixes);
+/// The literals of `member` a write or a named argument gives a name, by
+/// literal id: the target of a write whose value is the literal, the
+/// parameter a named argument passes it to.
+fn written_names(member: &MemberBody) -> BTreeMap<u32, String> {
+    let mut names = BTreeMap::new();
+    for access in &member.accesses {
+        if let (AccessMode::Write, Some(ValueRef::Literal(id))) = (access.mode, &access.rhs) {
+            names.insert(*id, access.target.segments.join("."));
         }
     }
+    for invocation in &member.invocations {
+        for arg in &invocation.args {
+            if let (Some(name), ValueRef::Literal(id)) = (&arg.name, &arg.value) {
+                names.insert(*id, name.clone());
+            }
+        }
+    }
+    names
 }
 
-/// Every text of a model, redacted against the run's secret prefixes — the
-/// one place a model is redacted, between the `bodies` call and everything
-/// that stores or reads it (KTD16; contract 0.3 hands the plugin no
-/// configuration for this pass, so the host filters for it).
+/// Every text of a model, redacted — the one place a model is redacted,
+/// between the `bodies` call and everything that stores or reads it (KTD16;
+/// contract 0.3 hands the plugin no configuration for this pass, so the host
+/// filters for it). `path` and `source` are the file the model was read
+/// from.
 ///
-/// The texts are the ones the contract marks "redacted by the host": a string
-/// literal's value, a condition's text and every `other` node of its
+/// **Literals, by place.** For a file the host has a lexer for, the
+/// decisions the first layer makes about its literals are read from the
+/// source ([`SourceSecrets`]) and carried to the model's literals by where
+/// they are written: a model literal's place starts at its opening token,
+/// the lexer's literal at its content, so a model literal takes the lexer's
+/// literal whose content starts inside its place. Beside that — and alone,
+/// for a file the host has no lexer for (a `.xaml`), or a literal no lexed
+/// one pairs with — the record names the value: the attribute's argument it
+/// is, the path it is compared with or written to, the parameter a named
+/// argument passes it to; and so does its own shape ([`secret_pattern`]). A
+/// withheld literal's value is replaced by the marker ([`withheld`]).
+///
+/// **Every text.** The texts the contract marks "redacted by the host" — a
+/// string literal's value, a condition's text and every `other` node of its
 /// expression, a `nameof`'s text, an attribute's arguments, and the value and
-/// arguments of every tag — on a node, on a body, on a declaration. What is
-/// left is names the syntax spells (paths, types, enum members), which the
-/// first layer stores unredacted too.
+/// arguments of every tag — lose every withheld literal as written and every
+/// comment the source names a secret in, and then go through the filter the
+/// first layer gives every text. What is left is names the syntax spells
+/// (paths, types, enum members), which the first layer stores unredacted too.
 ///
-/// Today's filter is [`redact_secret_block`], the one the first layer applies
-/// to every text a plugin returns; U8 replaces it with one aware of literals,
-/// and raises [`BODY_REDACTION_VERSION`].
-pub fn redact_bodies(model: &mut FileBodies, prefixes: &SecretPrefixes) {
+/// Every change here raises [`BODY_REDACTION_VERSION`].
+pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes: &SecretPrefixes) {
+    let secrets = std::str::from_utf8(source)
+        .ok()
+        .and_then(|src| SourceSecrets::read(path, src, prefixes));
+    let mut spellings: Vec<(String, &'static str)> = secrets
+        .as_ref()
+        .map(|s| s.spellings().to_vec())
+        .unwrap_or_default();
+    let mut values: BTreeMap<String, &'static str> = BTreeMap::new();
+    for member in &mut model.members {
+        let names = written_names(member);
+        for literal in &mut member.literals {
+            let lexed = secrets
+                .as_ref()
+                .and_then(|s| s.literal(literal.place.start.into(), literal.place.end.into()));
+            let value = &literal.value;
+            let pattern = lexed.and_then(|(pattern, _)| pattern).or_else(|| {
+                context_secret(&literal.context, value)
+                    .or_else(|| {
+                        names
+                            .get(&literal.id)
+                            .and_then(|name| named_secret(name, value))
+                    })
+                    .or_else(|| secret_pattern(value, prefixes))
+            });
+            let Some(pattern) = pattern else {
+                continue;
+            };
+            if !value.is_empty() {
+                match lexed {
+                    Some((_, spelling)) => spellings.push((spelling.to_string(), pattern)),
+                    None => {
+                        spellings.push((format!("\"{value}\""), pattern));
+                        spellings.push((format!("'{value}'"), pattern));
+                    }
+                }
+                values.insert(value.clone(), pattern);
+            }
+            literal.value = withheld(pattern);
+        }
+    }
+    let filter = Withheld::new(prefixes, spellings, values);
     for member in &mut model.members {
         for node in &mut member.nodes {
             if let Some(condition) = &mut node.condition {
-                redact_condition(condition, prefixes);
+                filter.text(&mut condition.text);
+                for expr in &mut condition.expr {
+                    if let Expr::Other(text) = expr {
+                        filter.text(text);
+                    }
+                }
             }
-            redact_tags(&mut node.tags, prefixes);
+            filter.tags(&mut node.tags);
         }
         for literal in &mut member.literals {
-            redact(&mut literal.value, prefixes);
+            filter.text(&mut literal.value);
         }
         for name_of in &mut member.name_ofs {
-            redact(&mut name_of.text, prefixes);
+            filter.text(&mut name_of.text);
         }
-        redact_tags(&mut member.tags, prefixes);
+        filter.tags(&mut member.tags);
     }
     for meta in &mut model.metas {
         for attribute in &mut meta.attributes {
             for arg in &mut attribute.args {
-                redact(arg, prefixes);
+                filter.text(arg);
             }
         }
-        redact_tags(&mut meta.tags, prefixes);
+        filter.tags(&mut meta.tags);
     }
 }
 
@@ -1192,7 +1345,7 @@ fn read_file(
     match session.bodies(path, source) {
         Ok(file) => {
             let mut model = FileBodies::from(file);
-            redact_bodies(&mut model, prefixes);
+            redact_bodies(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
                 path: path.to_string(),
                 plugin: plugin.id().to_string(),
@@ -1832,7 +1985,7 @@ mod tests {
     fn every_text_the_contract_names_is_redacted() {
         for secret in [SECRET, "acme_Zx81Lq0Wv3Nd5Rt7Yp2"] {
             let mut model = model_with(secret);
-            redact_bodies(&mut model, &prefixes());
+            redact_bodies(&mut model, "src/View.xaml", b"", &prefixes());
             let text = serde_json::to_string(&model).unwrap();
             assert!(!text.contains(secret), "{text}");
             // Eleven texts: the condition and its `other` node, the value and
@@ -1852,7 +2005,7 @@ mod tests {
     fn a_text_without_a_secret_is_kept_byte_for_byte() {
         let mut model = model_with("line one\nline two\n");
         let before = model.clone();
-        redact_bodies(&mut model, &prefixes());
+        redact_bodies(&mut model, "src/View.xaml", b"", &prefixes());
         assert_eq!(model, before);
     }
 
@@ -2091,5 +2244,138 @@ mod tests {
         );
         assert!(layer.unpaired().is_empty());
         assert_eq!(layer.layer_of(&NodeKey::new("sym:none")), SecondLayer::None);
+    }
+
+    // ---- The literal-aware filter (U8, KTD16) ----
+
+    /// The stored form of the model the run read from `path` of `files`.
+    fn stored(files: &[(&str, &str)], path: &str) -> String {
+        let (_, layer) = layers(files, &|_| None);
+        let file = layer
+            .file(path)
+            .unwrap_or_else(|| panic!("{path} was read"));
+        serde_json::to_string(&*file.model).unwrap()
+    }
+
+    /// Secrets a name gives the literal on either side of `==` and `!=`, and
+    /// the field it initializes; and a key-shaped literal only the lexer
+    /// withholds, behind more characters of two bytes on its line than it is
+    /// long, with a plain literal after it — a column counted in bytes would
+    /// pair the one with nothing and the other with the key.
+    const NAMED: &str = "namespace Acme.Views\n{\n    public class EditorView\n    {\n        private const string SmtpPassword = \"saltmarshowl\";\n        public bool Check(string token, string žeton, string errorToken)\n        {\n            if (žeton == \"plain\" || token == \"brindlecairn\") { return true; }\n            if (\"cobaltfennel\" != token) { return false; }\n            if (token != \"duskmallow\") { return false; }\n            if (errorToken == \"Neplatný token\") { return false; }\n            var žžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžžž = 0; var blob = \"QmFzZTY0U2VudGluZWxCbG9i7x\"; var tail = \"lindenword\";\n            return žeton == \"quiet\";\n        }\n    }\n}\n";
+
+    /// The run withholds what a name says a literal is, in the literal and
+    /// in the condition that quotes it, and keeps the literals no name speaks
+    /// for and a message under a name of one.
+    #[test]
+    fn a_literal_is_withheld_by_the_name_it_is_compared_with_or_given_to() {
+        let text = stored(&[("src/EditorView.cs", NAMED)], "src/EditorView.cs");
+        for secret in [
+            "saltmarshowl",
+            "brindlecairn",
+            "cobaltfennel",
+            "duskmallow",
+            "QmFzZTY0U2VudGluZWxCbG9i7x",
+        ] {
+            assert!(!text.contains(secret), "{secret}: {text}");
+        }
+        for kept in [
+            "\"value\":\"plain\"",
+            "\"value\":\"quiet\"",
+            "\"value\":\"lindenword\"",
+            "\"value\":\"Neplatný token\"",
+        ] {
+            assert!(text.contains(kept), "{kept}: {text}");
+        }
+        // The condition keeps its code and its plain literal; the withheld one
+        // leaves the marker in its place.
+        assert!(
+            text.contains(
+                "žeton == \\\"plain\\\" || token == [redacted: token — see the source anchor]"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("[redacted: password — see the source anchor]"),
+            "{text}"
+        );
+    }
+
+    /// The first layer's decisions about literals come to the second
+    /// unchanged: a key written one literal per line, a key-shaped word in a
+    /// message, and a comment that names a secret inside a condition.
+    #[test]
+    fn the_first_layers_literal_decisions_reach_the_model() {
+        let src = "namespace Acme.Views\n{\n    public class EditorView\n    {\n        public string Key()\n        {\n            var key = \"-----BEGIN RSA PRIVATE KEY-----\\n\" +\n                \"pemtailwarbler==\\n\" +\n                \"-----END RSA PRIVATE KEY-----\\n\";\n            var auth = \"Bearer c0ffee5eed1234abcd5678ef90abcdef\";\n            if (GetResourceString(\"k\") /* heslo: hollyquartz */ == null) { return auth; }\n            return key;\n        }\n        public string GetResourceString(string k) { return k; }\n    }\n}\n";
+        let text = stored(&[("src/EditorView.cs", src)], "src/EditorView.cs");
+        for secret in [
+            "pemtailwarbler",
+            "c0ffee5eed1234abcd5678ef90abcdef",
+            "hollyquartz",
+        ] {
+            assert!(!text.contains(secret), "{secret}: {text}");
+        }
+        assert!(text.contains("\"value\":\"k\""), "{text}");
+        assert!(text.contains("GetResourceString"), "{text}");
+    }
+
+    /// A model from a file the host has no lexer for is redacted by its own
+    /// records: a literal given to a `Password` attribute, a literal of a
+    /// provider token's shape, and every text that quotes either.
+    #[test]
+    fn a_model_without_a_lexer_is_redacted_by_its_records() {
+        let mut model = model_with("Hello");
+        let member = &mut model.members[0];
+        let literal = |id: u32, value: &str, attribute: &str| StringLiteral {
+            id,
+            value: value.into(),
+            context: LiteralContext::AttributeArg(attribute.into(), None, None),
+            place: range(),
+            node: Some(0),
+        };
+        member.literals = vec![
+            literal(0, "quillfrond", "Password"),
+            literal(1, SECRET, "Tag"),
+            literal(2, "Zadejte heslo", "Text"),
+        ];
+        member.tags = vec![Tag {
+            name: "markup".into(),
+            value: Some("quillfrond".into()),
+            args: vec!["Password=\"quillfrond\"".into()],
+        }];
+        model.metas[0].attributes[0].args = vec!["Password=\"quillfrond\"".into()];
+        for path in ["src/View.xaml", "src/widget.probe3"] {
+            let mut redacted = model.clone();
+            redact_bodies(
+                &mut redacted,
+                path,
+                b"<View Password=\"quillfrond\" />",
+                &prefixes(),
+            );
+            let text = serde_json::to_string(&redacted).unwrap();
+            for secret in ["quillfrond", SECRET] {
+                assert!(!text.contains(secret), "{path}: {secret}: {text}");
+            }
+            assert!(text.contains("\"value\":\"Zadejte heslo\""), "{text}");
+            assert_eq!(
+                redacted.members[0].tags[0].value.as_deref(),
+                Some(withheld("password").as_str()),
+                "{text}"
+            );
+            assert_eq!(
+                redacted.members[0].literals[1].value,
+                withheld("provider token")
+            );
+        }
+    }
+
+    /// The marker passes a Mermaid label's escaping as it is.
+    #[test]
+    fn the_marker_passes_a_mermaid_label_unchanged() {
+        for pattern in ["password", "token", "private key", "long token"] {
+            let marker = withheld(pattern);
+            assert!(marker.starts_with(REDACTION_MARKER));
+            assert_eq!(crate::render::mermaid::escape_label(&marker), marker);
+        }
     }
 }

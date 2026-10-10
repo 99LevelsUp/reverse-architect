@@ -82,11 +82,20 @@ fn config_for(repo: &Path, out: &Path) -> Config {
 
 /// Every rendered artifact of one run, as (label, contents).
 fn all_artifacts(repo: &Path, out: &Path) -> Vec<(String, String)> {
-    artifacts_of(&generate(&config_for(repo, out)).expect("the pipeline runs"))
+    artifacts_of(
+        &generate(&config_for(repo, out)).expect("the pipeline runs"),
+        out,
+    )
 }
 
-/// Every rendered artifact of `generated`, as (label, contents).
-fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
+/// Where a run into `out` keeps the second layer's model of bodies (plan 2a,
+/// KTD8): one record per file, stored before anything else reads it.
+const BODY_RECORDS: &str = ".ra-cache/languages-bodies";
+
+/// Every rendered artifact of `generated`, written into `out`, as (label,
+/// contents) — and every record of the second layer under `out`, the one
+/// surface a body's text reaches before any later unit renders it.
+fn artifacts_of(generated: &Generated, out: &Path) -> Vec<(String, String)> {
     let mut artifacts: Vec<(String, String)> = Vec::new();
     for file in &generated.corpus.files {
         artifacts.push((format!("view {}", file.path), file.contents.clone()));
@@ -129,29 +138,239 @@ fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
         "coverage.json".to_string(),
         coverage::to_json(&generated.coverage),
     ));
+    if let Ok(entries) = std::fs::read_dir(out.join(BODY_RECORDS)) {
+        let mut records: Vec<std::path::PathBuf> = entries.map(|e| e.unwrap().path()).collect();
+        records.sort();
+        for path in records {
+            let bytes = std::fs::read(&path).unwrap();
+            artifacts.push((
+                format!("record {}", path.file_name().unwrap().to_string_lossy()),
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+        }
+    }
     artifacts
 }
 
+/// What plants one fixture into a repository directory.
+type Plant = fn(&Path);
+
+/// Every fixture of this file, by name: the gate below sweeps them all.
+const FIXTURES: [(&str, Plant); 4] = [
+    ("base", fixture),
+    ("anchors", anchor_fixture),
+    ("area b", b_fixture),
+    ("bodies", body_fixture),
+];
+
+/// The levels a run is swept at: without the second layer, and with it.
+const LEVELS: [Option<u8>; 2] = [None, Some(2)];
+
+/// R22 over every fixture of this file, with the second layer and without
+/// it: no secret of any of them reaches an artifact or a record of a body
+/// (plan 2a, KTD16).
 #[test]
 fn no_secret_value_reaches_any_artifact_of_a_run() {
+    for (name, plant) in FIXTURES {
+        for level in LEVELS {
+            let repo = tempfile::tempdir().unwrap();
+            let out = tempfile::tempdir().unwrap();
+            plant(repo.path());
+            let config = Config {
+                detail_level: level,
+                ..b_config(repo.path(), out.path())
+            };
+            let generated = generate(&config).expect("the pipeline runs");
+            let artifacts = artifacts_of(&generated, out.path());
+            assert!(
+                artifacts.len() > 5,
+                "the fixture must produce a real corpus, saw {}",
+                artifacts.len()
+            );
+            let records: Vec<&str> = artifacts
+                .iter()
+                .filter(|(label, _)| label.starts_with("record "))
+                .map(|(_, contents)| contents.as_str())
+                .collect();
+            assert_eq!(
+                records.is_empty(),
+                level.is_none(),
+                "{name}: a run with the second layer stores its bodies, one without none"
+            );
+            for (label, contents) in &artifacts {
+                assert_no_b_secret(&format!("{label} ({name}, level {level:?})"), contents);
+            }
+            // Over-redaction is the failure direction, but not this far: the
+            // messages support searches for stay in the model (AE5).
+            if name == "area b" && level.is_some() {
+                assert!(
+                    records
+                        .iter()
+                        .any(|r| MESSAGES.iter().all(|m| r.contains(m))),
+                    "the messages stay in the record of their body: {records:#?}"
+                );
+            }
+        }
+    }
+}
+
+// ---- The bodies of the second layer (plan 2a, U8: KTD16) ----
+
+/// The secret values the bodies fixture carries: compared with a name that
+/// says what the value is, a provider token given to a field whose name says
+/// it and one an attribute's argument is, and a comment inside a condition
+/// and after a call. The field's value has a shape of its own: a value only
+/// its name names reaches the first layer's signature of the field, which
+/// this unit leaves as it is (the second layer withholds it, see the unit
+/// tests of `extract::bodies`).
+const BODY_SECRETS: &[&str] = &[
+    "brindlecairn",
+    "ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1",
+    "ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5",
+    "hollyquartz",
+];
+
+/// A body for every shape of [`BODY_SECRETS`]; a name with a character of
+/// two bytes stands before the compared literal on its line (that the
+/// pairing counts columns in characters is shown by the unit tests of
+/// `extract::bodies`).
+const GATE_CS: &str = "namespace Orbit.Gate\n\
+{\n\
+\x20   public class Gate\n\
+\x20   {\n\
+\x20       private const string SmtpPassword = \"ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1\";\n\
+\x20       [DefaultValue(\"ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5\")]\n\
+\x20       public string Mode { get; set; }\n\
+\x20       public bool Check(string token, string žeton)\n\
+\x20       {\n\
+\x20           if (žeton == \"plain\" || token == \"brindlecairn\") { return true; }\n\
+\x20           if (GetResourceString(\"k\") /* heslo: hollyquartz */ == null) { return false; }\n\
+\x20           return GetResourceString(\"k\") /* heslo: hollyquartz */ != null;\n\
+\x20       }\n\
+\x20       public string GetResourceString(string key) { return key; }\n\
+\x20   }\n\
+}\n";
+
+/// The base fixture plus the bodies file.
+fn body_fixture(dir: &Path) {
+    let mut files = BASE_FILES.to_vec();
+    files.push(("src/Gate.cs", GATE_CS));
+    init_repo_with_files(dir, "Alice", &files);
+}
+
+/// The second layer read the bodies fixture — the compared literal that is
+/// no secret is in its record — and withheld every secret of it there.
+#[test]
+fn a_body_keeps_its_plain_literals_and_withholds_its_secrets_in_the_record() {
     let repo = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    fixture(repo.path());
+    body_fixture(repo.path());
+    let config = Config {
+        detail_level: Some(2),
+        ..b_config(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let records: Vec<(String, String)> = artifacts_of(&generated, out.path())
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("record "))
+        .collect();
+    let gate = records
+        .iter()
+        .map(|(_, r)| r)
+        .find(|r| r.contains("\"path\":\"src/Gate.cs\""))
+        .unwrap_or_else(|| panic!("a record of the bodies file: {records:#?}"));
+    assert!(gate.contains("\"value\":\"plain\""), "{gate}");
+    assert!(gate.contains(REDACTION_MARKER), "{gate}");
+    for secret in BODY_SECRETS {
+        assert!(
+            !gate.contains(secret),
+            "`{secret}` is in the record: {gate}"
+        );
+    }
+}
 
-    let artifacts = all_artifacts(repo.path(), out.path());
-    assert!(
-        artifacts.len() > 5,
-        "the fixture must produce a real corpus, saw {}",
-        artifacts.len()
-    );
-
-    for (label, contents) in &artifacts {
-        for secret in SECRETS {
-            assert!(
-                !contents.contains(secret),
-                "R22: `{secret}` leaked into {label}"
-            );
+/// `value` without the keys named, at the top level or one level down
+/// (`noise.plugins_by_contract`).
+fn without(mut value: serde_json::Value, keys: &[&str]) -> serde_json::Value {
+    for key in keys {
+        match key.split_once('.') {
+            Some((outer, inner)) => {
+                value[outer].as_object_mut().unwrap().remove(inner);
+            }
+            None => {
+                value.as_object_mut().unwrap().remove(*key);
+            }
         }
+    }
+    value
+}
+
+/// The first layer's bytes do not move with the second layer: over every
+/// fixture of this file, every view, card, detail and map, every manifest
+/// form and the sites are what a run without the layer writes, and the
+/// manifest and coverage differ only by what the layer adds to them.
+#[test]
+fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
+    for (name, plant) in FIXTURES {
+        let repo = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        plant(repo.path());
+        let run = |level: Option<u8>, dir: &str| {
+            generate(&Config {
+                detail_level: level,
+                ..b_config(repo.path(), &out.path().join(dir))
+            })
+            .expect("the pipeline runs")
+        };
+        let plain = run(None, "plain");
+        let layered = run(Some(2), "layered");
+        assert_eq!(plain.corpus, layered.corpus, "{name}: the views differ");
+        assert_eq!(plain.cards, layered.cards, "{name}: the cards differ");
+        assert_eq!(plain.details, layered.details, "{name}: the details differ");
+        assert_eq!(plain.maps, layered.maps, "{name}: the maps differ");
+        for form in [
+            manifest::to_nodes_jsonl as fn(&manifest::Manifest) -> String,
+            manifest::to_edges_jsonl,
+            manifest::to_documents_jsonl,
+        ] {
+            assert_eq!(form(&plain.manifest), form(&layered.manifest), "{name}");
+        }
+        // The strings form carries the manifest's head, the plugins with it.
+        let strings = |g: &Generated, keys: &[&str]| {
+            without(
+                serde_json::from_str(&manifest::to_strings_json(&g.manifest)).unwrap(),
+                keys,
+            )
+        };
+        assert_eq!(
+            strings(&plain, &["plugins"]),
+            strings(&layered, &["plugins", "detail_level"]),
+            "{name}: the strings form differs beyond the layer's own rows"
+        );
+        assert_eq!(
+            manifest::to_sites_jsonl(&plain.graph),
+            manifest::to_sites_jsonl(&layered.graph),
+            "{name}"
+        );
+        assert_eq!(
+            without(serde_json::to_value(&plain.manifest).unwrap(), &["plugins"]),
+            without(
+                serde_json::to_value(&layered.manifest).unwrap(),
+                &["plugins", "detail_level"]
+            ),
+            "{name}: the manifest differs beyond the layer's own rows"
+        );
+        assert_eq!(
+            without(
+                serde_json::to_value(&plain.coverage).unwrap(),
+                &["noise.plugins_by_contract"]
+            ),
+            without(
+                serde_json::to_value(&layered.coverage).unwrap(),
+                &["bodies", "noise.plugins_by_contract"]
+            ),
+            "{name}: coverage differs beyond the layer's own rows"
+        );
     }
 }
 
@@ -284,6 +503,24 @@ fn two_runs_still_agree_after_redaction() {
     let first = all_artifacts(repo.path(), out.path());
     let second = all_artifacts(repo.path(), out.path());
     assert_eq!(first, second, "redaction must be deterministic (R18)");
+
+    // The redaction of the second layer too: a cold run and a warm one, and
+    // a run into another directory, write the same records (plan 2a, U8).
+    let repo = tempfile::tempdir().unwrap();
+    body_fixture(repo.path());
+    let layered = |out: &Path| {
+        let config = Config {
+            detail_level: Some(2),
+            ..b_config(repo.path(), out)
+        };
+        artifacts_of(&generate(&config).expect("the pipeline runs"), out)
+    };
+    let out = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let cold = layered(out.path());
+    assert!(cold.iter().any(|(label, _)| label.starts_with("record ")));
+    assert_eq!(cold, layered(out.path()), "a warm run differs");
+    assert_eq!(cold, layered(other.path()), "another directory differs");
 }
 
 #[test]
@@ -893,7 +1130,7 @@ fn assert_no_b_secret(label: &str, text: &str) {
             "R10: `{secret}` ({planted}) leaked into {label}"
         );
     }
-    for secret in SECRETS.iter().chain(ANCHOR_SECRETS) {
+    for secret in SECRETS.iter().chain(ANCHOR_SECRETS).chain(BODY_SECRETS) {
         assert!(
             !lower.contains(&secret.to_lowercase()),
             "R10: `{secret}` leaked into {label}"
@@ -1022,7 +1259,7 @@ fn no_secret_reaches_any_surface_area_b_added() {
     );
 
     // And none of them carries a secret.
-    for (label, contents) in artifacts_of(&generated) {
+    for (label, contents) in artifacts_of(&generated, out.path()) {
         assert_no_b_secret(&label, &contents);
     }
     for header in &headers {
@@ -1160,7 +1397,7 @@ fn no_secret_reaches_the_model_purpose_layer_or_its_backend() {
         page(&shown.cards, "cards/type/", "Vault").contains(MODEL_SENTENCE),
         "the layer is shown"
     );
-    for (label, contents) in artifacts_of(&shown) {
+    for (label, contents) in artifacts_of(&shown, out.path()) {
         assert_no_b_secret(&label, &contents);
     }
 }

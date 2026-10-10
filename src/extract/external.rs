@@ -2877,6 +2877,199 @@ fn name_words(name: &str) -> Vec<String> {
     words
 }
 
+// ---- The secret filter of the second layer (plan 2a, KTD16) ----
+
+/// Which secret a value is by the name it is given, compared with or
+/// written to (`SmtpPassword`, `token`, `Errors.Password`) — the rule
+/// [`literal_secrets`] reads the assigned name with, for a name the second
+/// layer's model gives instead of the code on the line. A value of several
+/// words is a message more often than a secret, so a name with a word of a
+/// message (`lblPassword`, `errorToken`) speaks for none of those.
+pub(crate) fn named_secret(name: &str, value: &str) -> Option<&'static str> {
+    let pattern = secret_name(last_segment(name))?;
+    let words = value
+        .trim_matches(|c: char| c == '"' || c == '@' || c == '$' || c == '\'')
+        .trim()
+        .contains(char::is_whitespace);
+    (!words || !names_a_message(name)).then_some(pattern)
+}
+
+/// One string literal of a source file, as the second layer pairs it.
+struct SourceLiteral {
+    /// Where its content starts: 1-based line, 1-based column counted in
+    /// characters — the units of the model's positions.
+    at: (u32, u32),
+    /// The pattern it is withheld under, when it is.
+    pattern: Option<&'static str>,
+    /// How it is written: its content with the quotes around it, when they
+    /// are quotes; a text the model quotes from the source holds it so.
+    spelling: String,
+}
+
+/// What a source file withholds, read for the second layer's model of its
+/// bodies (plan 2a, KTD16) — the decisions the first layer makes about its
+/// literals, extended by what only the second layer quotes.
+///
+/// Per literal, in source order: what [`literal_secrets`] decides, which
+/// stays the first layer's own and unchanged; the literals of a key written
+/// one per line through the one holding `-----END`, as [`emit_file`]
+/// withholds them; a literal holding a key-shaped word ([`is_key_word`]),
+/// which the first layer only keeps out of its anchors; and a literal
+/// compared with a name that says what it is, on either side of `==` or
+/// `!=` (`token == "…"`, `"…" != token`) — the partner the first layer reads
+/// in one direction and for `==` alone.
+///
+/// Beside them, the spellings a text of the model may quote: each withheld
+/// literal as written, and each comment that names a secret, which a
+/// condition's text quotes with the code around it.
+pub(crate) struct SourceSecrets {
+    literals: Vec<SourceLiteral>,
+    spellings: Vec<(String, &'static str)>,
+}
+
+impl SourceSecrets {
+    /// The file at `path` read for the second layer, or `None` when the host
+    /// has no lexer for its language.
+    pub(crate) fn read(path: &str, src: &str, prefixes: &SecretPrefixes) -> Option<SourceSecrets> {
+        let lang = Lang::from_path(path)?;
+        let segs = segments(lang, src);
+        let lines = LineIndex::new(src);
+        let named = literal_secrets(src, &segs, &lines, prefixes);
+        // Columns are counted on from the literal before on the same line, so
+        // a minified line of many literals is counted once, not per literal.
+        let mut last: (u32, usize, u32) = (0, 0, 0);
+        let mut at = |offset: usize| {
+            let line = lines.line(offset);
+            let (from, column) = if last.0 == line && last.1 <= offset {
+                (last.1, last.2)
+            } else {
+                (lines.start(line), 1)
+            };
+            let column = column + src[from..offset].chars().count() as u32;
+            last = (line, offset, column);
+            (line, column)
+        };
+        let mut literals = Vec::new();
+        let mut spellings = Vec::new();
+        let mut in_key = false;
+        for (i, seg) in segs.iter().enumerate() {
+            let text = &src[seg.start..seg.end];
+            match seg.kind {
+                SegKind::Code => {}
+                SegKind::Comment => {
+                    let (_, redacted) = redact_secret_block(text, prefixes);
+                    let pattern = if redacted {
+                        Some(secret_pattern(text, prefixes).unwrap_or("secret value"))
+                    } else {
+                        without_long_tokens(text).1.then_some("long token")
+                    };
+                    if let Some(pattern) = pattern {
+                        spellings.push((text.to_string(), pattern));
+                    }
+                }
+                SegKind::Str { .. } => {
+                    let pattern = if in_key {
+                        in_key = !text.contains("-----END");
+                        Some("private key")
+                    } else if let Some(pattern) = named[i] {
+                        in_key = pattern == "private key"
+                            && text.contains("-----BEGIN")
+                            && !text.contains("-----END");
+                        Some(pattern)
+                    } else {
+                        compared_name(src, &segs, i)
+                            .and_then(|name| named_secret(name, text))
+                            .or_else(|| {
+                                without_long_tokens(&literal_text(src, seg))
+                                    .1
+                                    .then_some("long token")
+                            })
+                    };
+                    let b = src.as_bytes();
+                    let quoted = seg.start > 0
+                        && seg.end < b.len()
+                        && matches!(b[seg.start - 1], b'"' | b'\'' | b'`')
+                        && b[seg.end] == b[seg.start - 1];
+                    let spelling = if quoted {
+                        &src[seg.start - 1..seg.end + 1]
+                    } else {
+                        text
+                    };
+                    if let Some(pattern) = pattern.filter(|_| !text.is_empty()) {
+                        spellings.push((spelling.to_string(), pattern));
+                    }
+                    literals.push(SourceLiteral {
+                        at: at(seg.start),
+                        pattern,
+                        spelling: spelling.to_string(),
+                    });
+                }
+            }
+        }
+        Some(SourceSecrets {
+            literals,
+            spellings,
+        })
+    }
+
+    /// The literal of the file whose content starts within `start..=end`
+    /// (line, column in characters) — the place the model gives a literal,
+    /// which starts at its opening token (`@`, `$`, the quotes) — as the
+    /// pattern it is withheld under and its spelling; `None` when no literal
+    /// of the file starts there.
+    pub(crate) fn literal(
+        &self,
+        start: (u32, u32),
+        end: (u32, u32),
+    ) -> Option<(Option<&'static str>, &str)> {
+        let first = self.literals.partition_point(|l| l.at < start);
+        self.literals
+            .get(first)
+            .filter(|l| l.at <= end)
+            .map(|l| (l.pattern, l.spelling.as_str()))
+    }
+
+    /// Every spelling the file withholds, with its pattern, in source order.
+    pub(crate) fn spellings(&self) -> &[(String, &'static str)] {
+        &self.spellings
+    }
+}
+
+/// The name a literal is compared with by `==` or `!=`: the path written
+/// right before the operator, or right after it when the literal comes
+/// first — not a call's name, which names no value.
+fn compared_name<'s>(src: &'s str, segs: &[Segment], i: usize) -> Option<&'s str> {
+    static AFTER: OnceLock<Regex> = OnceLock::new();
+    static BEFORE: OnceLock<Regex> = OnceLock::new();
+    let code = |at: usize| {
+        segs.get(at)
+            .filter(|seg| seg.kind == SegKind::Code)
+            .map(|seg| &src[seg.start..seg.end])
+    };
+    let after = AFTER.get_or_init(|| {
+        Regex::new(
+            r"^\s*[!=]=\s*((?:[\p{L}_][\p{L}\p{N}_]*\s*\.\s*)*[\p{L}_][\p{L}\p{N}_]*)\s*(\()?",
+        )
+        .unwrap()
+    });
+    if let Some(caps) = code(i + 1).and_then(|c| after.captures(c)) {
+        if caps.get(2).is_none() {
+            return Some(caps.get(1)?.as_str());
+        }
+    }
+    let before = BEFORE.get_or_init(|| {
+        Regex::new(r"((?:[\p{L}_][\p{L}\p{N}_]*\s*\.\s*)*[\p{L}_][\p{L}\p{N}_]*)\s*[!=]=\s*$")
+            .unwrap()
+    });
+    // The literal's own line of the code before it: a minified line is read
+    // once per literal on it, never the whole file before it.
+    code(i.wrapping_sub(1))
+        .and_then(|c| c.rsplit('\n').next())
+        .and_then(|c| before.captures(c))
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str())
+}
+
 /// Whether a word is one long token shaped like a key or a hash (plan B,
 /// KTD11 rule 3): at least twenty characters with no space, every one of them
 /// from the hex or base64 alphabet, a digit among them, and either nothing but
