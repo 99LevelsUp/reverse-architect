@@ -2296,7 +2296,7 @@ mod tests {
         assert_eq!(coverage.failed.len(), 1);
         assert_eq!(coverage.failed[0].path, "src/EditorView.Keys.cs");
         assert_eq!(coverage.withheld, [view.as_str()]);
-        assert_eq!(coverage.plugins, ["csharp-body"]);
+        assert_eq!(coverage.plugins, ["xaml", "csharp-body"]);
     }
 
     /// A property's accessor carries its property's name position, so it

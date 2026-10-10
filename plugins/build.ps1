@@ -43,6 +43,14 @@ if ($Only.Count -eq 0 -or $Only -contains "sql") {
   Copy-Item "$PSScriptRoot\..\examples\plugin-sql\target\wasm32-wasip2\release\plugin_sql.wasm" "prebuilt\sql.wasm" -Force
 }
 
+if ($Only.Count -eq 0 -or $Only -contains "xaml") {
+  Push-Location "$PSScriptRoot\..\examples\plugin-xaml"
+  & cargo build --release --target wasm32-wasip2
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "build of xaml failed" }
+  Pop-Location
+  Copy-Item "$PSScriptRoot\..\examples\plugin-xaml\target\wasm32-wasip2\release\plugin_xaml.wasm" "prebuilt\xaml.wasm" -Force
+}
+
 $sums = @()
 Get-ChildItem prebuilt -Filter *.wasm | Sort-Object Name | ForEach-Object {
   $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()

@@ -300,11 +300,29 @@ impl PluginSet {
     /// define — or redefine — a kind another one emits. A kind it then emits
     /// without having declared it is dropped at the boundary with a message
     /// (`output_from_ops`), never guessed at.
-    pub fn declare_vocabularies(&self, graph: &mut Graph) -> Result<(), PluginSetError> {
+    ///
+    /// A plugin declares only when the corpus holds a file its extensions
+    /// claim (`corpus_extensions`, the text after the last dot of every
+    /// tracked path): a corpus nothing of the plugin reads stays as it was
+    /// without the plugin, in particular on the schema versions a declared
+    /// vocabulary raises.
+    pub fn declare_vocabularies(
+        &self,
+        graph: &mut Graph,
+        corpus_extensions: &std::collections::BTreeSet<String>,
+    ) -> Result<(), PluginSetError> {
         for plugin in self.iter() {
             let Some(v) = plugin.vocabulary() else {
                 continue;
             };
+            if !plugin
+                .manifest()
+                .extensions()
+                .iter()
+                .any(|e| corpus_extensions.contains(*e))
+            {
+                continue;
+            }
             let id = plugin.id().to_string();
             if v.namespace != id {
                 return Err(PluginSetError::Namespace {

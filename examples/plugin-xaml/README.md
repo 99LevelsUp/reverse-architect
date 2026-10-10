@@ -16,8 +16,8 @@ cargo build --release --target wasm32-wasip2
 ```
 
 The component is `target/wasm32-wasip2/release/plugin_xaml.wasm`; a copy is kept as
-`plugins/prebuilt/xaml.wasm` (not one of the bundled plugins: it is loaded with `--plugin`), built with the
-`--remap-path-prefix` flags `plugins/build.ps1` sets, so it carries no path of the machine that built it.
+`plugins/prebuilt/xaml.wasm`, one of the bundled plugins (`src/plugin/bundled.rs`), built with the
+`--remap-path-prefix` flags `plugins/build.ps1` sets (which builds it like `plugin-sql`), so it carries no path of the machine that built it.
 Dependencies are pinned with `=`: the component's bytes are part of a run's fingerprint.
 
 ## Load

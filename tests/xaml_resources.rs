@@ -338,7 +338,14 @@ fn cache_holds(dir: &Path, needle: &str) -> bool {
 fn a_run_without_the_xaml_component_resolves_nothing_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
-    init(&repo);
+    // The component is bundled: "without" is a corpus without XAML files.
+    let files = fixture_files();
+    let files: Vec<(&str, &str)> = files
+        .iter()
+        .filter(|(p, _)| !p.ends_with(".xaml"))
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    init_repo_with_files(&repo, "Alice", &files);
     let generated =
         reverse_architect::generate(&config_for(&repo, &dir.path().join("out"))).unwrap();
     let graph = &generated.graph;

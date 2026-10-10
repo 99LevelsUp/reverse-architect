@@ -101,7 +101,10 @@ fn run(xaml: bool, level: Option<u8>) -> Run {
     run_with(&[], xaml, level)
 }
 
-/// [`run`] over the fixture and the files `extra` beside it.
+/// [`run`] over the fixture and the files `extra` beside it. The XAML
+/// component is bundled, so a run "without" it is a run over a corpus without
+/// XAML files: a corpus nothing of the component claims is read as it was
+/// before the component existed.
 fn run_with(extra: &[(&str, &str)], xaml: bool, level: Option<u8>) -> Run {
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
@@ -111,6 +114,9 @@ fn run_with(extra: &[(&str, &str)], xaml: bool, level: Option<u8>) -> Run {
         .map(|(p, t)| (p.as_str(), t.as_str()))
         .collect();
     files.extend_from_slice(extra);
+    if !xaml {
+        files.retain(|(path, _)| !path.ends_with(".xaml"));
+    }
     init_repo_with_files(&repo, "Alice", &files);
     let plugins = if xaml {
         vec![PluginSpec {
@@ -447,7 +453,7 @@ fn without_the_second_layer_the_component_changes_only_what_xaml_references() {
         .map(|c| (c.path.as_str(), c.contents.as_str()))
         .collect();
     // The cards of the component's own declarations (styles, templates,
-    // resources, elements) are new; every other card is in both runs.
+    // resources, elements) and of the XAML files are new; every other card is in both runs.
     let paths: std::collections::BTreeSet<&str> = with
         .generated
         .cards
@@ -458,7 +464,9 @@ fn without_the_second_layer_the_component_changes_only_what_xaml_references() {
     let added: Vec<&&str> = paths.iter().filter(|p| !plain.contains_key(*p)).collect();
     assert!(!added.is_empty());
     assert!(
-        added.iter().all(|p| p.starts_with("cards/declared/xaml/")),
+        added.iter().all(|p| p.starts_with("cards/declared/xaml/")
+            || p.starts_with("cards/module/")
+            || (p.starts_with("cards/file/") && p.ends_with(".xaml.md"))),
         "{added:?}"
     );
     let mut compared = 0;

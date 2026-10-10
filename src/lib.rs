@@ -228,6 +228,15 @@ pub fn generate_reporting(
     // plugins that claim XAML, the files they failed on and the second
     // layer, before any card renders — the analyzed types' `## Dynamic
     // access` and the XAML documents end in it; coverage carries it.
+    //
+    // A plugin counts only when the corpus holds a file it claims: with no
+    // XAML file in the corpus, the run is what it was without the plugin.
+    let file_extensions: std::collections::BTreeSet<&str> = graph
+        .nodes_sorted()
+        .iter()
+        .filter(|n| n.kind == graph::NodeKind::File)
+        .filter_map(|n| n.key.as_str().rsplit_once('.').map(|(_, ext)| ext))
+        .collect();
     let markup_plugins: Vec<String> = extract_options
         .plugins
         .iter()
@@ -236,6 +245,12 @@ pub fn generate_reporting(
                 .languages
                 .iter()
                 .any(|l| l.name == coverage::MARKUP_LANGUAGE)
+        })
+        .filter(|p| {
+            p.manifest()
+                .extensions()
+                .iter()
+                .any(|e| file_extensions.contains(e))
         })
         .map(|p| p.id().to_string())
         .collect();
@@ -456,7 +471,12 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     // reason, not halfway through the walk. Their kinds are declared next, so
     // the cache below and every extractor read one vocabulary (U19).
     let plugins = plugin::PluginSet::with_declared(&config.plugins)?;
-    plugins.declare_vocabularies(&mut graph)?;
+    let corpus_extensions: std::collections::BTreeSet<String> = repo
+        .tracked_files()?
+        .iter()
+        .filter_map(|key| key.rsplit_once('.').map(|(_, ext)| ext.to_string()))
+        .collect();
+    plugins.declare_vocabularies(&mut graph, &corpus_extensions)?;
     // The second layer (plan 2a, U4: KTD7): only a run with a detail level
     // loads the body component, and only such a run records it among the
     // languages — after the first layer's plugins, so no extension changes

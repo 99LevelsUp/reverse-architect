@@ -4642,8 +4642,9 @@ mod tests {
 
         let registry = crate::extract::languages::Languages::bundled();
         // SQL has no import statement: a script names tables, never another
-        // file, so there is nothing for this pass to resolve in one.
-        const NO_IMPORTS: [&str; 1] = ["sql"];
+        // file, so there is nothing for this pass to resolve in one. Nor does
+        // XAML: its imports are the bundled plugin's own (merged dictionaries).
+        const NO_IMPORTS: [&str; 2] = ["sql", "xaml"];
         let claimed: std::collections::BTreeSet<&str> = registry
             .extensions()
             .filter(|e| !NO_IMPORTS.contains(e))

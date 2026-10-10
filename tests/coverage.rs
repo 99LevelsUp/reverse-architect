@@ -841,11 +841,12 @@ fn the_noise_section_is_byte_identical_across_runs() {
     assert_eq!(noise["deleted_by_rule"], serde_json::json!({}));
     assert_eq!(noise["over_cap_sites"], 0);
     assert!(noise.get("index_match").is_none(), "{noise}");
-    // Filled since plan A, U5: the seven bundled plugins, by contract — the
-    // six tree-sitter families on 0.2 (U6), the SQL example still on 0.1.
+    // Filled since plan A, U5: the eight bundled plugins, by contract — the
+    // six tree-sitter families on 0.2 (U6), the SQL example still on 0.1, the
+    // XAML plugin on 0.3.
     assert_eq!(
         noise["plugins_by_contract"],
-        serde_json::json!({"0.1": 1, "0.2": 6})
+        serde_json::json!({"0.1": 1, "0.2": 6, "0.3": 1})
     );
 }
 

@@ -149,6 +149,7 @@ impl Languages {
         add("jsx", "javascript", LanguageType::Jsx);
         add("java", "java", LanguageType::Java);
         add("sql", "sql", LanguageType::Sql);
+        add("xaml", "xaml", LanguageType::Xaml);
         // C and C++ (plan B, U4): no plugin, only the host lexer. Their line
         // counter is whichever tokei already used for the extension — `.h` is
         // `CHeader`, `.hpp` `CppHeader` — so registering them changes no count.

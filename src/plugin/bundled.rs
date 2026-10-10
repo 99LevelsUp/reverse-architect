@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 /// `(plugin id, component bytes)` for every bundled language plugin, in the
 /// order the extractor runs them.
-pub const BUNDLED: [(&str, &[u8]); 7] = [
+pub const BUNDLED: [(&str, &[u8]); 8] = [
     (
         "csharp",
         include_bytes!("../../plugins/prebuilt/csharp.wasm"),
@@ -31,6 +31,9 @@ pub const BUNDLED: [(&str, &[u8]); 7] = [
     // Built from `examples/plugin-sql`, outside the plugin workspace and
     // against the published WIT alone — the way a third party builds one.
     ("sql", include_bytes!("../../plugins/prebuilt/sql.wasm")),
+    // Built from `examples/plugin-xaml`, the same way, against the 0.3 WIT
+    // alone: styles, templates, resources and the references between them.
+    ("xaml", include_bytes!("../../plugins/prebuilt/xaml.wasm")),
 ];
 
 /// The component that reads the bodies of C# members: contract 0.3, the
@@ -147,7 +150,7 @@ mod tests {
             }
         }
         let expected: BTreeSet<&str> = [
-            "cjs", "cs", "go", "java", "js", "jsx", "mjs", "py", "rs", "sql", "ts", "tsx",
+            "cjs", "cs", "go", "java", "js", "jsx", "mjs", "py", "rs", "sql", "ts", "tsx", "xaml",
         ]
         .into_iter()
         .collect();

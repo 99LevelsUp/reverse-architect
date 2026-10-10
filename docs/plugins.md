@@ -2,7 +2,7 @@
 
 A plugin teaches reverse-architect a language. It is a WebAssembly component (`wasm32-wasip2`) that implements the `language-plugin` world of the plugin contract. The bundled languages are plugins of exactly this shape, and the host treats yours the same way.
 
-The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql). It is pure Rust, builds without a C toolchain, and ships as the bundled SQL plugin.
+The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql). It is pure Rust, builds without a C toolchain, and ships as the bundled SQL plugin. [`examples/plugin-xaml`](../examples/plugin-xaml) is the second one, on contract 0.3, and ships as the bundled XAML plugin: both are built outside the plugin workspace against the published WIT alone, the way a third party builds one.
 
 ## Contract versions
 
@@ -18,7 +18,7 @@ The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql)
 
 **A 0.1 or 0.2 plugin keeps working unchanged.** The host offers every contract's imports to every component and then looks at what it exports: it tries `ra:plugin/extractor` of 0.3 first, then 0.2, then 0.1, and runs the component under the first it finds. New plugins should target 0.3; 0.2 and 0.1 plugins need no change. A component that exports none of them ends the run with a version mismatch that names the versions the host wanted and what the component exports. A 0.1 plugin's output is lifted to the 0.2 shape at the boundary, with no column and no context, which is all 0.1 could say. Its usages are then resolved as before the rules existed: by name only. `examples/plugin-sql` is a 0.1 plugin and the bundled SQL plugin, so every run exercises this path. `coverage.json` reports, per language, the contract its plugin ran under, and counts the plugins per contract version.
 
-**Only C# supplies context today.** The other bundled languages except SQL, which stays on 0.1, run under 0.2 but leave `context` empty, so the rules do not run on their usages.
+**Only C# supplies context today.** The other bundled languages except SQL, which stays on 0.1, and XAML, which runs under 0.3, run under 0.2 but leave `context` empty, so the rules do not run on their usages.
 
 ## The contract
 
@@ -37,7 +37,7 @@ The host hands over one file's bytes at a time. A plugin never sees the reposito
 
 ### The manifest
 
-- **`id`** uses lowercase letters, digits and `-`. It names your facts in every provenance record, so keep it stable. A declared plugin whose id matches a bundled one (`csharp`, `ecmascript`, `go`, `java`, `python`, `rust`, `sql`) replaces it.
+- **`id`** uses lowercase letters, digits and `-`. It names your facts in every provenance record, so keep it stable. A declared plugin whose id matches a bundled one (`csharp`, `ecmascript`, `go`, `java`, `python`, `rust`, `sql`, `xaml`) replaces it.
 - **`languages`** lists a reporting name and extensions without the dot: `{ name: "sql", extensions: ["sql"] }`. The name appears in `coverage.json`.
 - **`trust-rank`** decides which value wins when two extractors disagree on a single-valued fact. The bundled plugins use 30.
 
@@ -117,7 +117,7 @@ A rule may remove a candidate outright, not just dispute it, only with a right t
 
 ### Kinds of your own
 
-A kind that is not a core kind is spelled `<namespace>:<name>`. Declare it in `declare()` under a namespace equal to your plugin id. In `declare()` every name is bare (a node kind `style`, its card kind `style`, the namespace `xaml` beside them; a name holding `:` is refused and the plugin does not load), while a symbol's `node-kind` and a reference's `target-kind` spell the same kind with its namespace (`xaml:style`). A plugin cannot declare into another plugin's namespace. A kind you emit without declaring it is dropped at the boundary, with a message.
+A kind that is not a core kind is spelled `<namespace>:<name>`. Declare it in `declare()` under a namespace equal to your plugin id. In `declare()` every name is bare (a node kind `style`, its card kind `style`, the namespace `xaml` beside them; a name holding `:` is refused and the plugin does not load), while a symbol's `node-kind` and a reference's `target-kind` spell the same kind with its namespace (`xaml:style`). A plugin cannot declare into another plugin's namespace. A kind you emit without declaring it is dropped at the boundary, with a message. The host declares a plugin's vocabulary only when the corpus holds a file one of its extensions claims, so a corpus without `.xaml` files carries nothing of the bundled XAML plugin's kinds.
 
 ## What 0.3 adds
 

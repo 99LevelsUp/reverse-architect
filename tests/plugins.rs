@@ -110,13 +110,17 @@ fn coverage_names_the_contract_each_language_was_parsed_under() {
     assert_eq!(contracts("probe"), ["0.1"]);
     assert_eq!(contracts("rust"), ["0.2"]);
     // The probe and the SQL example on 0.1, the six bundled tree-sitter
-    // families on 0.2.
+    // families on 0.2, the XAML plugin on 0.3.
     let noise = coverage.noise.expect("every run writes noise");
     assert_eq!(
         noise.plugins_by_contract,
-        [("0.1".to_string(), 2), ("0.2".to_string(), 6)]
-            .into_iter()
-            .collect()
+        [
+            ("0.1".to_string(), 2),
+            ("0.2".to_string(), 6),
+            ("0.3".to_string(), 1)
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -160,7 +164,8 @@ fn a_run_without_declared_plugins_records_only_the_bundled_ones() {
             "java",
             "python",
             "rust",
-            "sql"
+            "sql",
+            "xaml"
         ]
     );
     // A file no plugin claims is still reported, not dropped.
@@ -311,6 +316,61 @@ fn sql_objects_are_cards_linked_to_the_tables_they_touch() {
             .any(|c| c.path.contains("orders")
                 && c.contents.contains("Orders placed through the shop")),
         "no card for the table"
+    );
+}
+
+/// The bundled XAML plugin — built outside the plugin workspace, from the 0.3
+/// WIT alone, like the SQL one — covers `.xaml` in a run that declares no
+/// plugin: the file is read under the language `xaml` and contract 0.3, its
+/// style is a node of its own, and the type it targets gets the usage.
+#[test]
+fn a_run_without_plugin_declarations_covers_xaml_with_the_bundled_plugin() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[
+            ("src/EditorView.cs", "namespace Acme { public class EditorView { } }\n"),
+            (
+                "src/Styles.xaml",
+                "<ResourceDictionary xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n    xmlns:local=\"clr-namespace:Acme\">\n  <Style x:Key=\"Bold\" TargetType=\"local:EditorView\" />\n</ResourceDictionary>\n",
+            ),
+        ],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let generated = reverse_architect::generate(&config_for(repo.path(), out.path())).unwrap();
+
+    let file = generated
+        .coverage
+        .files
+        .iter()
+        .find(|f| f.path == "src/Styles.xaml")
+        .unwrap();
+    assert_eq!(file.language.as_deref(), Some("xaml"));
+    assert!(file.structural, "{file:?}");
+    let language = generated
+        .coverage
+        .languages
+        .iter()
+        .find(|l| l.language == "xaml")
+        .unwrap_or_else(|| panic!("no `xaml` in {:?}", generated.coverage.languages));
+    assert_eq!(language.contracts, ["0.3"]);
+
+    let xaml = generated
+        .manifest
+        .plugins
+        .iter()
+        .find(|p| p.id == "xaml")
+        .expect("the bundled XAML plugin is recorded");
+    assert_eq!(xaml.origin, "bundled");
+    assert!(
+        generated
+            .graph
+            .node(&reverse_architect::graph::NodeKey::new(
+                "sym:xaml:src/Styles.xaml#Bold"
+            ))
+            .is_some(),
+        "the style is a node of its own"
     );
 }
 

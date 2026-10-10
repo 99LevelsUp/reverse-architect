@@ -4,7 +4,7 @@
 
 reverse-architect is deterministic, offline and needs no LLM. It parses the code, builds one fact graph of declarations, calls, references, imports, inheritance and tests, and projects that graph into documents a person or a retrieval pipeline can read. The same commit always produces the same bytes.
 
-Languages come as sandboxed WebAssembly plugins. The standard build ships **C#, TypeScript/TSX, JavaScript, Python, Rust, Go, Java and SQL**, and anyone can add another without touching the core. **C and C++** have no plugin: the host reads their string literals, comments and SQL, but not their declarations (see [C and C++](#c-and-c)).
+Languages come as sandboxed WebAssembly plugins. The standard build ships **C#, TypeScript/TSX, JavaScript, Python, Rust, Go, Java, SQL and XAML**, and anyone can add another without touching the core. **C and C++** have no plugin: the host reads their string literals, comments and SQL, but not their declarations (see [C and C++](#c-and-c)).
 
 ## What you get
 
@@ -211,7 +211,7 @@ reverse-architect path/to/project --plugin my-lang.wasm=sha256:9f86d0…   # ref
 - **The sandbox grants nothing.** A plugin gets no files, no network, no environment and a frozen clock. Fuel and memory are capped, so a plugin cannot hang or exhaust the host. A file a plugin fails on is reported in `coverage.json` with the reason, and the run carries on.
 - **The corpus says what built it.** The manifest lists every plugin with its version and SHA-256, and every fact names the plugin that produced it.
 
-[`examples/plugin-sql`](examples/plugin-sql) is a complete plugin in about 600 lines of Rust. It is built outside this repository's build graph, against the 0.1 WIT alone, and it is also the bundled SQL plugin. Start there. [docs/plugins.md](docs/plugins.md) describes both contract versions.
+[`examples/plugin-sql`](examples/plugin-sql) is a complete plugin in about 600 lines of Rust. It is built outside this repository's build graph, against the 0.1 WIT alone, and it is also the bundled SQL plugin. [`examples/plugin-xaml`](examples/plugin-xaml) is a second one, on contract 0.3, and the bundled XAML plugin. Start there. [docs/plugins.md](docs/plugins.md) describes both contract versions.
 
 ## Format versions
 

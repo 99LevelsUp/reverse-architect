@@ -422,10 +422,11 @@ mod tests {
         let registry = crate::extract::languages::Languages::bundled();
         // C and C++ (plan B, U4) have no convention set on purpose: a language
         // the core knows no test naming for is left unpaired rather than
-        // guessed at, and only the host lexer reads them.
+        // guessed at, and only the host lexer reads them. Markup (XAML) has no
+        // test naming either.
         for ext in registry
             .extensions()
-            .filter(|ext| !registry.is_lexed_only(&format!("a.{ext}")))
+            .filter(|ext| !registry.is_lexed_only(&format!("a.{ext}")) && *ext != "xaml")
         {
             let name = registry.name_for(&format!("a.{ext}")).unwrap();
             let lang = super::Lang::from_name(name)

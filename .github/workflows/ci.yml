@@ -76,6 +76,9 @@ jobs:
       - name: test the SQL plugin
         working-directory: examples/plugin-sql
         run: cargo test
+      - name: test the XAML plugin
+        working-directory: examples/plugin-xaml
+        run: cargo test
 
   # Rebuild the committed components and compare hashes. Informational until a
   # Linux build and the Windows build that produced the artifacts are known to
