@@ -1,0 +1,55 @@
+<UserControl x:Class="Acme.Views.ViewE"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Acme.Views"
+             xmlns:m="clr-namespace:Acme.Models"
+             xmlns:beh="clr-namespace:Acme.Behaviors"
+             Loaded="OnLoaded">
+  <UserControl.InputBindings>
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding Save}" />
+    <KeyBinding Key="F5" Modifiers="Shift" Command="ApplicationCommands.Refresh" />
+  </UserControl.InputBindings>
+  <UserControl.Resources>
+    <ControlTemplate x:Key="Frame" TargetType="local:ViewA">
+      <Border Background="{TemplateBinding Background}">
+        <StackPanel>
+          <TextBlock Text="{Binding P}" />
+          <ListBox ItemsSource="{Binding Items}">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Caption}" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </StackPanel>
+      </Border>
+    </ControlTemplate>
+    <DataTemplate DataType="{x:Type m:ItemModel}">
+      <TextBlock Text="{Binding Name}" />
+    </DataTemplate>
+    <Style x:Key="Busy" TargetType="local:ViewA">
+      <Setter Property="IsBusy" Value="True" />
+      <EventSetter Event="Click" Handler="OnItemClick" />
+    </Style>
+    <SolidColorBrush x:Key="Ink" Color="#FF2050A0" />
+  </UserControl.Resources>
+  <StackPanel>
+    <TextBlock Text="{Binding P}" ToolTip="Uložit dokument" Foreground="#FF2050A0" />
+    <TextBox x:Name="TitleBox" Text="{Binding Name, Mode=TwoWay}" />
+    <TextBox Text="{Binding Name}" />
+    <Button x:Name="SaveButton" Command="{Binding Holder.Command}" Click="OnSave" Content="Uložit" />
+    <Button Command="{Binding Close}" Content="{StaticResource CloseText}" />
+    <TextBlock Text="{x:Static Acme.Settings.Default}" beh:Focus.IsInitial="True" />
+    <Path Fill="M0,0 L10,10 Z" />
+    <TextBlock Text="{Binding Text, ElementName=TitleBox}" />
+    <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource Self}}" />
+    <TextBlock>
+      <TextBlock.Text>
+        <MultiBinding StringFormat="{}{0} {1}">
+          <Binding Path="First" />
+          <Binding Path="Last" Mode="TwoWay" />
+        </MultiBinding>
+      </TextBlock.Text>
+    </TextBlock>
+  </StackPanel>
+</UserControl>

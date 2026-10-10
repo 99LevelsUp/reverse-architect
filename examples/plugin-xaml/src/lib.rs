@@ -1,34 +1,60 @@
 //! `xaml` — a reverse-architect language plugin for XAML, built as a third
 //! party would build it: only against the published contract
-//! (`wit-v2/extractor.wit`, `ra:plugin@0.2.0`) and `docs/plugins.md`.
+//! (`wit-v3/extractor.wit`, `ra:plugin@0.3.0`) and `docs/plugins.md`.
 //!
 //! - [`parse`] reads a file into a tree of elements and attributes with
 //!   their positions, and takes markup extensions apart.
 //! - [`xmlns`] says what a prefix means and which type a spelling names.
 //! - [`declare`] is pass 1: styles, templates, resources, named template
-//!   parts, the `x:Class` root, merged dictionaries and `BasedOn`.
+//!   parts and the `x:Class` root as nodes of the plugin's own kinds, merged
+//!   dictionaries, the file's `*.Resources` blocks and the references by
+//!   name (`{StaticResource}`, `{DynamicResource}`, `BasedOn`).
 //! - [`scope`] is pass 2: the types the file names, with its one scope.
+//! - [`bodies`] is pass 3: the bodies of styles, templates and the `x:Class`
+//!   root — bindings, commands, event handlers, setters and literals.
 //!
-//! This file only wires them to the contract. Invalid XML fails the file:
-//! the exported functions panic, and the release profile's `panic = "abort"`
-//! turns that into a trap the host reports for that file alone.
+//! This file only wires them to the contract. A file that is not valid XML
+//! is refused by every pass with a short reason (`err`), never a trap.
 
 wit_bindgen::generate!({
-    path: "../../wit-v2",
+    path: "../../wit-v3",
     world: "language-plugin",
+    additional_derives: [PartialEq],
 });
 
+pub mod bodies;
 pub mod declare;
 pub mod parse;
 pub mod scope;
 pub mod xmlns;
 
 use exports::ra::plugin::extractor::Guest;
-use ra::plugin::types::{Config, FileUsages, Language, Manifest, Op, Vocabulary};
+use ra::plugin::types::{
+    Config, FileBodies, FileDeclarations, FileUsages, Language, Manifest, NodeKindDecl, Pass,
+    StructuralRole, Vocabulary,
+};
+
+/// The namespace of this plugin's own kinds; equal to its id.
+pub const NAMESPACE: &str = "xaml";
+
+/// The node kinds this plugin declares, each with a card of its own, and
+/// their structural roles.
+pub const NODE_KINDS: [(&str, StructuralRole); 5] = [
+    ("xaml:style", StructuralRole::Container),
+    ("xaml:template", StructuralRole::Container),
+    ("xaml:resource", StructuralRole::Definition),
+    ("xaml:element", StructuralRole::Leaf),
+    ("xaml:view", StructuralRole::Container),
+];
 
 // Constructed only by the export glue, which exists only in the component.
 #[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 struct Plugin;
+
+/// The short reason a pass gives for a file it cannot read.
+fn refused(e: parse::Error) -> String {
+    format!("not valid XML: {e}")
+}
 
 impl Guest for Plugin {
     fn describe() -> Manifest {
@@ -41,25 +67,45 @@ impl Guest for Plugin {
             }],
             trust_rank: 30,
             depends_on: Vec::new(),
+            passes: vec![Pass::Declarations, Pass::Usages, Pass::Bodies],
+            emits: bodies::EMITS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     fn declare() -> Option<Vocabulary> {
-        // Every kind used is a core kind or a plain `symbol_kind` value
-        // (`style`, `template`, `resource`, `element`, `view`), so nothing
-        // needs declaring.
-        None
+        // Every kind gets a card of its own, named like the kind.
+        Some(Vocabulary {
+            namespace: NAMESPACE.into(),
+            card_kinds: NODE_KINDS.iter().map(|(k, _)| k.to_string()).collect(),
+            node_kinds: NODE_KINDS
+                .iter()
+                .map(|&(name, role)| NodeKindDecl {
+                    name: name.into(),
+                    role,
+                    card: Some(name.into()),
+                })
+                .collect(),
+            edge_kinds: Vec::new(),
+            fact_kinds: Vec::new(),
+        })
     }
 
-    fn declarations(path: String, source: Vec<u8>, _config: Config) -> Vec<Op> {
+    fn declarations(
+        path: String,
+        source: Vec<u8>,
+        _config: Config,
+    ) -> Result<FileDeclarations, String> {
         // Text this plugin quotes (a built signature) is redacted by the host
         // with the operator's prefixes, so the plugin does not need the list.
-        declare::declarations(&path, &source, &ra::plugin::host::path_exists)
-            .unwrap_or_else(|e| panic!("{path}: not valid XML: {e}"))
+        declare::declarations(&path, &source, &ra::plugin::host::path_exists).map_err(refused)
     }
 
-    fn usages(path: String, source: Vec<u8>) -> FileUsages {
-        scope::usages(&source).unwrap_or_else(|e| panic!("{path}: not valid XML: {e}"))
+    fn usages(_path: String, source: Vec<u8>) -> Result<FileUsages, String> {
+        scope::usages(&source).map_err(refused)
+    }
+
+    fn bodies(_path: String, source: Vec<u8>) -> Result<FileBodies, String> {
+        bodies::bodies(&source).map_err(refused)
     }
 }
 
@@ -72,15 +118,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_manifest_names_the_xaml_language() {
+    fn the_manifest_names_the_xaml_language_and_its_three_passes() {
         let manifest = Plugin::describe();
         assert_eq!(manifest.id, "xaml");
-        assert_eq!(manifest.version, "0.1.0");
+        assert_eq!(manifest.version, "0.2.0");
         assert_eq!(manifest.trust_rank, 30);
         assert!(manifest.depends_on.is_empty());
         assert_eq!(manifest.languages.len(), 1);
         assert_eq!(manifest.languages[0].name, "xaml");
         assert_eq!(manifest.languages[0].extensions, ["xaml"]);
-        assert!(Plugin::declare().is_none());
+        assert_eq!(
+            manifest.passes,
+            [Pass::Declarations, Pass::Usages, Pass::Bodies]
+        );
+        for name in [
+            "member-access",
+            "subscription",
+            "string-literal",
+            "data-source",
+            "target-type",
+            "trigger",
+            "control-key",
+            "key-gesture",
+        ] {
+            assert!(
+                manifest.emits.iter().any(|e| e == name),
+                "{name} in {:?}",
+                manifest.emits
+            );
+        }
+    }
+
+    #[test]
+    fn the_vocabulary_declares_five_kinds_with_cards_under_the_plugin_namespace() {
+        let vocabulary = Plugin::declare().expect("a vocabulary");
+        assert_eq!(vocabulary.namespace, "xaml");
+        let kinds: Vec<&str> = vocabulary
+            .node_kinds
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                "xaml:style",
+                "xaml:template",
+                "xaml:resource",
+                "xaml:element",
+                "xaml:view"
+            ]
+        );
+        for kind in &vocabulary.node_kinds {
+            let card = kind.card.as_deref().expect("a card policy");
+            assert!(vocabulary.card_kinds.iter().any(|c| c == card), "{card}");
+            assert!(kind.name.starts_with("xaml:"));
+        }
+        assert!(vocabulary.edge_kinds.is_empty() && vocabulary.fact_kinds.is_empty());
+    }
+
+    #[test]
+    fn invalid_xml_is_refused_by_every_pass_with_a_reason() {
+        let broken = b"<Grid><Button></Grid>".to_vec();
+        // `Plugin::declarations` asks the host import, which a native build
+        // does not have; the same function runs here with a stand-in.
+        let d = declare::declarations("x.xaml", &broken, &|_| false).map_err(refused);
+        let u = Plugin::usages("x.xaml".into(), broken.clone());
+        let b = Plugin::bodies("x.xaml".into(), broken);
+        for reason in [d.err(), u.err(), b.err()] {
+            let reason = reason.expect("an err");
+            assert!(reason.starts_with("not valid XML: "), "{reason}");
+        }
     }
 }

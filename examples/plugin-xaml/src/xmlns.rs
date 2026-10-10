@@ -169,6 +169,18 @@ impl<'a> TypeRef<'a> {
         }
     }
 
+    /// The type's CLR name, as a reader of C# would write it: qualified by
+    /// the namespace a `clr-namespace` prefix maps, as written (without the
+    /// prefix) anywhere else, a nested type's `+` read as `.`. Unlike
+    /// [`Self::identity`] it never carries a URI: it is a name, not a key.
+    pub fn clr_name(&self) -> String {
+        let name = self.name.replace('+', ".");
+        match self.ns {
+            Ns::Clr(ns) if !ns.is_empty() => format!("{ns}.{name}"),
+            _ => name,
+        }
+    }
+
     /// The usage of this type: a reference by its simple name. Under a
     /// `clr-namespace` prefix the site sits in the file's scope, whose usings
     /// are the file's CLR namespaces ([`clr_usings`]); a nested type
@@ -228,10 +240,15 @@ mod tests {
         let tb = TypeRef::read(&b, 0, "v:ViewA", 0).unwrap();
         assert_eq!(ta.identity(), "Acme.Views.ViewA");
         assert_eq!(ta.identity(), tb.identity());
+        assert_eq!(ta.clr_name(), "Acme.Views.ViewA");
         let uri = parse(b"<a xmlns=\"http://p\"/>").unwrap();
         assert_eq!(
             TypeRef::read(&uri, 0, "Button", 0).unwrap().identity(),
             "http://p|Button"
+        );
+        assert_eq!(
+            TypeRef::read(&uri, 0, "Button", 0).unwrap().clr_name(),
+            "Button"
         );
     }
 }

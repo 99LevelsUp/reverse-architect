@@ -16,8 +16,8 @@
 //! default WPF namespace) does not say which namespace it means, so its site
 //! carries no context, and the namespace rule cannot dispute the right type.
 //!
-//! Not reported on 0.2: bindings, commands, event handlers, setters and
-//! literals.
+//! Not reported here: bindings, commands, event handlers, setters and
+//! literals. They are read by pass 3 ([`crate::bodies`]).
 
 use crate::parse::{markup, parse, split_prefix, ArgValue, Doc, Error, Markup};
 use crate::ra::plugin::types::{FileUsages, Scope, Usage};
@@ -208,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_commands_and_handlers_are_not_reported() {
+    fn bindings_commands_and_handlers_are_not_usages() {
         let source = b"<Button xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\" Command=\"{Binding SaveCommand}\" Click=\"OnSave\" Content=\"{Binding Title, Mode=TwoWay}\"/>";
         assert!(usages(source).expect("valid XAML").usages.is_empty());
     }
