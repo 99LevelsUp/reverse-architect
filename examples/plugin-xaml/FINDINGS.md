@@ -45,7 +45,7 @@ It describes constructs of the language, not any repository it was run over. Lin
 | String literals in attributes | not reported | sacrificed | the host's lexer does not read `.xaml`, so attribute values never become keywords; reporting them needs a literal record the host redacts | closed in 0.3 (`string-literal`) |
 | `KeyBinding` in `InputBindings` | not reported | sacrificed | the command is a binding, the gesture a literal | closed in 0.3 (tags) |
 | Implicit two-way bindings | not reported | sacrificed | the default mode lives in the framework's property metadata, which no file states (WIT 226–227: everything is read from the one file) | — |
-| Why a file failed | the file traps; coverage says it failed | needs-ra-change | `declarations` and `usages` return plain lists, so the only failure a plugin can report is a trap, and the panic text is lost. Proposal: a `result<…, string>` or an error record per pass | open |
+| Why a file failed | the file traps; coverage says it failed | needs-ra-change | `declarations` and `usages` return plain lists, so the only failure a plugin can report is a trap, and the panic text is lost. Proposal: a `result<…, string>` or an error record per pass | closed in 0.3 (every pass returns `result<…, string>`) |
 
 ## Verdict on the architecture
 
@@ -53,4 +53,4 @@ A declarative language fits the plugin model as far as declarations, type refere
 coverage go: all of that came through 0.2 with no change to the host. What did not fit is the declarative
 graph itself — resources referenced by name, blocks, the kinds that should carry a card, and everything a binding
 says about members. Contract 0.3 adds those as typed records rather than as text, so the plugin moves to 0.3 for
-them; the two items marked open stay proposals.
+them; the one item still marked open (a rule over a namespace `qualifier`) stays a proposal for the host.
