@@ -239,6 +239,13 @@ impl<'a> Index<'a> {
         self.members_named.get(name).map_or(&[], Vec::as_slice)
     }
 
+    /// The repository's C# types named `name`, by key — the candidates a
+    /// name over the ambiguity ceiling may have meant (step 2b, U1), never
+    /// what a written type resolves to ([`Index::type_named`]).
+    pub fn types_named(&self, name: &str) -> &[NodeKey] {
+        self.types_named.get(name).map_or(&[], Vec::as_slice)
+    }
+
     /// The members an external index pinned as the targets of `caller`'s
     /// relations, with the sites each was read at, by target.
     pub fn indexed_from(&self, caller: &NodeKey) -> &[(NodeKey, Vec<SiteId>)] {

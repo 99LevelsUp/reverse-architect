@@ -17,6 +17,13 @@
 //! - [`binding`] — step 2b, U3: the delegate binding as (method of the
 //!   class, target) pairs, for every class of the shape, and the events a
 //!   class raises (KTD4, KTD6), [`bindings_of`].
+//! - [`callers`] — step 2b, U1: the reverse index of callers of every member
+//!   and its class (none, weak only, strong), built once a run beside the
+//!   model of bodies (KTD2), [`Callers`].
+//! - [`effects`] — step 2b, U4: the results of every functionality in the
+//!   order of how sure they are, the paths that stop before the main work,
+//!   and the state read and written from outside (KTD6, R5, R6, R10),
+//!   [`FlowResults`].
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
@@ -32,7 +39,9 @@
 //! byte of it.
 
 pub mod binding;
+pub mod callers;
 pub mod cluster;
+pub mod effects;
 pub mod entry;
 pub mod flow;
 pub mod link;
@@ -41,6 +50,11 @@ pub mod resolve;
 pub use binding::{
     bindings_of, field_call_arity, raised_events, AmbiguousField, BoundSlot, DelegateBinding,
     DelegatePair, IdleInvoker, RaisedEvent, SiteBinding,
+};
+pub use callers::{BodySite, Caller, CallerClass, Callers, Evidence, Subscriber, Via};
+pub use effects::{
+    FlowResult, FlowResults, FunctionalityResults, ResultKind, StateContext, StopCause,
+    StoppedPath, Touch, TypeResults,
 };
 pub use link::{Basis, Candidates, GradedLink, Links, Outcome, Resolution, Site};
 

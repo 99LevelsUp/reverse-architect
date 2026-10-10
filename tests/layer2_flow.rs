@@ -1,17 +1,22 @@
 //! Step 2b, U2 and U3: the links of an access graded across types, and the
 //! binding of a delegate from the code of the class constructed — over the
 //! same walk and the same binding the entry points of plan 2a resolve by, so
-//! the analysis of a card and its flow never disagree.
+//! the analysis of a card and its flow never disagree. U1: the reverse index
+//! of callers and the class of a member. U4: the results of a functionality
+//! and the state read and written from outside, over the editor of the
+//! acceptance examples (`common/editor_fixture.rs`).
 
 mod common;
 
 use reverse_architect::card::layer2::{
-    self, bindings_of, raised_events, Analysis, Basis, DelegateBinding, EntryPoint, Index, Links,
-    Outcome, Resolution, Site, TypeAnalysis, Unresolved,
+    self, bindings_of, raised_events, Analysis, Basis, Caller, CallerClass, Callers,
+    DelegateBinding, EntryPoint, FlowResult, FlowResults, Index, Links, Outcome, Resolution,
+    ResultKind, Site, StopCause, StoppedPath, TypeAnalysis, TypeResults, Unresolved, Via,
 };
 use reverse_architect::config::{Config, DEFAULT_AMBIGUITY_CEILING};
+use reverse_architect::extract::bodies::Constant;
 use reverse_architect::graph::{
-    Confidence, Edge, EdgeKind, ExtractorId, NodeKey, Provenance, SiteId, Tier,
+    Confidence, Edge, EdgeKind, ExtractorId, NodeKey, Provenance, Rule, SiteId, Tier,
 };
 use reverse_architect::{generate, Generated};
 use std::path::Path;
@@ -812,4 +817,585 @@ fn the_entry_point_and_the_binding_lead_to_the_same_target() {
         assert_eq!(from_2a, from_2b, "{property}");
         assert!(!from_2b.is_empty(), "{property}");
     }
+}
+
+// ---- The editor of the acceptance examples ----
+
+#[path = "common/editor_fixture.rs"]
+mod editor_fixture;
+
+use editor_fixture::{MODELS_NS as EDITOR_MODELS, VIEWS_NS as EDITOR_VIEWS};
+
+/// A run over the editor of the acceptance examples.
+fn editor_2b() -> (Generated, Analysis) {
+    analyzed(&editor_fixture::files())
+}
+
+/// The index of callers of a run, at the default ceiling.
+fn callers_of(generated: &Generated) -> Callers {
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let links = Links::new(&ix, DEFAULT_AMBIGUITY_CEILING);
+    Callers::new(&generated.graph, &links)
+}
+
+// ---- U1: the reverse index of callers ----
+
+/// The caller `member` of `callee`.
+fn caller<'c>(callers: &'c Callers, callee: &NodeKey, member: &NodeKey) -> &'c Caller {
+    callers
+        .of(callee)
+        .iter()
+        .find(|c| &c.member == member)
+        .unwrap_or_else(|| {
+            panic!(
+                "{member:?} does not call {callee:?}: {:?}",
+                callers
+                    .of(callee)
+                    .iter()
+                    .map(|c| c.member.as_str())
+                    .collect::<Vec<_>>()
+            )
+        })
+}
+
+/// U1 verification: `Check(bool)` is called from both of its ways in — the
+/// command's `Check()` and `ExternalCheck` — by rules; `Check()` by the
+/// command class through the delegate binding; `CheckCommand`, reached only
+/// as a link of `this.viewModel.CheckCommand.Execute`, by the view's key
+/// handler; the handler subscribed with `+=` by the constructor; and the
+/// subscription to `Executed` is counted on the command class.
+#[test]
+fn the_check_is_called_from_the_command_and_from_the_external_check() {
+    let (generated, _) = editor_2b();
+    let callers = callers_of(&generated);
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    for from in ["EditorViewModel.Check()", "ExternalCheck.Run()"] {
+        let c = caller(&callers, &check_bool, &key(EDITOR_MODELS, from));
+        assert_eq!(c.grade, Confidence::RulesBacked, "{from}");
+        assert!(
+            c.links().any(|s| s.last && s.call == Some(1)),
+            "{from}: {c:?}"
+        );
+    }
+    assert_eq!(callers.class_of(&check_bool), CallerClass::Strong);
+
+    let check = key(EDITOR_MODELS, "EditorViewModel.Check()");
+    let execute = caller(
+        &callers,
+        &check,
+        &key(EDITOR_MODELS, "RelayCommand.Execute(object)"),
+    );
+    assert!(
+        execute.evidence.iter().any(|e| matches!(
+            &e.via,
+            Via::Delegate { built_in, .. } if built_in == &key(EDITOR_MODELS, "EditorViewModel.CheckCommand")
+        ) && e.grade == Confidence::RulesBacked),
+        "{execute:?}"
+    );
+    // The lambda the command is built from names `Check()` too.
+    let lambda = caller(
+        &callers,
+        &check,
+        &key(EDITOR_MODELS, "EditorViewModel.CheckCommand"),
+    );
+    assert!(lambda.links().any(|s| s.last), "{lambda:?}");
+
+    // A member reached only through a property access is not uncalled: the
+    // link it is in `this.viewModel.CheckCommand.Execute` makes the caller.
+    let command = key(EDITOR_MODELS, "EditorViewModel.CheckCommand");
+    let on_key = key(
+        EDITOR_VIEWS,
+        "EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)",
+    );
+    let c = caller(&callers, &command, &on_key);
+    assert!(c.is_strong(), "{c:?}");
+    assert!(c.links().any(|s| !s.last), "{c:?}");
+
+    // A handler is called by its subscription.
+    let on_checked = key(EDITOR_VIEWS, "EditorView.OnChecked(object,EventArgs)");
+    let ctor = key(EDITOR_VIEWS, "EditorView.EditorView()");
+    let c = caller(&callers, &on_checked, &ctor);
+    assert!(
+        c.evidence
+            .iter()
+            .any(|e| matches!(&e.via, Via::Subscription { event, .. } if event == "Executed")),
+        "{c:?}"
+    );
+    assert_eq!(callers.class_of(&on_checked), CallerClass::Strong);
+    let subscribers = callers.subscribers_of(&key(EDITOR_MODELS, "RelayCommand.Executed"));
+    assert_eq!(subscribers.len(), 1, "{subscribers:?}");
+    assert_eq!(subscribers[0].member, ctor);
+    assert_eq!(subscribers[0].handler.as_ref(), Some(&on_checked));
+}
+
+/// A first-layer relation, rated by name resolution.
+fn rated(confidence: Confidence, rule: Rule) -> Edge {
+    Edge::new(
+        EdgeKind::Calls,
+        Provenance::new(
+            "src/ViewModels/EditorViewModel.cs",
+            Some(1),
+            ExtractorId::from("languages"),
+            Tier::Measured,
+        )
+        .rated(confidence, rule),
+    )
+}
+
+/// Nothing calls a member: none. Called by a `NameOnly` relation alone: weak
+/// only. One `RulesBacked` relation beside it: strong.
+#[test]
+fn a_member_called_by_name_alone_is_weak_and_one_rule_backed_caller_makes_it_strong() {
+    let (mut generated, _) = editor_2b();
+    let refresh = key(EDITOR_MODELS, "EditorViewModel.Refresh()");
+    assert_eq!(
+        callers_of(&generated).class_of(&refresh),
+        CallerClass::Uncalled
+    );
+    assert!(callers_of(&generated).of(&refresh).is_empty());
+
+    let run = key(EDITOR_MODELS, "ExternalCheck.Run()");
+    assert!(generated
+        .graph
+        .add_edge(&run, &refresh, rated(Confidence::NameOnly, Rule::NameMatch)));
+    let callers = callers_of(&generated);
+    assert_eq!(callers.class_of(&refresh), CallerClass::WeakOnly);
+    assert_eq!(caller(&callers, &refresh, &run).grade, Confidence::NameOnly);
+
+    let save = key(EDITOR_VIEWS, "EditorView.Save()");
+    assert!(generated.graph.add_edge(
+        &save,
+        &refresh,
+        rated(Confidence::RulesBacked, Rule::DeclaredReceiver)
+    ));
+    let callers = callers_of(&generated);
+    assert_eq!(callers.class_of(&refresh), CallerClass::Strong);
+    let members: Vec<&NodeKey> = callers.of(&refresh).iter().map(|c| &c.member).collect();
+    assert_eq!(members, [&run, &save]);
+}
+
+/// A name the first layer matched past the ceiling (`Ping: 10 candidates`)
+/// gives every candidate a weak caller — never a member nothing calls, never
+/// a strong one; past the ceiling of shown candidates too.
+#[test]
+fn a_place_over_the_ceiling_makes_its_candidates_weakly_called_not_roots() {
+    let (generated, _) = analyzed(&[("src/Many.cs", MANY)]);
+    let callers = callers_of(&generated);
+    let go = key(MANY_NS, "Caller.Go()");
+    for i in 0..10 {
+        let ping = key(MANY_NS, &format!("A{i}.Ping()"));
+        assert_eq!(callers.class_of(&ping), CallerClass::WeakOnly, "{ping:?}");
+        let c = caller(&callers, &ping, &go);
+        assert_eq!(c.grade, Confidence::Ambiguous);
+        assert!(
+            c.evidence
+                .iter()
+                .any(|e| matches!(&e.via, Via::OverCeiling { name, .. } if name == "Ping")),
+            "{c:?}"
+        );
+    }
+}
+
+/// An access that stopped at two overloads of one arity makes each a weak
+/// caller's candidate — shown, not followed.
+#[test]
+fn an_access_stopped_at_two_overloads_makes_both_weakly_called() {
+    let (generated, _) = editor();
+    let callers = callers_of(&generated);
+    let on_key = key(VIEWS_NS, "EditorView.OnKey(KeyEventArgs)");
+    for overload in ["EditorViewModel.Do(int)", "EditorViewModel.Do(string)"] {
+        let member = key(MODELS_NS, overload);
+        assert_eq!(
+            callers.class_of(&member),
+            CallerClass::WeakOnly,
+            "{overload}"
+        );
+        let c = caller(&callers, &member, &on_key);
+        assert!(
+            c.evidence.iter().any(
+                |e| matches!(&e.via, Via::Candidate(s) if s.last && s.call == Some(1))
+                    && e.grade == Confidence::Ambiguous
+            ),
+            "{overload}: {c:?}"
+        );
+    }
+}
+
+/// Two builds of the index over one graph — and over a second run of the
+/// same repository — are equal, the members and each member's callers in key
+/// order.
+#[test]
+fn two_builds_of_the_index_are_equal_and_in_key_order() {
+    let (generated, _) = editor_2b();
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let links = Links::new(&ix, DEFAULT_AMBIGUITY_CEILING);
+    let first = Callers::new(&generated.graph, &links);
+    assert_eq!(first, Callers::new(&generated.graph, &links));
+    let (again, _) = editor_2b();
+    assert_eq!(first, callers_of(&again));
+
+    let members: Vec<&NodeKey> = first.members().collect();
+    assert!(members.windows(2).all(|w| w[0] < w[1]), "{members:?}");
+    for m in &members {
+        let of: Vec<&NodeKey> = first.of(m).iter().map(|c| &c.member).collect();
+        assert!(of.windows(2).all(|w| w[0] < w[1]), "{m:?}: {of:?}");
+    }
+}
+
+// ---- U4: results and the state from outside ----
+
+/// The results of the type `ty` in a run.
+fn type_results(generated: &Generated, analysis: &Analysis, ty: &NodeKey) -> TypeResults {
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let links = Links::new(&ix, DEFAULT_AMBIGUITY_CEILING);
+    let callers = Callers::new(&generated.graph, &links);
+    FlowResults::new(&generated.graph, &links, &callers).of_type(type_of(analysis, ty))
+}
+
+/// The member part of a key (`EditorViewModel.Errors`).
+fn short(k: &NodeKey) -> &str {
+    k.as_str().rsplit_once('#').map_or(k.as_str(), |(_, m)| m)
+}
+
+fn value(v: &Option<Constant>) -> String {
+    match v {
+        Some(Constant::Boolean(b)) => format!(" = {b}"),
+        Some(Constant::Number(n)) => format!(" = {n}"),
+        Some(Constant::Null) => " = null".to_string(),
+        None => String::new(),
+    }
+}
+
+/// A result as a line: its kind, what it is of, the value written.
+fn describe(r: &FlowResult) -> String {
+    match &r.kind {
+        ResultKind::NotifiesChange { target, value: v } => {
+            format!("notifies {}{}", short(target), value(v))
+        }
+        ResultKind::RaisesEvent { event, subscribers } => {
+            format!("raises {} ({subscribers})", short(event))
+        }
+        ResultKind::ReadElsewhere {
+            target,
+            value: v,
+            mutation,
+            ..
+        } => format!(
+            "read elsewhere {}{}{}",
+            short(target),
+            value(v),
+            if *mutation { " (changed)" } else { "" }
+        ),
+        ResultKind::Database { object, .. } => format!("database {}", object.as_str()),
+        ResultKind::Throws => "throws".to_string(),
+        ResultKind::Returns => "returns".to_string(),
+    }
+}
+
+/// The results of `member`'s code, of the functionality that holds it.
+fn results_of<'r>(
+    results: &'r TypeResults,
+    analysis: &Analysis,
+    ty: &NodeKey,
+    member: &NodeKey,
+) -> Vec<&'r FlowResult> {
+    let t = type_of(analysis, ty);
+    let f = t
+        .functionalities
+        .iter()
+        .find(|f| f.members.contains(member))
+        .unwrap_or_else(|| panic!("no functionality holds {member:?}"));
+    results
+        .of(&f.key)
+        .unwrap_or_else(|| panic!("no results of {}", f.key))
+        .of_member(member)
+}
+
+fn described(results: &[&FlowResult]) -> Vec<String> {
+    results.iter().map(|r| describe(r)).collect()
+}
+
+/// AE10: the results of `Check(bool)` are the writes of the properties that
+/// notify their change, then `CheckWasDone = false` at the start and `= true`
+/// at the end — read by `ExternalCheck`, not by the save, which clears the
+/// state itself before it reads it. Each of the three silent returns is a
+/// stopped path on which `CheckWasDone = false` still happens. The context of
+/// the state names `ExternalCheck` as its reader and the save as a writer.
+#[test]
+fn the_results_of_the_check_and_the_state_read_by_the_external_check() {
+    let (generated, analysis) = editor_2b();
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let results = type_results(&generated, &analysis, &vm);
+    let check_bool = key(EDITOR_MODELS, "EditorViewModel.Check(bool)");
+    let of_check = results_of(&results, &analysis, &vm, &check_bool);
+    assert_eq!(
+        described(&of_check),
+        [
+            "notifies EditorViewModel.Errors",
+            "notifies EditorViewModel.ShowErrors",
+            "notifies EditorViewModel.MessageErrors",
+            "notifies EditorViewModel.SelectedIndex = 0",
+            "read elsewhere EditorViewModel.CheckWasDone = false",
+            "read elsewhere EditorViewModel.CheckWasDone = true",
+        ]
+    );
+    let run = key(EDITOR_MODELS, "ExternalCheck.Run()");
+    let before_save = key(EDITOR_VIEWS, "EditorView.BeforeSave()");
+    for r in &of_check[4..] {
+        let ResultKind::ReadElsewhere { readers, .. } = &r.kind else {
+            unreachable!()
+        };
+        let who: Vec<&NodeKey> = readers.iter().map(|t| &t.member).collect();
+        assert_eq!(who, [&run], "{r:?}");
+    }
+
+    // The three silent returns of `Check(bool)`, each with the write before
+    // it.
+    let f = type_of(&analysis, &vm)
+        .functionalities
+        .iter()
+        .find(|f| f.members.contains(&check_bool))
+        .unwrap();
+    let stops: Vec<&StoppedPath> = results
+        .of(&f.key)
+        .unwrap()
+        .stops
+        .iter()
+        .filter(|s| s.member == check_bool)
+        .collect();
+    let texts: Vec<&str> = stops
+        .iter()
+        .map(|s| match &s.cause {
+            StopCause::Precondition { text, .. } => text.as_str(),
+            StopCause::Dead(_) => "dead",
+        })
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "!canErrors",
+            "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+            "Text == null"
+        ]
+    );
+    for s in &stops {
+        let on_it: Vec<&FlowResult> = s.results.iter().collect();
+        assert_eq!(
+            described(&on_it),
+            ["read elsewhere EditorViewModel.CheckWasDone = false"],
+            "{s:?}"
+        );
+    }
+
+    let state = results
+        .state(&key(EDITOR_MODELS, "EditorViewModel.CheckWasDone"))
+        .expect("CheckWasDone is a state");
+    let readers: Vec<&NodeKey> = state.reads.iter().map(|t| &t.member).collect();
+    assert_eq!(readers, [&run]);
+    let writers: Vec<&NodeKey> = state.writes.iter().map(|t| &t.member).collect();
+    assert_eq!(writers, [&before_save]);
+}
+
+/// AE9: `Executed?.Invoke(…)` in the command class's `Execute` is the result
+/// "raises `Executed`" with the one subscription the corpus makes to it. The
+/// event raised before the class's own guard `evt.Cancel` still happens on
+/// the path that guard stops; the one after it does not.
+#[test]
+fn an_event_the_command_class_raises_is_a_result_with_its_subscribers() {
+    let (generated, analysis) = editor_2b();
+    let command = key(EDITOR_MODELS, "RelayCommand");
+    let results = type_results(&generated, &analysis, &command);
+    let execute = key(EDITOR_MODELS, "RelayCommand.Execute(object)");
+    assert_eq!(
+        described(&results_of(&results, &analysis, &command, &execute)),
+        [
+            "raises RelayCommand.ExecutingStarted (0)",
+            "raises RelayCommand.Executed (1)"
+        ]
+    );
+    let f = type_of(&analysis, &command)
+        .functionalities
+        .iter()
+        .find(|f| f.members.contains(&execute))
+        .unwrap();
+    let cancel = results
+        .of(&f.key)
+        .unwrap()
+        .stops
+        .iter()
+        .find(|s| matches!(&s.cause, StopCause::Precondition { text, .. } if text == "evt.Cancel"))
+        .expect("the cancel guard stops a path");
+    let on_it: Vec<&FlowResult> = cancel.results.iter().collect();
+    assert_eq!(
+        described(&on_it),
+        ["raises RelayCommand.ExecutingStarted (0)"]
+    );
+}
+
+/// Kinds 3 and 4: the save's database object, and the value the external
+/// check returns to its caller.
+#[test]
+fn the_database_and_a_returned_value_are_results() {
+    let (generated, analysis) = editor_2b();
+    let view = key(EDITOR_VIEWS, "EditorView");
+    let results = type_results(&generated, &analysis, &view);
+    let store = key(EDITOR_VIEWS, "EditorView.Store()");
+    let of_store = results_of(&results, &analysis, &view, &store);
+    assert_eq!(described(&of_store), ["database res:db:dbo.Documents"]);
+    assert!(of_store[0].place.is_none());
+
+    let external = key(EDITOR_MODELS, "ExternalCheck");
+    let results = type_results(&generated, &analysis, &external);
+    let run = key(EDITOR_MODELS, "ExternalCheck.Run()");
+    assert_eq!(
+        described(&results_of(&results, &analysis, &external, &run)),
+        ["returns"]
+    );
+}
+
+/// The negative cases of R6 and KTD6, each beside the case that is a result.
+const EFFECTS: &str = r#"namespace Acme.Effects
+{
+    public class Args { public string Text; }
+
+    public class Sink
+    {
+        public void Take(Args a) { Keep(a.Text); }
+        void Keep(string t) { }
+    }
+
+    public class Cache { }
+
+    public class Worker
+    {
+        private Cache data;
+        public Cache Data { get { if (data == null) data = new Cache(); return data; } }
+        public void Send(Sink s) { var a = new Args(); a.Text = "x"; s.Take(a); }
+        public void Mark(Args a) { a.Text = "y"; }
+        public void Reset() { data = null; }
+        public void Fail() { throw new InvalidOperationException(); }
+        public void Safe() { try { throw new InvalidOperationException(); } catch (InvalidOperationException) { } }
+        public void Guarded(string s) { if (s == null) throw new ArgumentNullException(); var n = s.Length; }
+    }
+
+    public class Reader
+    {
+        public void Show(Worker w) { Use(w.Data); }
+        void Use(Cache c) { }
+    }
+
+    public class Flag { public bool On; public int Value; }
+
+    public class Writer
+    {
+        public void Set(Flag f) { f.Value = 1; }
+    }
+
+    public class Branchy
+    {
+        public void Show(Flag f) { if (f.On) { f.Value = 2; } else { Use(f.Value); } }
+        public void Fresh(Flag f) { f.Value = 3; Use(f.Value); }
+        void Use(int v) { }
+    }
+}
+"#;
+
+const EFFECTS_NS: &str = "sym:csharp:Acme.Effects#";
+
+fn effects() -> (Generated, Analysis) {
+    analyzed(&[("src/Effects.cs", EFFECTS)])
+}
+
+/// The results of `member` of the type `ty` of the effects fixture.
+fn effects_of(generated: &Generated, analysis: &Analysis, ty: &str, member: &str) -> Vec<String> {
+    let ty = key(EFFECTS_NS, ty);
+    let results = type_results(generated, analysis, &ty);
+    described(&results_of(
+        &results,
+        analysis,
+        &ty,
+        &key(EFFECTS_NS, member),
+    ))
+}
+
+/// A write into an object the functionality constructed itself and hands on
+/// is no result; the same write into an object it was given is one.
+#[test]
+fn a_write_into_an_object_the_functionality_built_is_no_result() {
+    let (generated, analysis) = effects();
+    assert!(effects_of(&generated, &analysis, "Worker", "Worker.Send(Sink)").is_empty());
+    assert_eq!(
+        effects_of(&generated, &analysis, "Worker", "Worker.Mark(Args)"),
+        ["read elsewhere Args.Text"]
+    );
+}
+
+/// Resetting a field tagged `lazy-init` is no result, though the getter that
+/// stands for it is read elsewhere.
+#[test]
+fn resetting_a_lazy_init_field_is_no_result() {
+    let (generated, analysis) = effects();
+    let callers = callers_of(&generated);
+    let data = key(EFFECTS_NS, "Worker.Data");
+    assert!(callers
+        .of(&data)
+        .iter()
+        .any(|c| c.member == key(EFFECTS_NS, "Reader.Show(Worker)")));
+    assert!(effects_of(&generated, &analysis, "Worker", "Worker.Reset()").is_empty());
+}
+
+/// A `throw` outside a `try` is a result of kind 4; one inside a `try` with
+/// a `catch` of the same member is not.
+#[test]
+fn a_throw_outside_a_try_is_a_result_and_one_caught_is_not() {
+    let (generated, analysis) = effects();
+    assert_eq!(
+        effects_of(&generated, &analysis, "Worker", "Worker.Fail()"),
+        ["throws"]
+    );
+    assert!(effects_of(&generated, &analysis, "Worker", "Worker.Safe()").is_empty());
+
+    // A guard's own `throw` is what happens on the path it stops.
+    let worker = key(EFFECTS_NS, "Worker");
+    let guarded = key(EFFECTS_NS, "Worker.Guarded(string)");
+    let results = type_results(&generated, &analysis, &worker);
+    assert_eq!(
+        described(&results_of(&results, &analysis, &worker, &guarded)),
+        ["throws"]
+    );
+    let f = type_of(&analysis, &worker)
+        .functionalities
+        .iter()
+        .find(|f| f.members.contains(&guarded))
+        .unwrap();
+    let stop = results
+        .of(&f.key)
+        .unwrap()
+        .stops
+        .iter()
+        .find(|s| s.member == guarded)
+        .expect("the guard stops a path");
+    let on_it: Vec<&FlowResult> = stop.results.iter().collect();
+    assert_eq!(described(&on_it), ["throws"]);
+}
+
+/// A read in one branch of an `if`, after a write only in the other, counts;
+/// a read after an unconditional write at the top level does not.
+#[test]
+fn a_read_after_a_write_in_another_branch_counts() {
+    let (generated, analysis) = effects();
+    let ty = key(EFFECTS_NS, "Writer");
+    let results = type_results(&generated, &analysis, &ty);
+    let set = results_of(
+        &results,
+        &analysis,
+        &ty,
+        &key(EFFECTS_NS, "Writer.Set(Flag)"),
+    );
+    assert_eq!(described(&set), ["read elsewhere Flag.Value = 1"]);
+    let ResultKind::ReadElsewhere { readers, .. } = &set[0].kind else {
+        unreachable!()
+    };
+    let who: Vec<&NodeKey> = readers.iter().map(|t| &t.member).collect();
+    assert_eq!(who, [&key(EFFECTS_NS, "Branchy.Show(Flag)")]);
 }

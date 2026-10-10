@@ -82,6 +82,11 @@ pub struct Candidates {
     pub shown: Vec<NodeKey>,
     /// The candidates past the ceiling, not named.
     pub more: usize,
+    /// The candidates past the ceiling, by key — never shown, never followed:
+    /// kept for the class of a member in the index of callers alone (U1), so a
+    /// member past the ceiling is not taken for one nothing calls.
+    #[serde(skip)]
+    pub past: Vec<NodeKey>,
 }
 
 impl Candidates {
@@ -89,9 +94,17 @@ impl Candidates {
     pub fn capped(mut all: Vec<NodeKey>, ceiling: usize) -> Candidates {
         all.sort();
         all.dedup();
-        let more = all.len().saturating_sub(ceiling);
-        all.truncate(ceiling);
-        Candidates { shown: all, more }
+        let past = all.split_off(ceiling.min(all.len()));
+        Candidates {
+            shown: all,
+            more: past.len(),
+            past,
+        }
+    }
+
+    /// Every candidate by key, shown or past the ceiling.
+    pub fn all(&self) -> impl Iterator<Item = &NodeKey> {
+        self.shown.iter().chain(&self.past)
     }
 
     /// How many candidates there are, shown or not.
@@ -195,6 +208,10 @@ fn names_a_member(path: &AccessPath) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Site {
     pub place: Place,
+    /// The index of the body in its file's `members` — with `place.path`,
+    /// which body `node` is a node of (U1, U4: where a read stands among the
+    /// statements of its body).
+    pub body: usize,
     /// The node of the body it is under.
     pub node: Option<u32>,
     pub path: AccessPath,
@@ -375,6 +392,7 @@ impl<'i, 'a> Links<'i, 'a> {
                 let resolution = self.resolve(member, &scope, &inv.callee, Some(inv.arity), &place);
                 out.push(Site {
                     place,
+                    body: at.index,
                     node: inv.node,
                     path: inv.callee.clone(),
                     mode: None,
@@ -397,6 +415,7 @@ impl<'i, 'a> Links<'i, 'a> {
                 let resolution = self.resolve(member, &scope, &a.target, None, &place);
                 out.push(Site {
                     place,
+                    body: at.index,
                     node: a.node,
                     path: a.target.clone(),
                     mode: Some(a.mode),
@@ -431,6 +450,10 @@ mod tests {
         let none_shown = Candidates::capped(vec![key("a")], 0);
         assert!(none_shown.shown.is_empty());
         assert_eq!(none_shown.more, 1);
+        // The ones past the ceiling are kept, in order, for the caller index.
+        assert_eq!(cut.past, [key("c"), key("d")]);
+        assert_eq!(cut.all().count(), 4);
+        assert!(whole.past.is_empty());
     }
 
     #[test]

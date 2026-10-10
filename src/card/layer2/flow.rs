@@ -748,7 +748,7 @@ impl Loc<'_> {
 }
 
 /// The children of `node`, in source order.
-fn children(body: &MemberBody, node: u32) -> Vec<&BodyNode> {
+pub(crate) fn children(body: &MemberBody, node: u32) -> Vec<&BodyNode> {
     body.nodes
         .iter()
         .skip(node as usize + 1)
@@ -778,7 +778,7 @@ fn carries_condition(n: &BodyNode) -> bool {
 }
 
 /// `return;`: nothing of the model hangs on the node.
-fn is_bare_return(body: &MemberBody, r: &BodyNode) -> bool {
+pub(crate) fn is_bare_return(body: &MemberBody, r: &BodyNode) -> bool {
     r.kind == NodeKind::Return
         && r.returns.is_none()
         && children(body, r.id).is_empty()
