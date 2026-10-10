@@ -8,25 +8,29 @@ The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql)
 
 | Version | File | State |
 |---|---|---|
-| `ra:plugin@0.2.0` | [`wit-v2/extractor.wit`](../wit-v2/extractor.wit) | current: build new plugins against it |
+| `ra:plugin@0.3.0` | [`wit-v3/extractor.wit`](../wit-v3/extractor.wit) | current: build new plugins against it |
+| `ra:plugin@0.2.0` | [`wit-v2/extractor.wit`](../wit-v2/extractor.wit) | frozen, still loaded |
 | `ra:plugin@0.1.0` | [`wit/extractor.wit`](../wit/extractor.wit) | frozen, still loaded |
 
 0.2 keeps everything 0.1 says about what a plugin is, what it is given and what the host does with its output. It adds what the syntax says around each use of a name, so the host's rules can sift the candidates (see [Pass 2](#pass-2-usages)), and where a declaration's name is written. Extending a record is an incompatible type change in the component model, so this is a new version rather than an edit of 0.1.
 
-**A 0.1 plugin keeps working unchanged.** The host offers both contracts' imports to every component and then looks at what it exports: it tries `ra:plugin/extractor` of 0.2 first, then 0.1, and runs the component under the first it finds. A component that exports neither ends the run with a version mismatch that names the versions the host wanted and what the component exports. A 0.1 plugin's output is lifted to the 0.2 shape at the boundary, with no column and no context, which is all 0.1 could say. Its usages are then resolved as before the rules existed: by name only. `examples/plugin-sql` is a 0.1 plugin and the bundled SQL plugin, so every run exercises this path. `coverage.json` reports, per language, the contract its plugin ran under, and counts the plugins per contract version.
+0.3 keeps everything 0.2 says and adds a third pass over a file, `bodies`, and what a declaration could not say before (see [What 0.3 adds](#what-03-adds)). It is a new version for the same reason: extending a record is an incompatible type change.
+
+**A 0.1 or 0.2 plugin keeps working unchanged.** The host offers every contract's imports to every component and then looks at what it exports: it tries `ra:plugin/extractor` of 0.3 first, then 0.2, then 0.1, and runs the component under the first it finds. New plugins should target 0.3; 0.2 and 0.1 plugins need no change. A component that exports none of them ends the run with a version mismatch that names the versions the host wanted and what the component exports. A 0.1 plugin's output is lifted to the 0.2 shape at the boundary, with no column and no context, which is all 0.1 could say. Its usages are then resolved as before the rules existed: by name only. `examples/plugin-sql` is a 0.1 plugin and the bundled SQL plugin, so every run exercises this path. `coverage.json` reports, per language, the contract its plugin ran under, and counts the plugins per contract version.
 
 **Only C# supplies context today.** The other bundled languages except SQL, which stays on 0.1, run under 0.2 but leave `context` empty, so the rules do not run on their usages.
 
 ## The contract
 
-The world exports four functions and imports one:
+The world exports five functions and imports one (`bodies` exists from 0.3 on):
 
 | | Called | Returns |
 |---|---|---|
-| `describe()` | once, at load | a manifest: id, version, languages and their extensions, trust rank |
+| `describe()` | once, at load | a manifest: id, version, languages and their extensions, trust rank (0.3: the passes served and the record kinds emitted) |
 | `declare()` | once, before any file | the plugin's own fact and edge kinds, or none |
 | `declarations(path, source, config)` | once per file, pass 1 | everything the file declares |
 | `usages(path, source)` | once per file, pass 2 | every name the file uses (0.2: with the file's scopes) |
+| `bodies(path, source)` | once per file, pass 3 (0.3) | the bodies of the file's members, as trees |
 | `path-exists(key)` *(host import)* | any time | whether a repository path exists, so an import can be resolved |
 
 The host hands over one file's bytes at a time. A plugin never sees the repository, the graph, the disk or the network.
@@ -115,6 +119,60 @@ A rule may remove a candidate outright, not just dispute it, only with a right t
 
 A kind that is not a core kind is spelled `<namespace>:<name>`. Declare it in `declare()` under a namespace equal to your plugin id. A plugin cannot declare into another plugin's namespace. A kind you emit without declaring it is dropped at the boundary, with a message.
 
+## What 0.3 adds
+
+**Which passes a component serves.** The manifest has two new fields. `passes` lists the passes the component serves (`declarations`, `usages`, `bodies`) for every language it lists; a pass it does not list is never called. `emits` lists the record kinds and tag names the component can report in `bodies` (`subscription`, `key-compare`, `menu-item`…). It says what the component reads, not what the host makes of it, and is empty for a component that does not serve `bodies`. A 0.1 or 0.2 plugin serves exactly `declarations` and `usages` and emits nothing.
+
+The host routes each pair of extension and pass to the first plugin, in precedence order (the `--plugin` arguments, then the bundled ones), that claims the extension and serves the pass. A component that serves only `bodies` therefore never takes a file's declarations or usages from another plugin, and another plugin can read the declarations and usages of the same files.
+
+**Every pass returns a `result`.** `declarations`, `usages` and `bodies` return `result<…, string>`. Return `err` with a short reason when the file cannot be read: it is not well formed, or it is in an encoding the component does not read. The host records the file as failed for that pass, with the reason redacted, in `coverage.json`, and goes on with the same instance. A trap still fails the file, but says nothing about why.
+
+**`declarations` returns `file-declarations`.** Under 0.3 the result is a record, not a list:
+
+- `ops`: what 0.2 returned, with the same meaning;
+- `name-refs` and `blocks`: references by name and the nested blocks they are looked up in (see [References by name](#references-by-name)).
+
+**A symbol has two new fields.**
+
+- `node-kind` is a node kind from the component's own vocabulary, `<namespace>:<name>` (`xaml:style`). The symbol's node is then of that kind and gets the card that kind's policy names (the `card` of its `node-kind-decl` in what `declare()` returns). A kind the vocabulary does not declare, or one under another plugin's namespace, drops the whole symbol group with a message, as an undeclared fact kind drops its fact. `none` is an ordinary symbol, whose kind comes from the `symbol_kind` fact as before.
+- `block` is the index into `file-declarations.blocks` of the innermost block the declaration is written in, or `none` when the file has no such blocks.
+
+## Pass 3: bodies
+
+`bodies(path, source)` returns, for one file, the syntax tree of the bodies of its members, with every node anchored to its lines. It feeds the second, optional layer of a run, enabled by `--detail-level`, which sits beside the graph. Without it the host does not call the pass, and the run is what it was under 0.2. Nothing in this pass becomes a fact of the graph. Only a 0.3 component that lists `bodies` in `passes` is asked for it, and it is not given `config`. (In this revision the host-side reading of the second layer is still being built; the contract below is fixed.)
+
+**Pairing with declarations.** A body is paired with a declaration of the first layer by the position of the declared name. `member-body.name-position` must be exactly the position `declarations` puts in `place.name` for that member. A body with no declaration of its own (an accessor, a local function) carries the position of the member it belongs to or is declared in. A lambda is not a body of its own: it is part of the body it is written in.
+
+**What a file reports.** `file-bodies` holds `types` (`type-shape`: type parameters and bases), `members` (one `member-body` each), `typed-members` and `metas` (`declaration-meta`: modifiers, attributes, tags). A `member-body` holds:
+
+- `nodes`: the body tree, normalized by logic rather than by spelling. `if`/`else if`/`else` and `switch` are both a `choice` of `arm`s; `for`, `foreach`, `while` and `do` are all a `loop`. A node comes before its children, and ids equal indexes;
+- on a node, a `condition` with an expression tree (`expr`, operands before the node that uses them, the last node the root). The host compares and negates conditions over this tree, never over the text. `enum-refs` and `reads` are candidates the host filters;
+- `accesses`: reads, writes, calls, returns and mutations of a member, a local or a parameter, each with an `access-path` (a root of `this`, `base`, `local`, `name` or `expression`, and the segments written after it) and, for a write, the value written;
+- `invocations` and their `argument`s, each value a `value-ref` (a parameter, a path, a lambda, a literal, a construction), with a `flow-target` for where the result goes;
+- `lambdas`, `subscriptions` (`x.E += handler`), `literals` with their `literal-context`, `name-ofs` and `typed-names`;
+- `tags`, on a node, on a body or on a declaration.
+
+[`wit-v3/extractor.wit`](../wit-v3/extractor.wit) documents every record and field; read it for the detail.
+
+**Do not filter secrets.** Every text a plugin returns in `bodies` (literal values, condition texts, attribute arguments, tag values) is redacted by the host before it is stored, against the run's secret prefixes. The plugin does not filter and is not given the configuration: one filter, in one place.
+
+**Tags are an open set.** A tag has a `name`, an optional `value` and further `args`. The host reads the tags it knows by name and carries the rest. List the tags you can report in `manifest.emits`.
+
+## References by name
+
+A declaration can refer to another by its name alone (`{StaticResource K}`), when only the whole repository can say which declaration is meant. Report it as a `name-ref` in `file-declarations.name-refs`:
+
+- `source`: the key of the node that refers, a symbol this file declares or the file itself;
+- `name`: the name as the reference spells it;
+- `target-kind`: the node kind it can resolve to, from your vocabulary;
+- `relation`: the edge kind the resolved reference becomes, an edge kind from your vocabulary or `extends`; `none` for a plain reference;
+- `block`: the innermost block the reference is written in, or `none`;
+- `place`.
+
+For a language that looks names up block by block, also list the nested blocks in `file-declarations.blocks`. Each `lookup-block` has its `lines` and the index of its `parent` (`none` for an outermost one). A block is in force over its lines and inside every block nested in it, and the `block` index of a symbol or a reference points into this list.
+
+The contract: the host looks a reference up once every file has been read, nearest block first, and admits what it cannot resolve rather than dropping it. In this revision the host takes in and keeps `name-refs`, `blocks`, each symbol's `block` and its node kind; the lookup itself is still being built, so do not count on a resolved edge yet. A name is redacted like any other text value, so it still matches the declared name it means.
+
 ## The sandbox
 
 | | |
@@ -146,8 +204,8 @@ wit-bindgen = "=0.51.0"
 ```
 
 ```rust
-// `wit-v2` for contract 0.2; `wit` for the frozen 0.1.
-wit_bindgen::generate!({ path: "path/to/wit-v2", world: "language-plugin" });
+// `wit-v3` for contract 0.3; `wit-v2` for 0.2; `wit` for the frozen 0.1.
+wit_bindgen::generate!({ path: "path/to/wit-v3", world: "language-plugin" });
 
 // Only the component exports the interface. A native test build cannot carry
 // the export names, so keep them out of it.
