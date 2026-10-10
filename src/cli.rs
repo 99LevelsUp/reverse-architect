@@ -99,11 +99,13 @@ pub struct Cli {
     #[arg(long)]
     pub model_purpose: bool,
 
-    /// Also read the bodies of the members — the second layer (`1`, `2` or
-    /// `3`, how much of it later cards show). It sits beside the graph and
-    /// changes none of it; the manifest and coverage name the level and the
-    /// component that read the bodies. Off by default: without it the body
-    /// component is not even loaded, and the corpus is what it always was.
+    /// Also read the bodies of the members — the second layer — and render
+    /// it on the C# type cards (`1`, `2` or `3`, how much of it a card
+    /// shows). It sits beside the graph, which it adds one fact to: a file
+    /// whose bodies could not be read is marked `body_extraction_failed`. The
+    /// manifest and coverage name the level and the component that read the
+    /// bodies. Off by default: without it the body component is not even
+    /// loaded, and the corpus is what it always was.
     #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(1..=3))]
     pub detail_level: Option<u8>,
 
