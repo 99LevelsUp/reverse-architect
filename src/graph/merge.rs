@@ -154,6 +154,9 @@ impl FactKind {
             // unmatched-count per file (plan B, U5).
             | FactKind::EnumDecision
             | FactKind::EnumDecisionsUnmatched
+            // One per name a file refers to that nothing declares (plan 2c,
+            // U5): two missing names are two admissions, not one.
+            | FactKind::UnresolvedReference
             | FactKind::DependencyName => Cardinality::Additive,
 
             // Scalar — one resolved value per node.

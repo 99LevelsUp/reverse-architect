@@ -9,6 +9,8 @@
 //! - driving both passes over every file, in parallel, applying in file order;
 //! - resolving the type relations a declaration names (extends, implements)
 //!   once every file has been read, so a base type in another file is found;
+//! - resolving the references by name a 0.3 plugin reports (`name-ref`) at the
+//!   same point, scope by scope (`super::name_ref`);
 //! - the repo-wide `SymbolTable` a usage site resolves against, the ambiguity
 //!   ceiling (R23) and the enclosing-declaration lookup — so every plugin gets
 //!   the same honesty about ambiguous names (implementation note D1);
@@ -47,6 +49,7 @@
 
 use super::cache::CacheStore;
 use super::external::SecretPrefixes;
+use super::name_ref::FileNameRefs;
 use super::resolve::project::{self, ProjectUsings, ProjectUsingsBuilder, UsingsHandoff};
 use super::resolve::rights::{RightsTable, SiteOrigin};
 use super::resolve::rules::Site;
@@ -313,6 +316,8 @@ impl Extractor for Languages {
             FactKind::CandidateCount,
             FactKind::AmbiguousReference,
             FactKind::ExtractionFailed,
+            // A reference by name nothing answers (plan 2c, U5).
+            FactKind::UnresolvedReference,
         ]
     }
 
@@ -426,9 +431,20 @@ impl Extractor for Languages {
             },
         )?;
         flush_type_relations(graph, relations);
-        // Received, stored in the declaration records and carried this far;
-        // resolving them against the whole repository is a later unit's
-        // (plan 2c, U5). Nothing in the graph depends on them yet.
+        // The references by name, against every declaration of the run, the
+        // way the type relations above are (plan 2c, U5). A run whose plugins
+        // report none changes nothing here.
+        super::name_ref::resolve(
+            graph,
+            &name_refs,
+            &names,
+            &tracked,
+            self.ambiguity_ceiling,
+            &|file| {
+                self.plugin_for(file, Pass::Declarations)
+                    .map(|p| ids[p.id()].clone())
+            },
+        );
         drop(name_refs);
 
         // ---- Pass 2: usages ----
@@ -794,15 +810,6 @@ pub(crate) struct FileOutput {
     name_refs: Vec<NameRef>,
     /// The nested blocks `name_refs` and `symbol_blocks` are looked up in.
     blocks: Vec<LookupBlock>,
-}
-
-/// One file's references by name and the blocks they are looked up in,
-/// banked after its declarations are applied.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct FileNameRefs {
-    name_refs: Vec<NameRef>,
-    blocks: Vec<LookupBlock>,
-    symbol_blocks: Vec<(NodeKey, u32)>,
 }
 
 /// [`FileOutput`] as the cache writes it. `relations` needs no twin — a

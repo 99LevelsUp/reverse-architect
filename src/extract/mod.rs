@@ -25,6 +25,7 @@ pub mod ids;
 pub mod languages;
 pub mod manifest_deps;
 pub mod metrics;
+mod name_ref;
 pub mod readme;
 mod reconcile;
 pub mod resolve;

@@ -1,0 +1,15 @@
+<UserControl x:Class="Acme.Views.ViewB"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <UserControl.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="../Styles/Buttons.xaml" />
+      </ResourceDictionary.MergedDictionaries>
+      <SolidColorBrush x:Key="L" Color="Red" />
+    </ResourceDictionary>
+  </UserControl.Resources>
+  <StackPanel>
+    <Button Style="{StaticResource K}" Background="{StaticResource L}" Foreground="{DynamicResource M}" />
+  </StackPanel>
+</UserControl>

@@ -491,6 +491,7 @@ pub fn fact_word(kind: super::FactKind, vocabulary: &Vocabulary) -> std::borrow:
         F::EnumDecision => "enum_decision".into(),
         F::EnumDecisionsUnmatched => "enum_decisions_unmatched".into(),
         F::BodyExtractionFailed => "body_extraction_failed".into(),
+        F::UnresolvedReference => "unresolved_reference".into(),
         F::Declared(id) => std::borrow::Cow::Owned(
             vocabulary
                 .fact_name(id)
@@ -562,6 +563,7 @@ pub fn fact_kind_from_word(word: &str, vocabulary: &Vocabulary) -> Option<super:
         "enum_decision" => F::EnumDecision,
         "enum_decisions_unmatched" => F::EnumDecisionsUnmatched,
         "body_extraction_failed" => F::BodyExtractionFailed,
+        "unresolved_reference" => F::UnresolvedReference,
         _ => return None,
     })
 }

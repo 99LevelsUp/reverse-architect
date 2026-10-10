@@ -38,13 +38,20 @@ use ra::plugin::types::{
 pub const NAMESPACE: &str = "xaml";
 
 /// The node kinds this plugin declares, each with a card of its own, and
-/// their structural roles.
+/// their structural roles. In `declare()` a kind is named bare (`style`), the
+/// namespace beside it; a symbol's `node-kind` and a reference's
+/// `target-kind` spell it `namespace:name` (`xaml:style`, [`declare::STYLE`]).
+///
+/// Every one is a `definition`: a declaration inside a file. The role places
+/// a node in the host's backbone views, not in a hierarchy of XAML: a
+/// `container` is a module of the directory tree, whose key must be a
+/// `/`-path with a node at every level, and a `leaf` is file-like.
 pub const NODE_KINDS: [(&str, StructuralRole); 5] = [
-    ("xaml:style", StructuralRole::Container),
-    ("xaml:template", StructuralRole::Container),
-    ("xaml:resource", StructuralRole::Definition),
-    ("xaml:element", StructuralRole::Leaf),
-    ("xaml:view", StructuralRole::Container),
+    ("style", StructuralRole::Definition),
+    ("template", StructuralRole::Definition),
+    ("resource", StructuralRole::Definition),
+    ("element", StructuralRole::Definition),
+    ("view", StructuralRole::Definition),
 ];
 
 // Constructed only by the export glue, which exists only in the component.
@@ -73,7 +80,8 @@ impl Guest for Plugin {
     }
 
     fn declare() -> Option<Vocabulary> {
-        // Every kind gets a card of its own, named like the kind.
+        // Every kind gets a card of its own, named like the kind. Both are
+        // bare names; the host puts them under the namespace.
         Some(Vocabulary {
             namespace: NAMESPACE.into(),
             card_kinds: NODE_KINDS.iter().map(|(k, _)| k.to_string()).collect(),
@@ -158,21 +166,30 @@ mod tests {
             .iter()
             .map(|k| k.name.as_str())
             .collect();
+        // Bare in the vocabulary: the host qualifies them with the namespace,
+        // and refuses a name that carries `:` itself.
+        assert_eq!(kinds, ["style", "template", "resource", "element", "view"]);
+        // …and qualified wherever a symbol or a reference names one.
+        let qualified: Vec<String> = kinds.iter().map(|k| format!("{NAMESPACE}:{k}")).collect();
         assert_eq!(
-            kinds,
+            qualified,
             [
-                "xaml:style",
-                "xaml:template",
-                "xaml:resource",
-                "xaml:element",
-                "xaml:view"
+                declare::STYLE,
+                declare::TEMPLATE,
+                declare::RESOURCE,
+                declare::ELEMENT,
+                declare::VIEW
             ]
         );
         for kind in &vocabulary.node_kinds {
             let card = kind.card.as_deref().expect("a card policy");
             assert!(vocabulary.card_kinds.iter().any(|c| c == card), "{card}");
-            assert!(kind.name.starts_with("xaml:"));
+            assert!(!kind.name.contains(':') && !card.contains(':'), "{card}");
+            // Declarations inside a file: no module of the tree, nothing
+            // file-like.
+            assert_eq!(kind.role, StructuralRole::Definition, "{}", kind.name);
         }
+        assert!(vocabulary.card_kinds.iter().all(|c| !c.contains(':')));
         assert!(vocabulary.edge_kinds.is_empty() && vocabulary.fact_kinds.is_empty());
     }
 

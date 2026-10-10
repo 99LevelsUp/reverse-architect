@@ -117,7 +117,7 @@ A rule may remove a candidate outright, not just dispute it, only with a right t
 
 ### Kinds of your own
 
-A kind that is not a core kind is spelled `<namespace>:<name>`. Declare it in `declare()` under a namespace equal to your plugin id. A plugin cannot declare into another plugin's namespace. A kind you emit without declaring it is dropped at the boundary, with a message.
+A kind that is not a core kind is spelled `<namespace>:<name>`. Declare it in `declare()` under a namespace equal to your plugin id. In `declare()` every name is bare (a node kind `style`, its card kind `style`, the namespace `xaml` beside them; a name holding `:` is refused and the plugin does not load), while a symbol's `node-kind` and a reference's `target-kind` spell the same kind with its namespace (`xaml:style`). A plugin cannot declare into another plugin's namespace. A kind you emit without declaring it is dropped at the boundary, with a message.
 
 ## What 0.3 adds
 
@@ -139,7 +139,7 @@ The host routes each pair of extension and pass to the first plugin, in preceden
 
 ## Pass 3: bodies
 
-`bodies(path, source)` returns, for one file, the syntax tree of the bodies of its members, with every node anchored to its lines. It feeds the second, optional layer of a run, enabled by `--detail-level`, which sits beside the graph. Without it the host does not call the pass, and the run is what it was under 0.2. Nothing in this pass becomes a fact of the graph. Only a 0.3 component that lists `bodies` in `passes` is asked for it, and it is not given `config`. (In this revision the host-side reading of the second layer is still being built; the contract below is fixed.)
+`bodies(path, source)` returns, for one file, the syntax tree of the bodies of its members, with every node anchored to its lines. It feeds the second, optional layer of a run, enabled by `--detail-level`, which sits beside the graph. Without it the host does not call the pass, and the run is what it was under 0.2. Nothing in this pass becomes a fact of the graph. Only a 0.3 component that lists `bodies` in `passes` is asked for it, and it is not given `config`. With `--detail-level`, the host pairs the model with the first layer's declarations, analyzes it and shows it on the cards of C# types.
 
 **Pairing with declarations.** A body is paired with a declaration of the first layer by the position of the declared name. `member-body.name-position` must be exactly the position `declarations` puts in `place.name` for that member. A body with no declaration of its own (an accessor, a local function) carries the position of the member it belongs to or is declared in. A lambda is not a body of its own: it is part of the body it is written in.
 
@@ -171,7 +171,7 @@ A declaration can refer to another by its name alone (`{StaticResource K}`), whe
 
 For a language that looks names up block by block, also list the nested blocks in `file-declarations.blocks`. Each `lookup-block` has its `lines` and the index of its `parent` (`none` for an outermost one). A block is in force over its lines and inside every block nested in it, and the `block` index of a symbol or a reference points into this list.
 
-The contract: the host looks a reference up once every file has been read, nearest block first, and admits what it cannot resolve rather than dropping it. In this revision the host takes in and keeps `name-refs`, `blocks`, each symbol's `block` and its node kind; the lookup itself is still being built, so do not count on a resolved edge yet. A name is redacted like any other text value, so it still matches the declared name it means.
+The contract: the host looks a reference up once every file has been read and admits what it cannot resolve rather than dropping it. The first scope that holds a declaration of that name and kind decides: the reference's block and its parents, the same file, the files it imports (transitively), the files of the same project (the nearest directory with a project file), and last the whole repository. The first four give a rules-backed edge, the last a name-only one. Several candidates in the deciding scope give an ambiguous edge to each, unless their files are variants of one another (the same relative path under sibling project roots, or the same set of top-level names), when each gets an edge of its own. A reference that resolves nowhere becomes an `unresolved_reference` fact on its file. A target kind `xaml:resource` also matches styles and templates, because `{StaticResource K}` does not say which one `K` is. A name is redacted like any other text value, so it still matches the declared name it means.
 
 ## The sandbox
 
