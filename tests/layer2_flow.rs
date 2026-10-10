@@ -371,10 +371,12 @@ fn the_limits_of_2a_hold_and_the_entry_point_admits_the_same_reason() {
     );
     assert_eq!(nested.target(), None);
 
+    // The base outside the repository may declare the name: its members
+    // are not known, so the name is not said to be no member.
     let outer = same("OuterView");
     assert_eq!(
         outer.reason(),
-        Some(&Unresolved::NotAMember("viewModel".into()))
+        Some(&Unresolved::ExternalType("ForeignView".into()))
     );
     assert_eq!(outer.target(), None);
 
@@ -778,6 +780,60 @@ fn a_call_of_an_event_no_constructor_writes_is_marked_as_raised() {
     assert_eq!(raised[0].field, key(COMMANDS_NS, "RelayCommand.Executed"));
     assert_eq!(raised[0].place.path, "src/Commands.cs");
     assert!(raised_events(&ix, &key(COMMANDS_NS, "Runner")).is_empty());
+}
+
+/// The common command class stores its parameters behind a null guard
+/// (`_execute = execute ?? throw …`): the fields are written from the
+/// parameters, so the construction binds them and nothing is raised.
+#[test]
+fn a_parameter_stored_behind_a_null_guard_is_bound_and_raises_nothing() {
+    let src = r#"namespace Acme.Guarded
+{
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        private readonly Predicate<object> _canExecute;
+        public RelayCommand(Action<object> execute, Predicate<object> canExecute)
+        {
+            _execute = execute ?? throw new ArgumentNullException(nameof(execute));
+            _canExecute = canExecute ?? throw new ArgumentNullException(nameof(canExecute));
+        }
+        public bool CanExecute(object parameter) { return _canExecute(parameter); }
+        public void Execute(object parameter) { _execute(parameter); }
+    }
+
+    public class Panel
+    {
+        public RelayCommand CheckCommand => new RelayCommand(p => Check(), p => Ready());
+        void Check() { }
+        bool Ready() { return true; }
+    }
+}
+"#;
+    let ns = "sym:csharp:Acme.Guarded#";
+    let (generated, _) = analyzed(&[("src/Guarded.cs", src)]);
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let command = key(ns, "RelayCommand");
+    assert_eq!(raised_events(&ix, &command), []);
+    let links = Links::new(&ix, DEFAULT_AMBIGUITY_CEILING);
+    let site = bindings_of(&links, &key(ns, "Panel"))
+        .into_iter()
+        .find(|s| s.member == key(ns, "Panel.CheckCommand"))
+        .expect("the construction in CheckCommand");
+    let binding = site.binding.expect("bound");
+    assert!(binding.raises.is_empty(), "{:?}", binding.raises);
+    let fields: Vec<(u32, &str)> = binding
+        .slots
+        .iter()
+        .map(|s| (s.position, s.field.as_str()))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            (0, format!("{ns}RelayCommand._execute").as_str()),
+            (1, format!("{ns}RelayCommand._canExecute").as_str()),
+        ]
+    );
 }
 
 /// The entry point of 2a and the binding of 2b lead to the same target, by

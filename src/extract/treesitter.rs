@@ -395,15 +395,9 @@ impl Extractor for Languages {
                                     &self.secret_prefixes,
                                 ),
                                 Err(e) => {
-                                    // A 0.3 plugin's own reason is in the
-                                    // text: redacted, as coverage stores it.
                                     eprintln!(
                                         "{}",
-                                        super::external::redact_secret_block(
-                                            &e.to_string(),
-                                            &self.secret_prefixes
-                                        )
-                                        .0
+                                        redacted_reason(&e.to_string(), &self.secret_prefixes)
                                     );
                                     FileOutput::failed_because(
                                         key,
@@ -517,15 +511,9 @@ impl Extractor for Languages {
                                     out
                                 }
                                 Err(e) => {
-                                    // A 0.3 plugin's own reason is in the
-                                    // text: redacted, as coverage stores it.
                                     eprintln!(
                                         "{}",
-                                        super::external::redact_secret_block(
-                                            &e.to_string(),
-                                            &self.secret_prefixes
-                                        )
-                                        .0
+                                        redacted_reason(&e.to_string(), &self.secret_prefixes)
                                     );
                                     FileOutput::failed_because(
                                         key,
@@ -932,6 +920,13 @@ impl super::walk::WalkOutput for FileOutput {
     }
 }
 
+/// What a plugin says about a failure, redacted as coverage stores it: a
+/// 0.3 plugin's own reason is in the text, and it reaches both the run's
+/// error output and the file's `ExtractionFailed` fact.
+fn redacted_reason(text: &str, prefixes: &SecretPrefixes) -> String {
+    super::external::redact_secret_block(text, prefixes).0
+}
+
 impl FileOutput {
     /// The output of a file the plugin failed on: nothing but the statement
     /// that it failed, in which pass and why.
@@ -942,7 +937,7 @@ impl FileOutput {
         reason: &str,
         prefixes: &SecretPrefixes,
     ) -> FileOutput {
-        let reason = super::external::redact_secret_block(reason, prefixes).0;
+        let reason = redacted_reason(reason, prefixes);
         let mut out = FileOutput {
             failed: true,
             ..FileOutput::default()

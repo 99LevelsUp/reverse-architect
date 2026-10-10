@@ -49,7 +49,9 @@
 //! an empty method body, or an arm under `if (false)` — only in a member that
 //! **guards** something ([`Guarding`]): one read in a condition of the type,
 //! the target of a CanExecute delegate (or the delegate's own lambda), or one
-//! an entry point calls. Constant members that guard nothing are not listed.
+//! an entry point calls. Constant members that guard nothing are not listed,
+//! and neither is the constant or empty body of a member a deriving type may
+//! replace (`virtual`, `abstract`, an `override` that is not `sealed`).
 //!
 //! # States (KTD13 5, R6)
 //!
@@ -202,7 +204,7 @@ pub enum Cond {
     Other(String),
 }
 
-fn constant_text(c: &Constant) -> String {
+pub(in crate::card) fn constant_text(c: &Constant) -> String {
     match c {
         Constant::Boolean(b) => b.to_string(),
         Constant::Null => "null".to_string(),
@@ -422,7 +424,7 @@ fn path_text(root: Root, segments: &[String]) -> String {
 }
 
 /// An access path as written (`this.viewModel.Check`).
-fn written(p: &AccessPath) -> String {
+pub(in crate::card) fn written(p: &AccessPath) -> String {
     let joined = p.segments.join(".");
     match p.root {
         PathRoot::This if joined.is_empty() => "this".to_string(),
@@ -1089,6 +1091,15 @@ fn guard(
     }
 }
 
+/// Whether a deriving type may replace `member`'s body: it is `virtual` or
+/// `abstract`, or an `override` that is not `sealed`, on some part.
+fn overridable(ix: &Index<'_>, member: &NodeKey) -> bool {
+    ix.layer.metas_of(member).iter().any(|(_, meta)| {
+        let has = |word: &str| meta.modifiers.iter().any(|m| m == word);
+        has("virtual") || has("abstract") || (has("override") && !has("sealed"))
+    })
+}
+
 /// Whether a bound delegate is the command's CanExecute (see the module
 /// docs).
 fn is_can_execute(ix: &Index<'_>, d: &BoundDelegate) -> bool {
@@ -1118,12 +1129,8 @@ enum Callee {
 }
 
 impl<'a, 'l> Flow<'a, 'l> {
-    fn owner(&self, m: &NodeKey) -> Option<&NodeKey> {
-        self.ix.symbol(m).and_then(|s| s.owner.as_ref())
-    }
-
     fn own(&self, m: &NodeKey) -> bool {
-        self.owner(m) == Some(self.ty)
+        self.ix.owner_of(m) == Some(self.ty)
     }
 
     fn body_at<'p>(&self, path: &'p str, index: usize) -> Option<Loc<'p>>
@@ -1489,8 +1496,7 @@ struct States {
 
 impl<'a, 'l> Flow<'a, 'l> {
     fn local(&self, m: &NodeKey) -> bool {
-        self.owner(m)
-            .is_some_and(|o| o == self.ty || self.ancestors.contains(&o))
+        self.ix.declared_along(m, self.ty, &self.ancestors)
     }
 
     /// The own value member an access names directly (`x`, `this.x`).
@@ -1774,6 +1780,9 @@ impl<'a, 'l> Flow<'a, 'l> {
         for (m, why) in self.guarding(functionalities) {
             let kind = ix.symbol(&m).map(|s| s.kind.clone()).unwrap_or_default();
             let guarding: Vec<Guarding> = why.into_iter().collect();
+            // A deriving type may replace the body: what it returns, or that
+            // it does nothing, is not what a call of the member does.
+            let replaceable = overridable(ix, &m);
             let mut found: Vec<(DeadKind, Place)> = Vec::new();
             for pb in ix.layer.bodies_of(&m) {
                 let fits = match (kind.as_str(), pb.body.kind) {
@@ -1790,6 +1799,7 @@ impl<'a, 'l> Flow<'a, 'l> {
                 };
                 let root = pb.body.root;
                 match children(pb.body, root).as_slice() {
+                    _ if replaceable => {}
                     [] if pb.body.kind == BodyKind::Method => {
                         if let Some(r) = pb.body.nodes.get(root as usize) {
                             found.push((DeadKind::EmptyBody, at.place(r.place)));

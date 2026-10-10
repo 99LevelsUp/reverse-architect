@@ -845,213 +845,103 @@ struct Found {
     seed: Seed,
 }
 
-/// Every entry point of `ty` and the uses of its members.
-pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
-    let members: Vec<&NodeKey> = ix
-        .members_of(ty)
-        .iter()
-        .filter(|k| ix.symbol(k).is_some_and(|s| !s.is_type()))
-        .collect();
-    // Regions of the entry points inside a body, by (path, body index): what
-    // the member they are written in does not reach itself.
-    let mut excluded: BTreeMap<(String, usize), BTreeSet<u32>> = BTreeMap::new();
-    let mut found: Vec<Found> = Vec::new();
-    let mut dispatchers: BTreeSet<NodeKey> = BTreeSet::new();
-    // Handlers by member, with their subscriptions.
-    let mut handlers: BTreeMap<NodeKey, Vec<SubscriptionSite>> = BTreeMap::new();
-    let mut commands: BTreeMap<NodeKey, Vec<CommandSite>> = BTreeMap::new();
-    let mut unbound: Vec<UnboundCommand> = Vec::new();
+/// What pass one of [`seeds`] gathers from the bodies of a type's members,
+/// one detector per kind of entry point written in a body: key branches,
+/// menu items, subscriptions and command properties.
+struct SeedCollector<'i, 'l> {
+    ix: &'i Index<'l>,
+    ty: &'i NodeKey,
+    /// Regions of the entry points inside a body, by (path, body index): what
+    /// the member they are written in does not reach itself.
+    excluded: BTreeMap<(String, usize), BTreeSet<u32>>,
+    found: Vec<Found>,
+    /// The members whose bodies hold entry points of their own.
+    dispatchers: BTreeSet<NodeKey>,
+    /// Handlers by member, with their subscriptions.
+    handlers: BTreeMap<NodeKey, Vec<SubscriptionSite>>,
+    commands: BTreeMap<NodeKey, Vec<CommandSite>>,
+    unbound: Vec<UnboundCommand>,
+}
 
-    for &m in &members {
-        for at in bodies(ix, m) {
-            let body = at.body;
-            let place = |range: Range| Place {
-                path: at.path.to_string(),
-                range,
-            };
-            let region = |node: Option<u32>| Region {
-                path: at.path.to_string(),
-                body: at.index,
-                node,
-            };
-            let roots = excluded.entry((at.path.to_string(), at.index)).or_default();
+impl<'i, 'l> SeedCollector<'i, 'l> {
+    fn new(ix: &'i Index<'l>, ty: &'i NodeKey) -> SeedCollector<'i, 'l> {
+        SeedCollector {
+            ix,
+            ty,
+            excluded: BTreeMap::new(),
+            found: Vec::new(),
+            dispatchers: BTreeSet::new(),
+            handlers: BTreeMap::new(),
+            commands: BTreeMap::new(),
+            unbound: Vec::new(),
+        }
+    }
 
-            // Key branches.
-            for node in &body.nodes {
-                for tag in node.tags.iter().filter(|t| t.name == "key-compare") {
-                    let Some(value) = &tag.value else { continue };
-                    let disc = std::iter::once(value.as_str())
-                        .chain(tag.args.iter().map(String::as_str))
-                        .collect::<Vec<_>>()
-                        .join("+");
-                    let mut uses = BTreeSet::new();
-                    let mut targets = Vec::new();
-                    let arm = node.id;
-                    region_uses(
-                        ix,
-                        ty,
-                        at,
-                        &|n| n.is_some_and(|n| within(body, n, arm)),
-                        &mut uses,
-                        &mut targets,
-                    );
-                    roots.insert(arm);
-                    dispatchers.insert(m.clone());
-                    found.push(Found {
-                        base_key: format!("{}#{disc}", m.as_str()),
-                        seed: Seed {
-                            entry: EntryPoint {
-                                key: String::new(),
-                                kind: EntryKind::Key,
-                                member: m.clone(),
-                                discriminator: Some(disc),
-                                regions: vec![region(Some(arm))],
-                                place: Some(place(node.place)),
-                                condition: node.condition.clone(),
-                                modifiers: tag.args.clone(),
-                                menu: None,
-                                subscriptions: Vec::new(),
-                                commands: Vec::new(),
-                                targets,
-                            },
-                            uses,
-                            identity: None,
-                        },
-                    });
-                }
-            }
+    /// Every detector over one body of `m`, in the order its seeds are
+    /// found in — the order a repeated key is numbered by.
+    fn body(&mut self, m: &NodeKey, at: At<'_>) {
+        self.roots(at);
+        self.key_branches(m, at);
+        let labels = self.menu_items(m, at);
+        self.subscriptions(m, at, &labels);
+        self.command_properties(m, at);
+    }
 
-            // Menu items.
-            let items: Vec<(&crate::extract::bodies::BodyNode, String, Option<String>)> = body
-                .nodes
-                .iter()
-                .flat_map(|n| {
-                    n.tags
-                        .iter()
-                        .filter(|t| t.name == "menu-item")
-                        .filter_map(move |t| Some((n, t.value.clone()?, t.args.first().cloned())))
-                })
-                .collect();
-            let labels: BTreeMap<String, Option<Label>> = items
-                .iter()
-                .map(|(_, v, _)| (v.clone(), label_of(body, v)))
-                .collect();
-            for (node, v, type_name) in &items {
-                roots.extend(statements_of(body, v));
+    /// The regions excluded from the body `at`.
+    fn roots(&mut self, at: At<'_>) -> &mut BTreeSet<u32> {
+        self.excluded
+            .entry((at.path.to_string(), at.index))
+            .or_default()
+    }
+
+    /// Key branches.
+    fn key_branches(&mut self, m: &NodeKey, at: At<'_>) {
+        let (ix, ty) = (self.ix, self.ty);
+        let body = at.body;
+        let place = |range: Range| Place {
+            path: at.path.to_string(),
+            range,
+        };
+        let region = |node: Option<u32>| Region {
+            path: at.path.to_string(),
+            body: at.index,
+            node,
+        };
+        for node in &body.nodes {
+            for tag in node.tags.iter().filter(|t| t.name == "key-compare") {
+                let Some(value) = &tag.value else { continue };
+                let disc = std::iter::once(value.as_str())
+                    .chain(tag.args.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join("+");
                 let mut uses = BTreeSet::new();
                 let mut targets = Vec::new();
-                let mut sites = Vec::new();
-                let mut command = None;
-                for a in &body.accesses {
-                    if a.mode != AccessMode::Write || !is_local(&a.target, &[v, "Command"]) {
-                        continue;
-                    }
-                    let scope = Scope {
-                        ty,
-                        body: Some(body),
-                        node: a.node,
-                    };
-                    match &a.rhs {
-                        Some(ValueRef::Access(path)) => {
-                            command = Some(path.clone());
-                            let t = target(ix, ty, &scope, path, a.place, None);
-                            uses.extend(t.member.clone());
-                            targets.push(t);
-                        }
-                        Some(ValueRef::Construction(id)) => {
-                            let Some(inv) = body.invocations.get(*id as usize) else {
-                                continue;
-                            };
-                            match command_site(ix, ty, at, inv, None) {
-                                Some(Ok(site)) => {
-                                    for d in &site.delegates {
-                                        for t in &d.targets {
-                                            uses.extend(t.member.clone());
-                                            targets.push(t.clone());
-                                        }
-                                    }
-                                    sites.push(site);
-                                }
-                                Some(Err((class, reason))) => unbound.push(UnboundCommand {
-                                    member: m.clone(),
-                                    class,
-                                    place: place(inv.place),
-                                    reason,
-                                }),
-                                None => {}
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                let mut clicks = Vec::new();
-                for s in &body.subscriptions {
-                    let from_item = s.source.as_ref().is_some_and(|p| is_local(p, &[v]));
-                    if !from_item || s.mode != SubscriptionMode::Add {
-                        continue;
-                    }
-                    clicks.push(SubscriptionSite {
-                        source: s.source.clone(),
-                        event: s.event.clone(),
-                        place: place(s.place),
-                    });
-                    match &s.handler {
-                        Handler::MethodGroup(path) => {
-                            let scope = Scope {
-                                ty,
-                                body: Some(body),
-                                node: s.node,
-                            };
-                            let t = target(ix, ty, &scope, path, s.place, None);
-                            uses.extend(t.member.clone());
-                            targets.push(t);
-                        }
-                        Handler::Lambda(id) => {
-                            if let Some(l) = body.lambdas.get(*id as usize) {
-                                let root = l.body;
-                                region_uses(
-                                    ix,
-                                    ty,
-                                    at,
-                                    &|n| n.is_some_and(|n| within(body, n, root)),
-                                    &mut uses,
-                                    &mut targets,
-                                );
-                            }
-                        }
-                        Handler::Other => {}
-                    }
-                }
-                if command.is_none() && sites.is_empty() && clicks.is_empty() {
-                    // A submenu: no entry point of its own.
-                    continue;
-                }
-                let submenu = parent_of(body, v).map(|p| SubMenu {
-                    label: labels.get(&p).cloned().flatten(),
-                    variable: p,
-                });
-                dispatchers.insert(m.clone());
-                found.push(Found {
-                    base_key: format!("{}#{v}", m.as_str()),
+                let arm = node.id;
+                region_uses(
+                    ix,
+                    ty,
+                    at,
+                    &|n| n.is_some_and(|n| within(body, n, arm)),
+                    &mut uses,
+                    &mut targets,
+                );
+                self.roots(at).insert(arm);
+                self.dispatchers.insert(m.clone());
+                self.found.push(Found {
+                    base_key: format!("{}#{disc}", m.as_str()),
                     seed: Seed {
                         entry: EntryPoint {
                             key: String::new(),
-                            kind: EntryKind::MenuItem,
+                            kind: EntryKind::Key,
                             member: m.clone(),
-                            discriminator: Some(v.clone()),
-                            regions: vec![region(Some(node.id))],
+                            discriminator: Some(disc),
+                            regions: vec![region(Some(arm))],
                             place: Some(place(node.place)),
-                            condition: None,
-                            modifiers: Vec::new(),
-                            menu: Some(MenuEntry {
-                                variable: v.clone(),
-                                type_name: type_name.clone(),
-                                label: labels.get(v).cloned().flatten(),
-                                submenu,
-                                command,
-                            }),
-                            subscriptions: clicks,
-                            commands: sites,
+                            condition: node.condition.clone(),
+                            modifiers: tag.args.clone(),
+                            menu: None,
+                            subscriptions: Vec::new(),
+                            commands: Vec::new(),
                             targets,
                         },
                         uses,
@@ -1059,46 +949,108 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
                     },
                 });
             }
+        }
+    }
 
-            // Subscriptions (`-=` is the same subscription as its `+=`); a
-            // menu item's own are its own.
-            for s in &body.subscriptions {
-                let of_item = s
-                    .source
-                    .as_ref()
-                    .and_then(local_root)
-                    .is_some_and(|l| labels.contains_key(l));
-                if s.mode != SubscriptionMode::Add || of_item {
+    /// Menu items, and the labels of every item variable of the body.
+    fn menu_items(&mut self, m: &NodeKey, at: At<'_>) -> BTreeMap<String, Option<Label>> {
+        let (ix, ty) = (self.ix, self.ty);
+        let body = at.body;
+        let place = |range: Range| Place {
+            path: at.path.to_string(),
+            range,
+        };
+        let region = |node: Option<u32>| Region {
+            path: at.path.to_string(),
+            body: at.index,
+            node,
+        };
+        let items: Vec<(&crate::extract::bodies::BodyNode, String, Option<String>)> = body
+            .nodes
+            .iter()
+            .flat_map(|n| {
+                n.tags
+                    .iter()
+                    .filter(|t| t.name == "menu-item")
+                    .filter_map(move |t| Some((n, t.value.clone()?, t.args.first().cloned())))
+            })
+            .collect();
+        let labels: BTreeMap<String, Option<Label>> = items
+            .iter()
+            .map(|(_, v, _)| (v.clone(), label_of(body, v)))
+            .collect();
+        for (node, v, type_name) in &items {
+            self.roots(at).extend(statements_of(body, v));
+            let mut uses = BTreeSet::new();
+            let mut targets = Vec::new();
+            let mut sites = Vec::new();
+            let mut command = None;
+            for a in &body.accesses {
+                if a.mode != AccessMode::Write || !is_local(&a.target, &[v, "Command"]) {
                     continue;
                 }
-                let site = SubscriptionSite {
-                    source: s.source.clone(),
-                    event: s.event.clone(),
-                    place: place(s.place),
-                };
                 let scope = Scope {
                     ty,
                     body: Some(body),
-                    node: s.node,
+                    node: a.node,
                 };
-                let own_handler = match &s.handler {
-                    Handler::MethodGroup(path) => {
-                        let t = target(ix, ty, &scope, path, s.place, None);
-                        match t.member {
-                            Some(h)
-                                if ix.symbol(&h).is_some_and(|x| {
-                                    x.is_method() && x.owner.as_ref() == Some(ty)
-                                }) =>
-                            {
-                                Ok(h)
+                match &a.rhs {
+                    Some(ValueRef::Access(path)) => {
+                        command = Some(path.clone());
+                        let t = target(ix, ty, &scope, path, a.place, None);
+                        uses.extend(t.member.clone());
+                        targets.push(t);
+                    }
+                    Some(ValueRef::Construction(id)) => {
+                        let Some(inv) = body.invocations.get(*id as usize) else {
+                            continue;
+                        };
+                        match command_site(ix, ty, at, inv, None) {
+                            Some(Ok(site)) => {
+                                for d in &site.delegates {
+                                    for t in &d.targets {
+                                        uses.extend(t.member.clone());
+                                        targets.push(t.clone());
+                                    }
+                                }
+                                sites.push(site);
                             }
-                            _ => Err(Some(t)),
+                            Some(Err((class, reason))) => self.unbound.push(UnboundCommand {
+                                member: m.clone(),
+                                class,
+                                place: place(inv.place),
+                                reason,
+                            }),
+                            None => {}
                         }
                     }
-                    Handler::Lambda(id) => match body.lambdas.get(*id as usize) {
-                        Some(l) => {
-                            let mut uses = BTreeSet::new();
-                            let mut targets = Vec::new();
+                    _ => {}
+                }
+            }
+            let mut clicks = Vec::new();
+            for s in &body.subscriptions {
+                let from_item = s.source.as_ref().is_some_and(|p| is_local(p, &[v]));
+                if !from_item || s.mode != SubscriptionMode::Add {
+                    continue;
+                }
+                clicks.push(SubscriptionSite {
+                    source: s.source.clone(),
+                    event: s.event.clone(),
+                    place: place(s.place),
+                });
+                match &s.handler {
+                    Handler::MethodGroup(path) => {
+                        let scope = Scope {
+                            ty,
+                            body: Some(body),
+                            node: s.node,
+                        };
+                        let t = target(ix, ty, &scope, path, s.place, None);
+                        uses.extend(t.member.clone());
+                        targets.push(t);
+                    }
+                    Handler::Lambda(id) => {
+                        if let Some(l) = body.lambdas.get(*id as usize) {
                             let root = l.body;
                             region_uses(
                                 ix,
@@ -1108,67 +1060,203 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
                                 &mut uses,
                                 &mut targets,
                             );
-                            roots.insert(root);
-                            found.push(Found {
-                                base_key: format!("{}#{}", m.as_str(), s.event),
-                                seed: lambda_handler(
-                                    m,
-                                    s.event.clone(),
-                                    region(Some(root)),
-                                    site.clone(),
-                                    uses,
-                                    targets,
-                                ),
-                            });
-                            continue;
                         }
-                        None => continue,
+                    }
+                    Handler::Other => {}
+                }
+            }
+            if command.is_none() && sites.is_empty() && clicks.is_empty() {
+                // A submenu: no entry point of its own.
+                continue;
+            }
+            let submenu = parent_of(body, v).map(|p| SubMenu {
+                label: labels.get(&p).cloned().flatten(),
+                variable: p,
+            });
+            self.dispatchers.insert(m.clone());
+            self.found.push(Found {
+                base_key: format!("{}#{v}", m.as_str()),
+                seed: Seed {
+                    entry: EntryPoint {
+                        key: String::new(),
+                        kind: EntryKind::MenuItem,
+                        member: m.clone(),
+                        discriminator: Some(v.clone()),
+                        regions: vec![region(Some(node.id))],
+                        place: Some(place(node.place)),
+                        condition: None,
+                        modifiers: Vec::new(),
+                        menu: Some(MenuEntry {
+                            variable: v.clone(),
+                            type_name: type_name.clone(),
+                            label: labels.get(v).cloned().flatten(),
+                            submenu,
+                            command,
+                        }),
+                        subscriptions: clicks,
+                        commands: sites,
+                        targets,
                     },
-                    Handler::Other => continue,
-                };
-                match own_handler {
-                    Ok(h) => handlers.entry(h).or_default().push(site),
-                    Err(t) => {
-                        // A handler of another object: the subscription is
-                        // the entry point.
-                        let mut uses = BTreeSet::new();
-                        let targets: Vec<Target> = t.into_iter().collect();
-                        for t in &targets {
-                            uses.extend(t.member.clone());
+                    uses,
+                    identity: None,
+                },
+            });
+        }
+        labels
+    }
+
+    /// Subscriptions (`-=` is the same subscription as its `+=`); a menu
+    /// item's own are its own.
+    fn subscriptions(&mut self, m: &NodeKey, at: At<'_>, labels: &BTreeMap<String, Option<Label>>) {
+        let (ix, ty) = (self.ix, self.ty);
+        let body = at.body;
+        let place = |range: Range| Place {
+            path: at.path.to_string(),
+            range,
+        };
+        let region = |node: Option<u32>| Region {
+            path: at.path.to_string(),
+            body: at.index,
+            node,
+        };
+        for s in &body.subscriptions {
+            let of_item = s
+                .source
+                .as_ref()
+                .and_then(local_root)
+                .is_some_and(|l| labels.contains_key(l));
+            if s.mode != SubscriptionMode::Add || of_item {
+                continue;
+            }
+            let site = SubscriptionSite {
+                source: s.source.clone(),
+                event: s.event.clone(),
+                place: place(s.place),
+            };
+            let scope = Scope {
+                ty,
+                body: Some(body),
+                node: s.node,
+            };
+            let own_handler = match &s.handler {
+                Handler::MethodGroup(path) => {
+                    let t = target(ix, ty, &scope, path, s.place, None);
+                    match t.member {
+                        Some(h)
+                            if ix
+                                .symbol(&h)
+                                .is_some_and(|x| x.is_method() && x.owner.as_ref() == Some(ty)) =>
+                        {
+                            Ok(h)
                         }
-                        found.push(Found {
+                        _ => Err(Some(t)),
+                    }
+                }
+                Handler::Lambda(id) => match body.lambdas.get(*id as usize) {
+                    Some(l) => {
+                        let mut uses = BTreeSet::new();
+                        let mut targets = Vec::new();
+                        let root = l.body;
+                        region_uses(
+                            ix,
+                            ty,
+                            at,
+                            &|n| n.is_some_and(|n| within(body, n, root)),
+                            &mut uses,
+                            &mut targets,
+                        );
+                        self.roots(at).insert(root);
+                        self.found.push(Found {
                             base_key: format!("{}#{}", m.as_str(), s.event),
                             seed: lambda_handler(
                                 m,
                                 s.event.clone(),
-                                region(s.node),
-                                site,
+                                region(Some(root)),
+                                site.clone(),
                                 uses,
                                 targets,
                             ),
                         });
+                        continue;
                     }
-                }
-            }
-
-            // Command properties.
-            for inv in &body.invocations {
-                if !flows_out_of(ix, m, body, inv) {
-                    continue;
-                }
-                match command_site(ix, ty, at, inv, Some(m)) {
-                    Some(Ok(site)) => commands.entry(m.clone()).or_default().push(site),
-                    Some(Err((class, reason))) => unbound.push(UnboundCommand {
-                        member: m.clone(),
-                        class,
-                        place: place(inv.place),
-                        reason,
-                    }),
-                    None => {}
+                    None => continue,
+                },
+                Handler::Other => continue,
+            };
+            match own_handler {
+                Ok(h) => self.handlers.entry(h).or_default().push(site),
+                Err(t) => {
+                    // A handler of another object: the subscription is
+                    // the entry point.
+                    let mut uses = BTreeSet::new();
+                    let targets: Vec<Target> = t.into_iter().collect();
+                    for t in &targets {
+                        uses.extend(t.member.clone());
+                    }
+                    self.found.push(Found {
+                        base_key: format!("{}#{}", m.as_str(), s.event),
+                        seed: lambda_handler(
+                            m,
+                            s.event.clone(),
+                            region(s.node),
+                            site,
+                            uses,
+                            targets,
+                        ),
+                    });
                 }
             }
         }
     }
+
+    /// Command properties.
+    fn command_properties(&mut self, m: &NodeKey, at: At<'_>) {
+        let (ix, ty) = (self.ix, self.ty);
+        let body = at.body;
+        let place = |range: Range| Place {
+            path: at.path.to_string(),
+            range,
+        };
+        for inv in &body.invocations {
+            if !flows_out_of(ix, m, body, inv) {
+                continue;
+            }
+            match command_site(ix, ty, at, inv, Some(m)) {
+                Some(Ok(site)) => self.commands.entry(m.clone()).or_default().push(site),
+                Some(Err((class, reason))) => self.unbound.push(UnboundCommand {
+                    member: m.clone(),
+                    class,
+                    place: place(inv.place),
+                    reason,
+                }),
+                None => {}
+            }
+        }
+    }
+}
+
+/// Every entry point of `ty` and the uses of its members.
+pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
+    let members: Vec<&NodeKey> = ix
+        .members_of(ty)
+        .iter()
+        .filter(|k| ix.symbol(k).is_some_and(|s| !s.is_type()))
+        .collect();
+    let mut collector = SeedCollector::new(ix, ty);
+    for &m in &members {
+        for at in bodies(ix, m) {
+            collector.body(m, at);
+        }
+    }
+    let SeedCollector {
+        excluded,
+        mut found,
+        dispatchers,
+        handlers,
+        mut commands,
+        mut unbound,
+        ..
+    } = collector;
 
     // What each member uses, outside and inside the entry points' regions.
     let mut member_uses: BTreeMap<NodeKey, BTreeSet<NodeKey>> = BTreeMap::new();

@@ -22,8 +22,11 @@
 //! does not declare or declares twice.
 //!
 //! Limits: a written type name is matched by its last segment against the
-//! types the first layer declares, without `using`s or namespaces, so a name
-//! two types share stays unresolved; an overload is chosen by the number of
+//! C# types the first layer declares — every one, a type whose bodies the
+//! second layer could not read too — without `using`s, so a name two types
+//! share stays unresolved; a qualified name (`System.Timers.Timer`) takes
+//! only a type whose namespace and enclosing types end with its qualifier,
+//! and is external otherwise. An overload is chosen by the number of
 //! arguments only, optional parameters not counted.
 
 use super::link::Basis;
@@ -33,6 +36,9 @@ use crate::extract::bodies::{
 use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, NodeKind, SiteId};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+
+/// What the key of a first-layer C# symbol starts with.
+const CSHARP_KEYS: &str = "sym:csharp:";
 
 /// The symbol kinds of a type.
 const TYPE_KINDS: &[&str] = &["class", "struct", "record", "interface", "enum"];
@@ -49,7 +55,8 @@ pub enum Unresolved {
     /// The access starts at an expression the syntax cannot name
     /// (`Lookup().CheckCommand`).
     NoReceiverChain,
-    /// The type in hand and its base declare no member of this name.
+    /// Neither the type in hand nor any type it derives from in the
+    /// repository declares a member of this name.
     NotAMember(String),
     /// The name is declared only further up than one level of inheritance.
     BeyondOneLevel(String),
@@ -61,7 +68,9 @@ pub enum Unresolved {
     AmbiguousLocal(String),
     /// The member states no type, or its parts state different ones.
     UntypedMember(NodeKey),
-    /// The repository declares no type of this name.
+    /// The repository declares no type of this name — a written type, or
+    /// the base a type's base list names outside the repository, which a
+    /// name no type of the repository declares may be a member of.
     ExternalType(String),
     /// The repository declares several types of this name.
     AmbiguousType(String),
@@ -124,7 +133,11 @@ pub struct Index<'a> {
     pub layer: &'a BodyLayer,
     symbols: BTreeMap<NodeKey, Symbol>,
     members: BTreeMap<NodeKey, Vec<NodeKey>>,
+    /// Every C# type of the first layer by name — a type in a file whose
+    /// bodies were not read too, so that a name it shares stays ambiguous.
     types_named: BTreeMap<String, Vec<NodeKey>>,
+    /// The C# types the second layer read a part of, sorted by key.
+    read_types: Vec<NodeKey>,
     bases: BTreeMap<NodeKey, Vec<NodeKey>>,
     /// The members of the C# types by name, each list sorted by key: the
     /// candidates an access that stopped at a name is shown with (step 2b,
@@ -204,15 +217,19 @@ impl<'a> Index<'a> {
             list.dedup();
         }
         let mut types_named: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
+        let mut read_types: Vec<NodeKey> = Vec::new();
         for (key, s) in &symbols {
-            if s.is_type() && is_csharp(layer, key) {
+            if s.is_type() && key.as_str().starts_with(CSHARP_KEYS) {
                 types_named
                     .entry(s.name.clone())
                     .or_default()
                     .push(key.clone());
+                if is_csharp(layer, key) {
+                    read_types.push(key.clone());
+                }
             }
         }
-        let csharp: BTreeSet<&NodeKey> = types_named.values().flatten().collect();
+        let csharp: BTreeSet<&NodeKey> = read_types.iter().collect();
         let mut members_named: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
         for (key, s) in &symbols {
             if !s.is_type() && s.owner.as_ref().is_some_and(|o| csharp.contains(o)) {
@@ -227,6 +244,7 @@ impl<'a> Index<'a> {
             symbols,
             members,
             types_named,
+            read_types,
             bases,
             members_named,
             indexed,
@@ -256,6 +274,19 @@ impl<'a> Index<'a> {
         self.symbols.get(key)
     }
 
+    /// The type that declares `member` (`HasMember`).
+    pub fn owner_of(&self, member: &NodeKey) -> Option<&NodeKey> {
+        self.symbol(member).and_then(|s| s.owner.as_ref())
+    }
+
+    /// Whether `member` is declared by `ty` or by one of `ancestors` —
+    /// `ty`'s line of bases ([`Index::ancestors`]): a member `ty` has, its
+    /// own or inherited.
+    pub fn declared_along(&self, member: &NodeKey, ty: &NodeKey, ancestors: &[&NodeKey]) -> bool {
+        self.owner_of(member)
+            .is_some_and(|o| o == ty || ancestors.contains(&o))
+    }
+
     /// The name a symbol is declared with, or the key when it has none.
     pub fn name_of<'k>(&'k self, key: &'k NodeKey) -> &'k str {
         self.symbol(key).map_or(key.as_str(), |s| s.name.as_str())
@@ -269,12 +300,7 @@ impl<'a> Index<'a> {
     /// Every C# type the analysis reads: one whose parts were read by the
     /// second layer, sorted by key.
     pub fn csharp_types(&self) -> Vec<&NodeKey> {
-        self.types_named
-            .values()
-            .flatten()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+        self.read_types.iter().collect()
     }
 
     /// The base type of `ty` in the repository: `None` when it has none
@@ -302,15 +328,51 @@ impl<'a> Index<'a> {
         out
     }
 
-    /// The type a written name names: the one type of the repository with
-    /// that last segment.
+    /// The type a written name names: the one C# type of the repository
+    /// with that last segment — for a qualified name (`System.Timers.Timer`)
+    /// the one whose namespace and enclosing types end with the qualifier.
     pub fn type_named(&self, written: &str) -> Result<NodeKey, Unresolved> {
-        let last = written.rsplit('.').next().unwrap_or(written);
-        match self.types_named.get(last).map(Vec::as_slice) {
-            None | Some([]) => Err(Unresolved::ExternalType(written.to_string())),
-            Some([one]) => Ok(one.clone()),
-            Some(_) => Err(Unresolved::AmbiguousType(written.to_string())),
+        let bare = written.strip_prefix("global::").unwrap_or(written);
+        let (qualifier, last) = match bare.rsplit_once('.') {
+            Some((qualifier, last)) => (Some(qualifier), last),
+            None => (None, bare),
+        };
+        let named: Vec<&NodeKey> = self
+            .types_named
+            .get(last)
+            .into_iter()
+            .flatten()
+            .filter(|key| match qualifier {
+                Some(qualifier) => qualified_by(key, qualifier),
+                None => true,
+            })
+            .collect();
+        match named.as_slice() {
+            [] => Err(Unresolved::ExternalType(written.to_string())),
+            [one] => Ok((*one).clone()),
+            _ => Err(Unresolved::AmbiguousType(written.to_string())),
         }
+    }
+
+    /// Why a name no type of `ty`'s line of bases declares cannot be said
+    /// to be no member: `ty`'s base is ambiguous, or the first entry of a
+    /// base list of it — the base class, when it has one — names a type the
+    /// repository does not declare (`MainView : Window`), whose members are
+    /// not known.
+    fn beyond_repository(&self, ty: &NodeKey) -> Option<Unresolved> {
+        if let Err(why) = self.base_of(ty) {
+            return Some(why);
+        }
+        self.layer
+            .type_shapes_of(ty)
+            .into_iter()
+            .filter_map(|(_, shape)| shape.bases.first())
+            .find_map(|entry| match self.type_named(&entry.base.join(".")) {
+                Err(why @ (Unresolved::ExternalType(_) | Unresolved::AmbiguousType(_))) => {
+                    Some(why)
+                }
+                _ => None,
+            })
     }
 
     /// The number of parameters a method or constructor declares: the
@@ -406,21 +468,31 @@ impl<'a> Index<'a> {
                 });
             }
         }
-        let Some(base) = self.base_of(ty)? else {
-            return Err(Unresolved::NotAMember(name.to_string()));
+        let not_a_member = |last: &NodeKey| {
+            self.beyond_repository(last)
+                .unwrap_or_else(|| Unresolved::NotAMember(name.to_string()))
         };
-        match self.pick(base, name, call)? {
-            Some((member, overloaded)) => Ok(Found {
+        let Some(base) = self.base_of(ty)? else {
+            return Err(not_a_member(ty));
+        };
+        if let Some((member, overloaded)) = self.pick(base, name, call)? {
+            return Ok(Found {
                 member,
                 owner: base.clone(),
                 through: Some(ty.clone()),
                 overloaded,
-            }),
-            None if self.ancestors(base).is_empty() => {
-                Err(Unresolved::NotAMember(name.to_string()))
-            }
-            None => Err(Unresolved::BeyondOneLevel(name.to_string())),
+            });
         }
+        // Only a name a type further up declares — once or more — is
+        // declared beyond one level.
+        let ancestors = self.ancestors(base);
+        if ancestors
+            .iter()
+            .any(|a| !matches!(self.pick(a, name, call), Ok(None)))
+        {
+            return Err(Unresolved::BeyondOneLevel(name.to_string()));
+        }
+        Err(not_a_member(ancestors.last().copied().unwrap_or(base)))
     }
 
     /// The one member of `ty` named `name`: for a call, a method by its
@@ -761,6 +833,29 @@ fn names_any(written: &str, params: &[String]) -> bool {
     written
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .any(|word| params.iter().any(|p| p == word))
+}
+
+/// Whether the C# type `key` sits in a namespace and enclosing types whose
+/// dotted path ends with `qualifier` (`Acme.Views#Editor` by `Views` and by
+/// `Acme.Views`); a generic arity or a duplicate's suffix is not part of a
+/// type's name here.
+fn qualified_by(key: &NodeKey, qualifier: &str) -> bool {
+    let Some((namespace, path)) = key
+        .as_str()
+        .strip_prefix(CSHARP_KEYS)
+        .and_then(|rest| rest.split_once('#'))
+    else {
+        return false;
+    };
+    let enclosing = path.rsplit_once('.').map_or("", |(outer, _)| outer);
+    let container: Vec<&str> = namespace
+        .split('.')
+        .chain(enclosing.split('.'))
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.split(['<', '`', '~']).next().unwrap_or(segment))
+        .collect();
+    let container = container.join(".");
+    container == qualifier || container.ends_with(&format!(".{qualifier}"))
 }
 
 /// Whether a type's parts are C#: a part the second layer read from a `.cs`

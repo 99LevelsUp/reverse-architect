@@ -42,14 +42,14 @@
 use super::explain::{code, cs_n, plural, series, NAMED_IN_SENTENCE};
 use super::keywords::UnitWords;
 use super::layer2::{
-    flow::{Cond, Op},
+    flow::{constant_text, written, Cond, Op},
     AdmittedPrecondition, ArmStep, DeadKind, DeadPath, EffectKind, EntryKind, EntryPoint,
     Functionality, FunctionalityFlow, Gap, Guarding, Label, Place, Precondition, Source, State,
     Step, StepKind, Target, TypeAnalysis, Unresolved, Written,
 };
 use super::render::Lang;
 use super::{Card, SourceRef};
-use crate::extract::bodies::{AccessPath, Constant, PathRoot, SecondLayer, ValueRef};
+use crate::extract::bodies::{PathRoot, SecondLayer, ValueRef};
 use crate::extract::external::REDACTION_MARKER;
 use crate::graph::Span;
 use crate::render::mermaid::{escape_label, SPLIT_THRESHOLD};
@@ -270,28 +270,6 @@ fn anchors<'p>(places: impl IntoIterator<Item = &'p Place>) -> String {
     }
 }
 
-/// An access path as written (`this.viewModel.CheckCommand`).
-fn path_text(p: &AccessPath) -> String {
-    let joined = p.segments.join(".");
-    match p.root {
-        PathRoot::This if joined.is_empty() => "this".to_string(),
-        PathRoot::This => format!("this.{joined}"),
-        PathRoot::Base if joined.is_empty() => "base".to_string(),
-        PathRoot::Base => format!("base.{joined}"),
-        PathRoot::Expression if joined.is_empty() => "…".to_string(),
-        PathRoot::Expression => format!("….{joined}"),
-        PathRoot::Local | PathRoot::Name => joined,
-    }
-}
-
-fn constant_text(c: &Constant) -> String {
-    match c {
-        Constant::Boolean(b) => b.to_string(),
-        Constant::Null => "null".to_string(),
-        Constant::Number(n) => n.clone(),
-    }
-}
-
 /// How a text is quoted: as inline code on the card, as it is in a diagram.
 type Quote<'q> = &'q dyn Fn(&str) -> String;
 
@@ -501,7 +479,7 @@ fn entry_line(cx: &Cx<'_>, e: &EntryPoint) -> String {
                 .iter()
                 .map(|sub| match &sub.source {
                     Some(src) if !src.segments.is_empty() || src.root != PathRoot::This => {
-                        code(&format!("{}.{}", path_text(src), sub.event))
+                        code(&format!("{}.{}", written(src), sub.event))
                     }
                     _ => code(&sub.event),
                 })
@@ -643,12 +621,12 @@ fn label_text(cx: &Cx<'_>, label: &Option<Label>) -> Option<String> {
         Label::Expression { path } => format!(
             "{} {}",
             cx.t("label from", "popisek z"),
-            code(&path_text(path))
+            code(&written(path))
         ),
         Label::Call { callee } => format!(
             "{} {}",
             cx.t("label from a call of", "popisek z volání"),
-            code(&path_text(callee))
+            code(&written(callee))
         ),
         Label::Other => return None,
     })
@@ -690,7 +668,7 @@ fn targets_text(cx: &Cx<'_>, targets: &[Target], lead: bool) -> String {
                     .map_or_else(String::new, |u| format!(": {}", unresolved(cx, u)));
                 let text = format!(
                     "{} {}{why}",
-                    code(&path_text(&t.path)),
+                    code(&written(&t.path)),
                     cx.t("is not resolved", "není rozřešené")
                 );
                 if seen.insert(text.clone()) {
@@ -855,7 +833,7 @@ fn precondition_line(cx: &Cx<'_>, p: &Precondition) -> String {
             (EffectKind::Raise, false) => "raises",
             (EffectKind::Raise, true) => "vyvolá",
         };
-        let text = format!("{verb} {}", code(&path_text(&e.path)));
+        let text = format!("{verb} {}", code(&written(&e.path)));
         if !effects.contains(&text) {
             effects.push(text);
         }
@@ -1019,7 +997,7 @@ fn phrase(cx: &Cx<'_>, kind: &StepKind, q: Quote<'_>) -> String {
         } => {
             let target = match (construct, member) {
                 (false, Some(m)) => q(cx.name(m.as_str())),
-                _ => q(&path_text(callee)),
+                _ => q(&written(callee)),
             };
             if *construct {
                 format!("{} {target}", cx.t("constructs", "vytvoří"))

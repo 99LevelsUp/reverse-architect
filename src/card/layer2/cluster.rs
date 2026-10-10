@@ -114,18 +114,13 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn owner(&self, x: &NodeKey) -> Option<&NodeKey> {
-        self.ix.symbol(x).and_then(|s| s.owner.as_ref())
-    }
-
     fn own(&self, x: &NodeKey) -> bool {
-        self.owner(x) == Some(self.ty)
+        self.ix.owner_of(x) == Some(self.ty)
     }
 
     /// A member of the type or of one of its bases: what may be a hub.
     fn local(&self, x: &NodeKey) -> bool {
-        self.owner(x)
-            .is_some_and(|o| o == self.ty || self.ancestors.contains(&o))
+        self.ix.declared_along(x, self.ty, &self.ancestors)
     }
 
     /// Everything reachable from `start` through the type's own members,

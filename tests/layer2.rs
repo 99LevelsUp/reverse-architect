@@ -1376,6 +1376,172 @@ fn a_base_list_types_an_inherited_member_and_a_nested_generic_stays_unresolved()
     );
 }
 
+/// What a bare name of `ty` resolves to, called with no argument.
+fn called(ix: &Index<'_>, ty: &NodeKey, name: &str) -> layer2::Chain {
+    let scope = layer2::Scope {
+        ty,
+        body: None,
+        node: None,
+    };
+    let path = AccessPath {
+        root: PathRoot::Name,
+        segments: vec![name.to_string()],
+    };
+    ix.resolve(&scope, &path, Some(0))
+}
+
+/// A qualified type name binds only a type its qualifier names: a field
+/// typed `System.Timers.Timer` is not the repository's `Timer`, which the
+/// bare and the partly qualified name still bind.
+#[test]
+fn a_qualified_external_type_name_is_not_a_repository_type_of_its_last_name() {
+    let src = r#"namespace Acme.Tools
+{
+    public class Timer { public void Start() { } }
+    public class Clock
+    {
+        private System.Timers.Timer external;
+        private Timer own;
+        public void Tick() { external.Start(); own.Start(); }
+    }
+}
+"#;
+    let ns = "sym:csharp:Acme.Tools#";
+    let (generated, _) = analyzed(&[("src/Tools.cs", src)]);
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let timer = key(ns, "Timer");
+    assert_eq!(
+        ix.type_named("System.Timers.Timer"),
+        Err(Unresolved::ExternalType("System.Timers.Timer".into()))
+    );
+    for written in [
+        "Timer",
+        "Tools.Timer",
+        "Acme.Tools.Timer",
+        "global::Acme.Tools.Timer",
+    ] {
+        assert_eq!(ix.type_named(written), Ok(timer.clone()), "{written}");
+    }
+    assert_eq!(
+        ix.type_named("Other.Timer"),
+        Err(Unresolved::ExternalType("Other.Timer".into()))
+    );
+    let clock = key(ns, "Clock");
+    let scope = layer2::Scope {
+        ty: &clock,
+        body: None,
+        node: None,
+    };
+    let start = |field: &str| {
+        let path = AccessPath {
+            root: PathRoot::Name,
+            segments: vec![field.to_string(), "Start".to_string()],
+        };
+        ix.resolve(&scope, &path, Some(0))
+    };
+    let external = start("external");
+    assert_eq!(
+        external.stopped,
+        Some(Unresolved::ExternalType("System.Timers.Timer".into()))
+    );
+    assert_eq!(external.links.len(), 1, "{external:?}");
+    let own = start("own");
+    assert_eq!(own.stopped, None);
+    assert_eq!(
+        own.links.last().map(|l| l.member.clone()),
+        Some(key(ns, "Timer.Start()"))
+    );
+}
+
+/// A type the second layer could not read still shares its name: the
+/// first layer declares it, so a name two types have stays ambiguous.
+#[test]
+fn a_type_in_a_file_whose_bodies_failed_keeps_a_shared_name_ambiguous() {
+    let read = r#"namespace Acme.A
+{
+    public class Ticker { public void Run() { } }
+}
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let repo_dir = dir.path().join("repo");
+    let repo = common::init_repo_with_files(&repo_dir, "Alice", &[("src/A.cs", read)]);
+    // A file that is no UTF-8: the body component refuses it, the first
+    // layer reads its declarations.
+    let mut failed =
+        b"namespace Acme.B\n{\n    public class Ticker { public string S = \"".to_vec();
+    failed.push(0xF8);
+    failed.extend_from_slice(b"\"; public void Run() { } }\n}\n");
+    std::fs::write(repo_dir.join("src/B.cs"), &failed).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new("src/B.cs")).unwrap();
+    index.write().unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let sig = common::fixed_signature("Alice");
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "failed", &tree, &[&head])
+        .unwrap();
+    let generated = generate(&config(&repo_dir, &dir.path().join("out"), Some(2))).unwrap();
+    let layer = generated.bodies.as_ref().unwrap();
+    let failed_ticker = NodeKey::new("sym:csharp:Acme.B#Ticker");
+    assert!(generated.graph.node(&failed_ticker).is_some());
+    assert_eq!(layer.layer_of(&failed_ticker), SecondLayer::Failed);
+    let ix = Index::new(&generated.graph, layer);
+    assert_eq!(
+        ix.type_named("Ticker"),
+        Err(Unresolved::AmbiguousType("Ticker".into()))
+    );
+    assert_eq!(
+        ix.type_named("A.Ticker"),
+        Ok(NodeKey::new("sym:csharp:Acme.A#Ticker"))
+    );
+    // The type that was not read is not one the analyses read.
+    assert!(!ix.csharp_types().contains(&&failed_ticker));
+}
+
+/// A name is declared beyond one level only when a type further up
+/// declares it; a name no type of the line declares is no member, and
+/// one a type with a base outside the repository does not declare may be
+/// that base's.
+#[test]
+fn beyond_one_level_is_claimed_only_for_a_name_a_type_further_up_declares() {
+    let src = r#"namespace Acme.Up
+{
+    public class Top { public void Far() { } }
+    public class Mid : Top { }
+    public class Low : Mid
+    {
+        public void A() { Far(); }
+        public void B() { Missing(); }
+    }
+    public class Win : Window
+    {
+        public void C() { Close(); }
+    }
+}
+"#;
+    let ns = "sym:csharp:Acme.Up#";
+    let (generated, _) = analyzed(&[("src/Up.cs", src)]);
+    let ix = Index::new(&generated.graph, generated.bodies.as_ref().unwrap());
+    let low = key(ns, "Low");
+    assert_eq!(
+        called(&ix, &low, "Far").stopped,
+        Some(Unresolved::BeyondOneLevel("Far".into()))
+    );
+    assert_eq!(
+        called(&ix, &low, "Missing").stopped,
+        Some(Unresolved::NotAMember("Missing".into()))
+    );
+    let mid = key(ns, "Mid");
+    assert_eq!(
+        called(&ix, &mid, "Missing").stopped,
+        Some(Unresolved::NotAMember("Missing".into()))
+    );
+    assert_eq!(
+        called(&ix, &key(ns, "Win"), "Close").stopped,
+        Some(Unresolved::ExternalType("Window".into()))
+    );
+}
+
 const CLUSTERS: &str = r#"namespace Acme.Clusters
 {
     public class AcmeState
@@ -2085,6 +2251,72 @@ fn a_can_execute_returning_false_is_a_dead_path_and_an_unguarding_constant_is_no
         .flat_map(|f| &f.dead_paths)
         .chain(&t.flow.dead_paths)
         .all(|d| d.member != other));
+}
+
+/// A CanExecute a deriving type may replace — `virtual`, an `override` that
+/// is not `sealed` — returning a constant is no dead path; a `sealed
+/// override` returning one is.
+#[test]
+fn a_replaceable_can_execute_returning_a_constant_is_no_dead_path() {
+    let src = r#"namespace Acme.Hooks
+{
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        private readonly Predicate<object> _canExecute;
+        public RelayCommand(Action<object> execute, Predicate<object> canExecute)
+        {
+            _execute = execute;
+            _canExecute = canExecute;
+        }
+        public bool CanExecute(object parameter) { return _canExecute == null || _canExecute(parameter); }
+        public void Execute(object p) { _execute(p); }
+    }
+
+    public class HookBase
+    {
+        protected virtual bool CanLoad() { return true; }
+        protected virtual bool CanSeal() { return true; }
+    }
+
+    public class HookModel : HookBase
+    {
+        private int saved;
+        private int loaded;
+        private int sealedCount;
+        public RelayCommand SaveCommand => new RelayCommand(p => Save(), p => CanSave());
+        public RelayCommand LoadCommand => new RelayCommand(p => Load(), p => CanLoad());
+        public RelayCommand SealCommand => new RelayCommand(p => Seal(), p => CanSeal());
+        protected virtual bool CanSave() { return false; }
+        protected override bool CanLoad() { return false; }
+        protected sealed override bool CanSeal() { return false; }
+        void Save() { saved = 1; }
+        void Load() { loaded = 1; }
+        void Seal() { sealedCount = 1; }
+    }
+}
+"#;
+    let ns = "sym:csharp:Acme.Hooks#";
+    let (_, analysis) = analyzed(&[("src/Hooks.cs", src)]);
+    let t = type_of(&analysis, &key(ns, "HookModel"));
+    let dead = |command: &str| -> Vec<(String, DeadKind)> {
+        let f = functionality(t, &format!("{ns}HookModel.{command}"));
+        t.flow_of(&f.key)
+            .unwrap_or_else(|| panic!("no flow of {}", f.key))
+            .dead_paths
+            .iter()
+            .map(|d| (d.member.as_str().to_string(), d.kind.clone()))
+            .collect()
+    };
+    assert_eq!(dead("SaveCommand"), []);
+    assert_eq!(dead("LoadCommand"), []);
+    assert_eq!(
+        dead("SealCommand"),
+        [(
+            format!("{ns}HookModel.CanSeal()"),
+            DeadKind::ConstantReturn(Constant::Boolean(false))
+        )]
+    );
 }
 
 /// `IsFullscreen = !IsFullscreen` is a change of a state; the property
