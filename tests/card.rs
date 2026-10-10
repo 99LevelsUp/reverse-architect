@@ -1923,6 +1923,140 @@ fn keywords_are_the_same_across_runs_and_thread_counts() {
     assert_eq!(one, all(&cards_with_threads(tmp.path(), 4)));
 }
 
+/// An editor with every shape the second layer draws: a key handler, a
+/// context menu whose label is quoted, a command, a parameter that chooses (a
+/// flowchart) and a toggled property (a state diagram).
+const EDITOR_LAYERED_CS: &str = r#"namespace Acme.Editor
+{
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        public RelayCommand(Action<object> execute) { _execute = execute; }
+        public void Execute(object p) { _execute(p); }
+    }
+
+    public class EditorView
+    {
+        private ContextMenu menu;
+        private EditorViewModel viewModel;
+        public string GetResourceString(string key) { return key; }
+        void OnKey(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F4) { viewModel.CheckCommand.Execute(null); }
+            else if (e.Key == Key.F5) { viewModel.Toggle(); }
+        }
+        void BuildMenu()
+        {
+            ContextMenuItem f4 = new ContextMenuItem();
+            f4.Header = GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/;
+            f4.Command = viewModel.CheckCommand;
+            menu.Items.Add(f4);
+        }
+    }
+
+    public class EditorViewModel
+    {
+        private bool isFullscreen;
+        public RelayCommand CheckCommand => new RelayCommand(p => Check());
+        public void Check() { Check(false); }
+        void Check(bool syntaxOnly)
+        {
+            if (syntaxOnly) { Parse(1); } else { Parse(2); }
+        }
+        void Parse(int kind) { }
+        public bool IsFullscreen
+        {
+            get { return isFullscreen; }
+            set { if (isFullscreen == value) return; isFullscreen = value; }
+        }
+        public void Toggle() { IsFullscreen = !IsFullscreen; }
+        public void Leave() { IsFullscreen = false; }
+        public void Draw() { if (IsFullscreen) { Parse(0); } }
+    }
+}
+"#;
+
+/// A run with the second layer at `level` over `repo`, written into `out`, on
+/// a pool of `threads` workers of its own.
+fn layered_with_threads(
+    repo: &std::path::Path,
+    out: &std::path::Path,
+    level: u8,
+    threads: usize,
+) -> reverse_architect::Generated {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .unwrap()
+        .install(|| {
+            reverse_architect::generate(&reverse_architect::config::Config {
+                detail_level: Some(level),
+                ..common::config_for(repo, out)
+            })
+            .expect("the pipeline runs")
+        })
+}
+
+/// R3, KTD9 (plan 2a, U9): the second layer's cards, details, maps, views,
+/// manifest and coverage are the same bytes run after run and whatever the
+/// thread count — one worker, one again, four, on every level — through a
+/// scoped pool for each run, as `tests/threads.rs` explains. The fixture has
+/// the sections and both diagrams the layer writes, so the bytes compared are
+/// the layer's.
+#[test]
+fn the_second_layer_is_the_same_bytes_across_runs_and_thread_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo_with_files(&repo, "Alice", &[("src/Editor.cs", EDITOR_LAYERED_CS)]);
+    for level in 1..=3u8 {
+        let run = |name: &str, threads: usize| {
+            layered_with_threads(
+                &repo,
+                &tmp.path().join(format!("{level}-{name}")),
+                level,
+                threads,
+            )
+        };
+        let one = run("one", 1);
+        let typed: String = one
+            .cards
+            .iter()
+            .filter(|c| c.path.starts_with("cards/type/"))
+            .map(|c| c.contents.as_str())
+            .collect();
+        for part in ["layer2: present", "## Functionality: ", "## State: "] {
+            assert!(typed.contains(part), "level {level}: no {part:?}");
+        }
+        // The diagrams are the layer's bytes from level 2.
+        assert_eq!(
+            typed.contains("flowchart TD\n"),
+            level >= 2,
+            "level {level}"
+        );
+        assert_eq!(
+            typed.contains("stateDiagram-v2\n"),
+            level >= 2,
+            "level {level}"
+        );
+        for (name, threads) in [("again", 1), ("four", 4)] {
+            let other = run(name, threads);
+            let label = format!("level {level}, {threads} threads ({name})");
+            assert_eq!(one.corpus, other.corpus, "{label}: the views differ");
+            assert_eq!(one.cards, other.cards, "{label}: the cards differ");
+            assert_eq!(one.details, other.details, "{label}: the details differ");
+            assert_eq!(one.maps, other.maps, "{label}: the maps differ");
+            assert_eq!(
+                one.manifest, other.manifest,
+                "{label}: the manifests differ"
+            );
+            assert_eq!(
+                one.coverage, other.coverage,
+                "{label}: the coverage differs"
+            );
+        }
+    }
+}
+
 /// The plan's risk row, measured and not enforced: adding a type that shares
 /// no word with the others changes the corpus size every rarity is computed
 /// against, so it may reorder the keywords of cards it has nothing to do with.

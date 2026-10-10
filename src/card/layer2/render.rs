@@ -29,6 +29,15 @@
 //! templates in English and Czech (R15); the headings and the bullet keys are
 //! English constants. Every value in a diagram goes through
 //! [`escape_label`]; the literals were redacted before the model was cached.
+//!
+//! **A withheld value is admitted, never hidden** (R14, KTD16, AE5). A line
+//! whose text holds the marker the secret filter left
+//! (`[redacted: <shape> — see the source anchor]`) keeps it as it is and says
+//! once, in a template sentence after the text and before the anchor, that a
+//! value was left out as a likely secret; the quote of a label's comment is no
+//! exception. A flowchart whose drawn node holds the marker says so under the
+//! diagram, and the label passes through [`escape_label`] like any other. The
+//! marker is no search word: [`words`] leaves it out.
 
 use super::explain::{code, cs_n, plural, series, NAMED_IN_SENTENCE};
 use super::keywords::UnitWords;
@@ -41,6 +50,7 @@ use super::layer2::{
 use super::render::Lang;
 use super::{Card, SourceRef};
 use crate::extract::bodies::{AccessPath, Constant, PathRoot, SecondLayer, ValueRef};
+use crate::extract::external::REDACTION_MARKER;
 use crate::graph::Span;
 use crate::render::mermaid::{escape_label, SPLIT_THRESHOLD};
 use std::collections::BTreeSet;
@@ -123,7 +133,7 @@ pub fn words(analysis: &TypeAnalysis) -> UnitWords {
 
 /// A text the secret filter replaced: its marker is no word to search by.
 fn redacted(text: &str) -> bool {
-    text.contains("[redacted")
+    text.contains(REDACTION_MARKER)
 }
 
 /// The sections of the analyzed type's card at `level` (see the module docs).
@@ -191,6 +201,23 @@ impl Cx<'_> {
             .iter()
             .find(|m| m.identity == key)
             .and_then(|m| m.member_kind.as_deref())
+    }
+
+    /// ` (a value was left out as a likely secret; see the source)` when
+    /// `text` holds the marker of a withheld value, and nothing otherwise
+    /// (R14): one sentence for a line, however many markers it holds.
+    fn left_out(&self, text: &str) -> String {
+        if redacted(text) {
+            format!(
+                " ({})",
+                self.t(
+                    "a value was left out as a likely secret; see the source",
+                    "hodnota vynechána jako pravděpodobné tajemství; viz zdroj"
+                )
+            )
+        } else {
+            String::new()
+        }
     }
 
     /// `A, B and C`, or `A, B, C and 2 more`.
@@ -521,6 +548,8 @@ fn entry_line(cx: &Cx<'_>, e: &EntryPoint) -> String {
     if anchor_at.is_none() {
         anchor_at = cx.member_anchor(e.member.as_str());
     }
+    let note = cx.left_out(&s);
+    s.push_str(&note);
     if let Some(a) = anchor_at {
         let _ = write!(s, " — `{a}`");
     }
@@ -842,6 +871,8 @@ fn precondition_line(cx: &Cx<'_>, p: &Precondition) -> String {
             effects.join(", ")
         );
     }
+    let note = cx.left_out(&s);
+    s.push_str(&note);
     s.push_str(&anchors(p.occurrences.iter().map(|o| &o.place)));
     s
 }
@@ -871,15 +902,15 @@ fn admitted_line(cx: &Cx<'_>, a: &AdmittedPrecondition) -> String {
             )
             .to_string(),
     };
-    format!(
-        "{} {} {gap}{}",
+    let line = format!(
+        "{} {} {gap}",
         code(cx.name(a.member.as_str())),
         cx.t(
             "may have a precondition that was not read —",
             "může mít předpoklad, který se nepřečetl —"
         ),
-        anchors([&a.place])
-    )
+    );
+    format!("{line}{}{}", cx.left_out(&line), anchors([&a.place]))
 }
 
 fn dead_line(cx: &Cx<'_>, d: &DeadPath) -> String {
@@ -910,6 +941,8 @@ fn dead_line(cx: &Cx<'_>, d: &DeadPath) -> String {
     if !guarding.is_empty() {
         let _ = write!(s, " ({})", guarding.join(", "));
     }
+    let note = cx.left_out(&s);
+    s.push_str(&note);
     s.push_str(&anchors([&d.place]));
     s
 }
@@ -1052,10 +1085,11 @@ fn step_lines(cx: &Cx<'_>, s: &mut String, st: &Step, with_member: bool) {
     } else {
         String::new()
     };
+    let text = phrase(cx, &st.kind, &code);
     let _ = writeln!(
         s,
-        "{indent}- {lead}{}{}",
-        phrase(cx, &st.kind, &code),
+        "{indent}- {lead}{text}{}{}",
+        cx.left_out(&text),
         anchors([&st.place])
     );
     let Some(arms) = arms_of(&st.kind) else {
@@ -1070,11 +1104,13 @@ fn step_lines(cx: &Cx<'_>, s: &mut String, st: &Step, with_member: bool) {
                 .as_deref()
                 .map_or_else(|| cx.t("otherwise", "jinak").to_string(), code);
             let selects: Vec<String> = a.selects.iter().map(|x| code(x)).collect();
+            let selects = selects.join(", ");
+            let note = cx.left_out(&format!("{when} {selects}"));
             let _ = writeln!(
                 s,
                 "{indent}  | {} | {} | `{}` |",
-                cell(&when),
-                cell(&selects.join(", ")),
+                cell(&format!("{when}{note}")),
+                cell(&selects),
                 anchor(&a.place)
             );
         }
@@ -1092,7 +1128,12 @@ fn step_lines(cx: &Cx<'_>, s: &mut String, st: &Step, with_member: bool) {
             let list: Vec<String> = a.selects.iter().map(|x| code(x)).collect();
             format!(": {} {}", cx.t("selects", "vybere"), list.join(", "))
         };
-        let _ = writeln!(s, "{indent}  - {when}{selects}{}", anchors([&a.place]));
+        let note = cx.left_out(&format!("{when}{selects}"));
+        let _ = writeln!(
+            s,
+            "{indent}  - {when}{selects}{note}{}",
+            anchors([&a.place])
+        );
     }
 }
 
@@ -1285,6 +1326,21 @@ fn flowchart(cx: &Cx<'_>, f: &Functionality, steps: &[Step]) -> Option<String> {
         }
     }
     s.push_str("```\n");
+    if chart
+        .nodes
+        .iter()
+        .take(drawn)
+        .any(|(_, label)| redacted(label))
+    {
+        let _ = writeln!(
+            s,
+            "\n{}",
+            cx.t(
+                "A value in the diagram was left out as a likely secret; see the source.",
+                "Hodnota v diagramu vynechána jako pravděpodobné tajemství; viz zdroj."
+            )
+        );
+    }
     if total > drawn {
         let _ = if cx.cs() {
             writeln!(
@@ -1359,7 +1415,8 @@ fn members(cx: &Cx<'_>, s: &mut String, f: &Functionality, flow: Option<&Functio
                 cx.t("no step of its own", "žádný vlastní krok")
             );
         } else {
-            let _ = write!(line, ": {}.", cx.series(&phrases));
+            let sentence = cx.series(&phrases);
+            let _ = write!(line, ": {sentence}{}.", cx.left_out(&sentence));
         }
         if let Some(a) = cx.member_anchor(key) {
             let _ = write!(line, " — `{a}`");

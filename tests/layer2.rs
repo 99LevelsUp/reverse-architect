@@ -3137,3 +3137,404 @@ fn the_diagrams_are_the_same_bytes_in_two_runs() {
     assert_eq!(a, blocks(&two));
     assert_eq!(one.cards, two.cards);
 }
+
+// ---- A withheld value is admitted in the card (plan 2a, U12: R14, KTD16, AE5) ----
+
+/// For each language: its `--lang`, the sentence a line with a withheld value
+/// gets, and the one under a diagram with one.
+const LEFT_OUT: [(&str, &str, &str); 2] = [
+    (
+        "en",
+        "a value was left out as a likely secret; see the source",
+        "A value in the diagram was left out as a likely secret; see the source.",
+    ),
+    (
+        "cs",
+        "hodnota vynechána jako pravděpodobné tajemství; viz zdroj",
+        "Hodnota v diagramu vynechána jako pravděpodobné tajemství; viz zdroj.",
+    ),
+];
+
+/// R14, R18: the quote of a label's comment that held a secret is admitted —
+/// the marker stays, one sentence follows it — and not dropped; the quote of
+/// a comment that held none is shown as it was, without the sentence.
+#[test]
+fn a_label_quote_with_a_withheld_value_is_admitted_and_a_plain_quote_is_not() {
+    let view = r#"namespace Acme.Menus
+{
+    public class MenuView
+    {
+        private ContextMenu menu;
+        public string GetResourceString(string key) { return key; }
+        void BuildMenu()
+        {
+            ContextMenuItem f4 = new ContextMenuItem();
+            f4.Header = GetResourceString("EditorView_checkErrors") /* password: quillfrond-7Hx */;
+            f4.Command = CheckCommand;
+            ContextMenuItem f5 = new ContextMenuItem();
+            f5.Header = GetResourceString("EditorView_settings") /*"Možnosti editoru"*/;
+            f5.Command = CheckCommand;
+            menu.Items.Add(f4);
+            menu.Items.Add(f5);
+        }
+        public RelayCommand CheckCommand => new RelayCommand(p => Check());
+        public void Check() { }
+    }
+}
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    for (lang, sentence, _) in LEFT_OUT {
+        let g = layered_run(dir.path(), lang, &[("src/Menus.cs", view)], Some(2), lang);
+        let card = rendered(&g, &NodeKey::new("sym:csharp:Acme.Menus#MenuView"));
+        assert!(!card.contains("quillfrond"), "{lang}: {card}");
+        let item = |name: &str| {
+            card.lines()
+                .find(|l| {
+                    l.starts_with(&format!("- Menu item `{name}`"))
+                        || l.starts_with(&format!("- Položka menu `{name}`"))
+                })
+                .unwrap_or_else(|| panic!("{lang}: no menu item {name}:\n{card}"))
+        };
+        let secret = item("f4");
+        assert!(secret.contains("[redacted: "), "{lang}: {secret}");
+        assert_eq!(secret.matches(sentence).count(), 1, "{lang}: {secret}");
+        assert!(ends_with_anchor(secret), "{lang}: {secret}");
+        let plain = item("f5");
+        assert!(plain.contains("Možnosti editoru"), "{lang}: {plain}");
+        assert!(!plain.contains(sentence), "{lang}: {plain}");
+    }
+}
+
+/// The node lines of a mermaid block after checking it is valid: every node
+/// is `nN`, a shape and one quoted label with no raw `"`, `<`, `>` or
+/// backslash in it, and every edge joins two declared nodes.
+fn valid_flowchart(block: &str) -> Vec<&str> {
+    let mut declared: Vec<&str> = Vec::new();
+    let mut edges: Vec<(&str, &str)> = Vec::new();
+    let mut nodes: Vec<&str> = Vec::new();
+    for line in block.lines().skip(1) {
+        let line = line.trim();
+        if let Some((from, to)) = line
+            .split_once(" --> ")
+            .or_else(|| line.split_once(" -.-> "))
+        {
+            edges.push((from, to));
+            continue;
+        }
+        let id = line
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .unwrap();
+        assert_eq!(line.matches('"').count(), 2, "unbalanced quotes: {line}");
+        let open = line.find('"').unwrap();
+        let close = line.rfind('"').unwrap();
+        let label = &line[open + 1..close];
+        for raw in ['<', '>', '\\'] {
+            assert!(!label.contains(raw), "raw {raw:?} in a label: {line}");
+        }
+        declared.push(id);
+        nodes.push(line);
+    }
+    for (from, to) in edges {
+        assert!(declared.contains(&from), "{from} is not drawn:\n{block}");
+        assert!(declared.contains(&to), "{to} is not drawn:\n{block}");
+    }
+    nodes
+}
+
+/// R14, KTD16.4: a flowchart whose arm compares with a withheld value draws
+/// the arm — the node does not vanish and the diagram stays valid — with the
+/// marker as it is (the escape changes nothing in it) and a plain string with
+/// its quotes escaped; the table of an `else if` chain over one variable
+/// admits the value on its row, and one sentence stands under a diagram that
+/// holds a marker and under none that does not.
+#[test]
+fn a_diagram_label_with_a_withheld_value_is_drawn_escaped_and_admitted() {
+    let source = r#"namespace Acme.Gate
+{
+    public class Gate
+    {
+        public void Admit(string token)
+        {
+            if (token == "brindlecairn") { Grant(); }
+            else if (token == "spare") { Deny(); }
+        }
+        public void Route(string token, string mode)
+        {
+            if (token == "brindlecairn") { Open(); }
+            else if (mode == "plain") { Close(); }
+        }
+        public void Idle(int n)
+        {
+            if (n == 1) { Pause(); }
+            else if (n == 2) { Resume(); }
+        }
+        void Grant() { }
+        void Deny() { }
+        void Open() { }
+        void Close() { }
+        void Pause() { }
+        void Resume() { }
+    }
+}
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let marker = "[redacted: token — see the source anchor]";
+    for (lang, sentence, under_diagram) in LEFT_OUT {
+        let g = layered_run(dir.path(), lang, &[("src/Gate.cs", source)], Some(2), lang);
+        let card = rendered(&g, &NodeKey::new("sym:csharp:Acme.Gate#Gate"));
+        assert!(!card.contains("brindlecairn"), "{lang}: {card}");
+        let part = |name: &str| section(card, &format!("## Functionality: Gate.{name}"));
+        for name in ["Admit(string)", "Route(string,string)"] {
+            let chart = section(part(name), "### Flowchart");
+            let blocks = mermaid_blocks(chart);
+            assert_eq!(blocks.len(), 1, "{lang}: {chart}");
+            let nodes = valid_flowchart(blocks[0]);
+            let arms: Vec<&&str> = nodes
+                .iter()
+                .filter(|n| n.contains("when ") || n.contains("když "))
+                .collect();
+            assert_eq!(arms.len(), 2, "{lang}: both arms are drawn: {chart}");
+            assert!(
+                arms.iter()
+                    .any(|n| n.contains(&format!("token == {marker}"))),
+                "{lang}: the marker is drawn as it is: {chart}"
+            );
+            let withheld = arms.iter().filter(|n| n.contains(marker)).count();
+            if name.starts_with("Route") {
+                // `mode` names no secret: its string is drawn as it is, with
+                // the quotes escaped.
+                assert_eq!(withheld, 1, "{lang}: {chart}");
+                assert!(
+                    arms.iter().any(|n| n.contains("mode == &quot;plain&quot;")),
+                    "{lang}: a plain string is drawn with its quotes escaped: {chart}"
+                );
+            } else {
+                // What `token` is compared with is withheld whatever it is.
+                assert_eq!(withheld, 2, "{lang}: {chart}");
+            }
+            assert_eq!(chart.matches(under_diagram).count(), 1, "{lang}: {chart}");
+        }
+        // The `else if` chain over one variable is a table; its row admits.
+        let steps = section(part("Admit(string)"), "### Steps");
+        let row = steps
+            .lines()
+            .find(|l| l.trim_start().starts_with('|') && l.contains(marker))
+            .unwrap_or_else(|| panic!("{lang}: no table row with the marker:\n{steps}"));
+        assert_eq!(row.matches(sentence).count(), 1, "{lang}: {row}");
+        // A diagram with nothing withheld says nothing of it.
+        let idle = part("Idle(int)");
+        assert!(idle.contains("```mermaid"), "{lang}: {idle}");
+        assert!(
+            !idle.contains(sentence) && !idle.contains(under_diagram),
+            "{lang}: {idle}"
+        );
+    }
+}
+
+// ---- The gate of byte stability and determinism (plan 2a, U9: R1, R3; KTD7, KTD9; AE4) ----
+//
+// What the gate holds, and where:
+//
+// 1. The corpus of a run WITHOUT the second layer is the reference of unit U1
+//    to the byte, on one thread and on many, from two places:
+//    `a_plain_run_writes_the_pinned_bytes_on_one_thread_and_on_many` (the
+//    insta snapshot `layer1_corpus_fingerprint`, at the top of this file) and
+//    `tests/six_grammar_baseline.rs` (the golden `u1_coverage` and the
+//    snapshots of every grammar). Neither is repeated here.
+// 2. A run WITH the layer writes the same bytes of every file when it is
+//    cold and when it is warm — the second run reads `languages-bodies` from
+//    the cache — and from a second cold directory
+//    (`a_layered_run_writes_the_same_bytes_cold_and_warm`).
+// 3. The same on one thread and on four, through the binary
+//    (`a_layered_run_writes_the_same_bytes_on_one_thread_and_on_four`) and
+//    through a scoped pool (`tests/card.rs`).
+// 4. Every detail, view and map of a run with the layer is the plain run's,
+//    byte for byte, on disk (`a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were`),
+//    as it is for the typed outputs in `assert_same_first_layer`.
+
+/// The files of the gate's fixture: the editor — a view with a key handler and
+/// a context menu whose labels are quoted, and its view model — and the flow
+/// fixture, which has choices, a loop-free check with a flowchart and a
+/// toggled state with a state diagram.
+fn gate_files() -> Vec<(String, String)> {
+    vec![
+        ("src/Views.cs".into(), quoted_views()),
+        ("src/ViewModels.cs".into(), EDITOR_MODELS.into()),
+        ("src/Flow.cs".into(), FLOW.into()),
+    ]
+}
+
+fn gate_repo(dir: &Path) -> std::path::PathBuf {
+    let repo = dir.join("repo");
+    let files = gate_files();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
+    common::init_repo_with_files(&repo, "Alice", &refs);
+    repo
+}
+
+/// Every file a run over `repo` writes into `out` — the cache aside — as
+/// `--detail-level` `level` (or none) and on `threads` worker threads.
+fn cli_run(repo: &Path, out: &Path, level: Option<u8>, threads: usize) -> Vec<(String, Vec<u8>)> {
+    let mut command = Command::cargo_bin("reverse-architect").unwrap();
+    command
+        .env("RAYON_NUM_THREADS", threads.to_string())
+        .arg(repo)
+        .arg("--out")
+        .arg(out);
+    if let Some(level) = level {
+        command.arg("--detail-level").arg(level.to_string());
+    }
+    command.assert().success();
+    common::output_files(out)
+}
+
+/// The first path whose bytes differ, or whose presence does.
+fn first_difference(a: &[(String, Vec<u8>)], b: &[(String, Vec<u8>)]) -> Option<String> {
+    let names =
+        |files: &[(String, Vec<u8>)]| files.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>();
+    if names(a) != names(b) {
+        let (na, nb) = (names(a), names(b));
+        return Some(
+            na.iter()
+                .chain(&nb)
+                .find(|n| na.contains(n) != nb.contains(n))
+                .cloned()
+                .unwrap_or_else(|| "the order of the files".into()),
+        );
+    }
+    a.iter()
+        .zip(b)
+        .find(|(x, y)| x.1 != y.1)
+        .map(|(x, _)| x.0.clone())
+}
+
+/// What the fixture's output must hold for the gate to mean something: the
+/// layer's sections, a flowchart and a state diagram with bytes of their own,
+/// and a menu item with the quote of its label.
+fn assert_gate_has_the_layer(files: &[(String, Vec<u8>)]) {
+    let cards: String = files
+        .iter()
+        .filter(|(p, _)| p.starts_with("cards/type/"))
+        .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+        .collect();
+    for part in [
+        "\nlayer2: present",
+        "## Functionality: ",
+        "### Flowchart",
+        "flowchart TD\n",
+        "stateDiagram-v2\n",
+        "- Menu item `f4`",
+        "quoted “Kontrola chyb”",
+    ] {
+        assert!(cards.contains(part), "the gate's fixture lost {part:?}");
+    }
+}
+
+/// R1, R3, AE4: a run with the second layer writes the same bytes of every
+/// file when the cache is cold and when it is warm, and in a second cold
+/// directory. The warm run is shown to read the second layer's records and
+/// not to write them anew: they are the very files — bytes and modification
+/// times — the cold run left.
+#[test]
+fn a_layered_run_writes_the_same_bytes_cold_and_warm() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = gate_repo(dir.path());
+    let out = dir.path().join("warm");
+    let cold = cli_run(&repo, &out, Some(2), 1);
+    assert_gate_has_the_layer(&cold);
+
+    let stored = records(&out, "languages-bodies");
+    assert_eq!(stored.len(), 3, "a record per C# file: {:?}", stored.keys());
+    let head = header(&out);
+
+    // The warm run is on four threads, the cold one on one.
+    let warm = cli_run(&repo, &out, Some(2), 4);
+    assert_eq!(
+        records(&out, "languages-bodies"),
+        stored,
+        "the warm run did not read the bodies from the cache"
+    );
+    assert_eq!(header(&out), head, "the warm run reset the cache");
+    assert_eq!(first_difference(&cold, &warm), None, "cold against warm");
+
+    let again = cli_run(&repo, &dir.path().join("cold-again"), Some(2), 1);
+    assert_eq!(first_difference(&cold, &again), None, "cold against cold");
+
+    // The records are what the warm run read, not only what it left alone: a
+    // word changed in the record of the views shows on the next run's card.
+    let (name, (_, bytes)) = stored
+        .iter()
+        .find(|(_, (_, b))| String::from_utf8_lossy(b).contains("Kontrola chyb"))
+        .expect("the record of the views, with the quote of a label");
+    let edited = String::from_utf8_lossy(bytes).replace("Kontrola chyb", "Kontrola chyb zmenena");
+    std::fs::write(out.join(CACHE).join("languages-bodies").join(name), edited).unwrap();
+    let read = cli_run(&repo, &out, Some(2), 1);
+    assert!(
+        read.iter().any(|(p, b)| p.starts_with("cards/type/")
+            && String::from_utf8_lossy(b).contains("quoted “Kontrola chyb zmenena”")),
+        "the run did not read the record it was given"
+    );
+}
+
+/// R3: the second layer's bytes do not depend on the number of worker
+/// threads — one, four, and a repeat of four — each from a cold directory.
+#[test]
+fn a_layered_run_writes_the_same_bytes_on_one_thread_and_on_four() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = gate_repo(dir.path());
+    let one = cli_run(&repo, &dir.path().join("one"), Some(2), 1);
+    assert_gate_has_the_layer(&one);
+    for (name, threads) in [("four", 4), ("four-again", 4)] {
+        let many = cli_run(&repo, &dir.path().join(name), Some(2), threads);
+        assert_eq!(
+            first_difference(&one, &many),
+            None,
+            "one thread against {threads}"
+        );
+    }
+}
+
+/// KTD9 point 3: with the layer every detail, view and map is the plain run's
+/// bytes on disk, and so is every card that is no type's; the type cards
+/// differ, and the manifest and coverage with them.
+#[test]
+fn a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = gate_repo(dir.path());
+    let plain = cli_run(&repo, &dir.path().join("plain"), None, 1);
+    let layered = cli_run(&repo, &dir.path().join("layered"), Some(2), 1);
+    assert_gate_has_the_layer(&layered);
+
+    let same = |path: &str| {
+        !path.starts_with("cards/type/")
+            && !matches!(path, "manifest.json" | "coverage.json")
+            && !path.starts_with("manifest")
+    };
+    let kept = |files: &[(String, Vec<u8>)]| -> Vec<(String, Vec<u8>)> {
+        files.iter().filter(|(p, _)| same(p)).cloned().collect()
+    };
+    let (plain_kept, layered_kept) = (kept(&plain), kept(&layered));
+    assert!(
+        plain_kept
+            .iter()
+            .any(|(p, _)| p.starts_with("cards/detail/type/")),
+        "not vacuous: the fixture has details"
+    );
+    assert!(
+        plain_kept.iter().any(|(p, _)| p.starts_with("cards/map")),
+        "not vacuous: the fixture has maps: {:?}",
+        plain_kept.iter().map(|(p, _)| p).collect::<Vec<_>>()
+    );
+    assert_eq!(first_difference(&plain_kept, &layered_kept), None);
+    let type_cards = |files: &[(String, Vec<u8>)]| {
+        files
+            .iter()
+            .filter(|(p, _)| p.starts_with("cards/type/"))
+            .count()
+    };
+    assert_eq!(type_cards(&plain), type_cards(&layered));
+}

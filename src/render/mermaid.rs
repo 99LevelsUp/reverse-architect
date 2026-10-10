@@ -232,6 +232,28 @@ mod tests {
     }
 
     #[test]
+    fn a_withheld_value_marker_in_a_label_is_drawn_as_it_is() {
+        // The marker the secret filter leaves holds no character the escape
+        // changes, so a card's diagram shows it verbatim (plan 2a, KTD16.4);
+        // the quotes around a compared value are escaped as in any label.
+        let marker = "[redacted: token — see the source anchor]";
+        assert_eq!(escape_label(marker), marker);
+
+        let label = format!("when token == \"{marker}\"");
+        let out = diagram(&[(label.as_str(), "b")]).unwrap();
+        assert_eq!(count(&out, '"') % 2, 0, "balanced quotes: {out}");
+        assert!(
+            out.contains(&format!("when token == &quot;{marker}&quot;")),
+            "the marker survives the escape: {out}"
+        );
+        for line in out.lines() {
+            if let Some(label) = line.split_once('[').and_then(|(_, r)| r.strip_suffix("]")) {
+                assert!(!label.contains('>'), "raw `>` in label: {line}");
+            }
+        }
+    }
+
+    #[test]
     fn keys_that_sanitize_alike_get_distinct_ids() {
         // `a/b`, `a.b`, `a-b` all collapse under naive sanitisation to `a_b`.
         let out = diagram(&[("a/b", "a.b"), ("a.b", "a-b")]).unwrap();

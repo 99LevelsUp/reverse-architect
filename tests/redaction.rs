@@ -228,6 +228,7 @@ const BODY_SECRETS: &[&str] = &[
     "ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1",
     "ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5",
     "hollyquartz",
+    "ghp_Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5Lq4",
 ];
 
 /// A body for every shape of [`BODY_SECRETS`]; a name with a character of
@@ -248,6 +249,13 @@ const GATE_CS: &str = "namespace Orbit.Gate\n\
 \x20           return GetResourceString(\"k\") /* heslo: hollyquartz */ != null;\n\
 \x20       }\n\
 \x20       public string GetResourceString(string key) { return key; }\n\
+\x20       public void Admit(string token, string mode)\n\
+\x20       {\n\
+\x20           if (token == \"ghp_Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5Lq4\") { Grant(); }\n\
+\x20           if (mode == \"plain\") { Deny(); }\n\
+\x20       }\n\
+\x20       void Grant() { }\n\
+\x20       void Deny() { }\n\
 \x20   }\n\
 }\n";
 
@@ -285,6 +293,99 @@ fn a_body_keeps_its_plain_literals_and_withholds_its_secrets_in_the_record() {
         assert!(
             !gate.contains(secret),
             "`{secret}` is in the record: {gate}"
+        );
+    }
+}
+
+/// The card of the type `Gate` of the bodies fixture, from a run at `level`
+/// in `lang`, and every artifact and record of that run.
+fn gate_run(level: u8, lang: &str) -> (String, Vec<(String, String)>) {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    body_fixture(repo.path());
+    let config = Config {
+        detail_level: Some(level),
+        lang: lang.to_string(),
+        ..b_config(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let card = generated
+        .cards
+        .iter()
+        .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("\n# Gate\n"))
+        .unwrap_or_else(|| panic!("the card of Gate"))
+        .contents
+        .clone();
+    (card, artifacts_of(&generated, out.path()))
+}
+
+/// R14, KTD16, AE5: a step whose text carried a secret keeps the marker and
+/// says, once on its line, that a value was left out; the step beside it
+/// that compares `mode` with a plain string shows the string. The secret is
+/// in no artifact and no record of the run — in either language.
+#[test]
+fn a_withheld_value_is_admitted_in_the_card_and_a_plain_one_stays_visible() {
+    for (lang, sentence, under_diagram, plain_step) in [
+        (
+            "en",
+            "a value was left out as a likely secret; see the source",
+            "A value in the diagram was left out as a likely secret; see the source.",
+            "when `mode == \"plain\"`",
+        ),
+        (
+            "cs",
+            "hodnota vynechána jako pravděpodobné tajemství; viz zdroj",
+            "Hodnota v diagramu vynechána jako pravděpodobné tajemství; viz zdroj.",
+            "když `mode == \"plain\"`",
+        ),
+    ] {
+        let (card, artifacts) = gate_run(2, lang);
+        // The English run is swept by `no_secret_value_reaches_any_artifact_of_a_run`
+        // over this very fixture; the Czech one is new.
+        if lang == "cs" {
+            for (label, contents) in &artifacts {
+                assert_no_b_secret(&format!("{label} ({lang})"), contents);
+            }
+        }
+        assert!(!card.contains("ghp_"), "{lang}: {card}");
+        assert!(card.contains(plain_step), "{lang}: {plain_step}\n{card}");
+
+        // Outside the diagrams: the marker stays, and its line says once
+        // that a value was left out; no line says it without a marker.
+        let mut in_diagram = false;
+        let mut diagram_lines: Vec<&str> = Vec::new();
+        let mut admitting = 0;
+        for line in card.lines() {
+            if line.starts_with("```mermaid") {
+                in_diagram = true;
+            } else if line.starts_with("```") {
+                in_diagram = false;
+            } else if in_diagram {
+                diagram_lines.push(line);
+            } else if line.contains(REDACTION_MARKER) {
+                admitting += 1;
+                assert_eq!(line.matches(sentence).count(), 1, "{lang}: {line}");
+            } else {
+                assert!(!line.contains(sentence), "{lang}: {line}");
+            }
+        }
+        assert!(
+            admitting >= 2,
+            "{lang}: the steps with a withheld value are on the card"
+        );
+
+        // In the diagrams: the node keeps the marker, its quotes are
+        // balanced, and one sentence under each diagram says what was left.
+        let node = diagram_lines
+            .iter()
+            .find(|l| l.contains(REDACTION_MARKER))
+            .unwrap_or_else(|| panic!("{lang}: no node with a marker"));
+        assert_eq!(node.matches('"').count() % 2, 0, "{node}");
+        assert!(!node.contains("-->"), "{node}");
+        assert_eq!(
+            card.matches(under_diagram).count(),
+            card.matches("```mermaid").count(),
+            "{lang}: every diagram of Gate holds a marker and says so"
         );
     }
 }
