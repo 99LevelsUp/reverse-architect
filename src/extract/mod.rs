@@ -16,6 +16,7 @@
 //! Which source a run got is not visible to any extractor — see the
 //! crate-internal `source` module.
 
+pub mod bodies;
 mod cache;
 pub(crate) mod directory;
 pub mod external;
@@ -54,6 +55,7 @@ pub(crate) use cache::CacheStore;
 pub(crate) use cache::{activate, compute_fingerprint, CACHE_DIR_NAME};
 pub use resolve::rights::{DeleteRight, RightsTable};
 use std::path::{Path, PathBuf};
+pub(crate) use treesitter::NamesHandoff;
 
 /// Current on-disk cross-run cache format version (U2+).
 ///
@@ -219,6 +221,16 @@ use std::path::{Path, PathBuf};
 /// A record written by an earlier commit of the same branch can still hold
 /// the anchors these withhold — v10 is unreleased, and the one bump for
 /// area B stands.
+///
+/// The second layer (plan 2a, U4) is NOT a bump, checked rather than
+/// assumed. Its records live in a phase of their own, `languages-bodies`,
+/// which no build before it wrote or reads; each is tagged with the digest
+/// of the body component that made it and with the version of the host's
+/// redaction of its texts ([`bodies::BODY_REDACTION_VERSION`], through
+/// `CacheStore::derived`), so a rebuilt component or a changed redaction
+/// misses exactly those records. The first layer's records are written as
+/// before, and a run without `--detail-level` writes byte for byte what it
+/// did — so no record of any phase could be served stale by this change.
 pub(crate) const CACHE_VERSION: u32 = 10;
 
 /// Errors an extractor can raise. All readable; never a panic.
@@ -763,6 +775,18 @@ pub(crate) fn default_extractors_with(
     opts: &ExtractOptions,
     cache: Option<&CacheStore>,
 ) -> Vec<Box<dyn Extractor>> {
+    default_extractors_handing_names(opts, cache, None)
+}
+
+/// [`default_extractors_with`], with the languages extractor handing its
+/// declaration-name positions to `names` instead of dropping them — for a run
+/// with the second layer (plan 2a, U4), whose pairing reads them after every
+/// extractor ran. `None` is exactly [`default_extractors_with`].
+pub(crate) fn default_extractors_handing_names(
+    opts: &ExtractOptions,
+    cache: Option<&CacheStore>,
+    names: Option<NamesHandoff>,
+) -> Vec<Box<dyn Extractor>> {
     // Compiled once and cloned into each extractor that redacts, rather than
     // rebuilt per file: the regex is the same for the whole run.
     let secret_prefixes = external::SecretPrefixes::new(&opts.secret_prefixes);
@@ -781,6 +805,7 @@ pub(crate) fn default_extractors_with(
             pair_with_index: opts.scip_index.is_some(),
             trace_over_ceiling: opts.trace_over_ceiling,
             usings_handoff: usings_handoff.clone(),
+            names_handoff: names,
         }),
         Box::new(manifest_deps::ManifestDeps),
         Box::new(metrics::Metrics {
@@ -936,7 +961,20 @@ pub(crate) fn run_all_with_cached(
     progress: &dyn crate::progress::Progress,
     cache: Option<&CacheStore>,
 ) -> Result<(), ExtractError> {
-    for extractor in default_extractors_with(opts, cache) {
+    run_all_handing_names(repo, graph, opts, progress, cache, None)
+}
+
+/// [`run_all_with_cached`], handing the declaration-name positions to
+/// `names` for the second layer ([`default_extractors_handing_names`]).
+pub(crate) fn run_all_handing_names(
+    repo: &Repo,
+    graph: &mut Graph,
+    opts: &ExtractOptions,
+    progress: &dyn crate::progress::Progress,
+    cache: Option<&CacheStore>,
+    names: Option<&NamesHandoff>,
+) -> Result<(), ExtractError> {
+    for extractor in default_extractors_handing_names(opts, cache, names.cloned()) {
         // The extractor's own id is the phase name — one vocabulary for the
         // operator watching, for the coverage artifact and for the trust-rank
         // table, so a slow phase can be named in a bug report without a lookup.

@@ -68,7 +68,10 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Also in v6 (U13): `model_purpose`, what generation did with the purpose
 /// layer `verify --purpose` wrote — records used, stale and unmatched —
 /// present only for a run asked to read it (`--model-purpose`), so every
-/// other artifact is byte for byte what it was.
+/// other artifact is byte for byte what it was. And from plan 2a, U4:
+/// `bodies`, what the second layer read and paired and where it failed,
+/// present only for a run with `--detail-level` on the same terms — no bump,
+/// since no other artifact changes by a byte.
 ///
 /// v5: `noise` — how much noise the graph and the cards carry (plan A, U4:
 /// R21, KTD14). Written by every run, so the version rises for every corpus,
@@ -219,6 +222,100 @@ pub struct Coverage {
     /// it (`--model-purpose`), as `model_verification` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_purpose: Option<ModelPurpose>,
+    /// What the second layer read (plan 2a, U4: KTD6, KTD8): the level, the
+    /// plugins, how its bodies paired with the first layer, what paired with
+    /// nothing, and every file it failed on. Present only for a run with
+    /// `--detail-level` ([`bodies`]), as `model_purpose` is for its flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bodies: Option<Bodies>,
+}
+
+/// The second layer of a run, as coverage reports it (plan 2a, U4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bodies {
+    /// `--detail-level`.
+    pub detail_level: u8,
+    /// The plugins that could read bodies, by id, in routing order.
+    pub plugins: Vec<String>,
+    /// Files whose bodies were read.
+    pub files: u64,
+    /// Member bodies read, and how they found their declaration: by the
+    /// position of its name, or as the nearest declaration around them.
+    pub members: u64,
+    pub paired_by_name: u64,
+    pub paired_by_enclosing: u64,
+    /// Bodies that paired with no declaration and have none around them —
+    /// kept in the model and listed here, never dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpaired: Vec<UnpairedBody>,
+    /// Type shapes, typed members and declaration metas whose name position
+    /// is no declaration's.
+    pub unpaired_declarations: u64,
+    /// Every file the `bodies` pass failed on: it keeps its first layer and
+    /// loses its second.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedBodies>,
+    /// Declarations written in several files — the parts of a partial type —
+    /// rendered without their second layer because one part failed although
+    /// another was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<String>,
+}
+
+/// One body the second layer could pair with nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnpairedBody {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    /// The kind of declaration it is the body of (`method`, `getter`, …).
+    pub kind: String,
+}
+
+/// One file the `bodies` pass failed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedBodies {
+    pub path: String,
+    pub plugin: String,
+    /// Redacted, as the plugin's every text.
+    pub reason: String,
+}
+
+/// The second layer's section of coverage, read off the run's model.
+pub fn bodies(layer: &crate::extract::bodies::BodyLayer) -> Bodies {
+    let counts = layer.counts();
+    Bodies {
+        detail_level: layer.level(),
+        plugins: layer.readers().iter().map(|r| r.id.clone()).collect(),
+        files: layer.files().count() as u64,
+        members: counts.members,
+        paired_by_name: counts.paired_by_name,
+        paired_by_enclosing: counts.paired_by_enclosing,
+        unpaired: layer
+            .unpaired()
+            .iter()
+            .map(|u| UnpairedBody {
+                path: u.path.clone(),
+                line: u.position.line,
+                column: u.position.column,
+                kind: u.kind.word().to_string(),
+            })
+            .collect(),
+        unpaired_declarations: counts.unpaired_declarations,
+        failed: layer
+            .failures()
+            .map(|(path, f)| FailedBodies {
+                path: path.to_string(),
+                plugin: f.plugin.clone(),
+                reason: f.reason.clone(),
+            })
+            .collect(),
+        withheld: layer
+            .withheld()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect(),
+    }
 }
 
 /// The purpose layer's records, by what became of each one (plan B, U13).
@@ -975,6 +1072,8 @@ pub fn build_coverage(
         cards: None,
         // Generation sets it when it read the purpose layer, as above.
         model_purpose: None,
+        // Generation sets it for a run with the second layer ([`bodies`]).
+        bodies: None,
         noise: Some(Noise {
             edges_by_rung: edges_by_rung(graph),
             card_rows,

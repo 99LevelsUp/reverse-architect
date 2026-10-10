@@ -99,6 +99,14 @@ pub struct Cli {
     #[arg(long)]
     pub model_purpose: bool,
 
+    /// Also read the bodies of the members — the second layer (`1`, `2` or
+    /// `3`, how much of it later cards show). It sits beside the graph and
+    /// changes none of it; the manifest and coverage name the level and the
+    /// component that read the bodies. Off by default: without it the body
+    /// component is not even loaded, and the corpus is what it always was.
+    #[arg(long, value_name = "LEVEL", value_parser = clap::value_parser!(u8).range(1..=3))]
+    pub detail_level: Option<u8>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -542,6 +550,25 @@ mod tests {
         let on =
             Cli::try_parse_from(["reverse-architect", "some/repo", "--model-purpose"]).unwrap();
         assert!(on.model_purpose);
+    }
+
+    #[test]
+    fn detail_level_defaults_off_and_takes_one_to_three() {
+        let default = Cli::try_parse_from(["reverse-architect", "some/repo"]).unwrap();
+        assert_eq!(default.detail_level, None);
+        for level in ["1", "2", "3"] {
+            let on =
+                Cli::try_parse_from(["reverse-architect", "some/repo", "--detail-level", level])
+                    .unwrap();
+            assert_eq!(on.detail_level, Some(level.parse().unwrap()));
+        }
+        for wrong in ["0", "4", "x"] {
+            assert!(
+                Cli::try_parse_from(["reverse-architect", "some/repo", "--detail-level", wrong])
+                    .is_err(),
+                "{wrong}"
+            );
+        }
     }
 
     #[test]

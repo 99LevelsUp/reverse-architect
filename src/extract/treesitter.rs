@@ -102,6 +102,39 @@ pub struct Languages {
     /// Where the project-wide usings this run read go, for the external
     /// extractor's decisions by an enum's value (plan B, U5).
     pub(crate) usings_handoff: UsingsHandoff,
+    /// Where the declaration-name positions go once the usage pass no longer
+    /// needs them, for the second layer's pairing (plan 2a, U4: KTD6) — set
+    /// only for a run with `--detail-level`. `None`: they are dropped, as they
+    /// always were.
+    pub(crate) names_handoff: Option<NamesHandoff>,
+}
+
+/// The declaration-name positions of one run, handed from the languages
+/// extractor, which collects them in its declaration pass, to the second
+/// layer, which pairs every body model with the declaration it belongs to by
+/// the position of its name (plan 2a, U4: KTD6). The pattern of
+/// [`UsingsHandoff`]: both sides hold a clone of one handoff, the languages
+/// extractor puts once, the second layer takes once after every extractor ran.
+///
+/// On a warm run the positions come back from the declaration records, which
+/// store them (`FileOutputWire::names`), so a cached first layer pairs as a
+/// fresh one does.
+#[derive(Clone, Default)]
+pub(crate) struct NamesHandoff(Arc<Mutex<Option<NamePositions>>>);
+
+impl NamesHandoff {
+    fn put(&self, names: NamePositions) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(names);
+    }
+
+    /// The positions, or none when the languages extractor never ran.
+    pub(crate) fn take(&self) -> NamePositions {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .unwrap_or_default()
+    }
 }
 
 /// The id this extractor runs under in progress output and the registry. The
@@ -171,7 +204,7 @@ impl Languages {
 }
 
 /// Per-worker sessions, one per plugin, opened on first use.
-struct Sessions {
+pub(crate) struct Sessions {
     paths: Arc<HashSet<String>>,
     open: HashMap<&'static str, Session<'static>>,
 }
@@ -184,7 +217,7 @@ impl Sessions {
         }
     }
 
-    fn get(&mut self, plugin: &'static Plugin) -> Option<&mut Session<'static>> {
+    pub(crate) fn get(&mut self, plugin: &'static Plugin) -> Option<&mut Session<'static>> {
         if !self.open.contains_key(plugin.id()) {
             match plugin.session(self.paths.clone()) {
                 Ok(s) => {
@@ -212,20 +245,20 @@ impl Sessions {
 /// only stretches it across splits and passes. Which files an instance saw
 /// before never reaches the output: every call parses its own source from
 /// scratch, and an instance that trapped is discarded (`Session::call`).
-struct Pool {
+pub(crate) struct Pool {
     paths: Arc<HashSet<String>>,
     free: Mutex<Vec<Sessions>>,
 }
 
 impl Pool {
-    fn new(paths: Arc<HashSet<String>>) -> Pool {
+    pub(crate) fn new(paths: Arc<HashSet<String>>) -> Pool {
         Pool {
             paths,
             free: Mutex::new(Vec::new()),
         }
     }
 
-    fn lease(&self) -> Lease<'_> {
+    pub(crate) fn lease(&self) -> Lease<'_> {
         let reused = self.free.lock().unwrap_or_else(|e| e.into_inner()).pop();
         Lease {
             pool: self,
@@ -235,13 +268,13 @@ impl Pool {
 }
 
 /// One split's sessions, returned to the pool on drop.
-struct Lease<'a> {
+pub(crate) struct Lease<'a> {
     pool: &'a Pool,
     sessions: Option<Sessions>,
 }
 
 impl Lease<'_> {
-    fn get(&mut self, plugin: &'static Plugin) -> Option<&mut Session<'static>> {
+    pub(crate) fn get(&mut self, plugin: &'static Plugin) -> Option<&mut Session<'static>> {
         self.sessions
             .as_mut()
             .expect("present until drop")
@@ -402,10 +435,14 @@ impl Extractor for Languages {
         let table = SymbolTable::build(graph, &names);
         let project = Arc::new(self.project_usings(repo, &tracked));
         self.usings_handoff.put(Arc::clone(&project));
-        if self.pair_with_index {
-            graph.sites_mut().keep_declaration_names(names);
-        } else {
-            drop(names);
+        match (&self.names_handoff, self.pair_with_index) {
+            (Some(handoff), true) => {
+                handoff.put(names.clone());
+                graph.sites_mut().keep_declaration_names(names);
+            }
+            (Some(handoff), false) => handoff.put(names),
+            (None, true) => graph.sites_mut().keep_declaration_names(names),
+            (None, false) => drop(names),
         }
         progress.phase("languages usages", Some(tracked.len()));
         let mut discard = Vec::new();
@@ -1520,6 +1557,12 @@ impl PathKeys {
                 .map(|n| n.key.as_str().to_string())
                 .collect(),
         )
+    }
+
+    /// The frozen keys, for a pass that hands them to its plugins' sessions
+    /// itself (the second layer, plan 2a U4).
+    pub(crate) fn into_set(self) -> HashSet<String> {
+        self.0
     }
 }
 

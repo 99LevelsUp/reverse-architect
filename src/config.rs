@@ -82,6 +82,12 @@ pub struct Config {
     /// ([`crate::extract::ExtractOptions::trace_over_ceiling`]). Set by `ra
     /// measure` only; off, the graph and every output are what they were.
     pub trace_over_ceiling: bool,
+    /// The second layer's detail level (plan 2a, U4: KTD7), `1` to `3`:
+    /// read the bodies of the members beside the graph. A choice of
+    /// rendering, like `model_purpose` — never an extraction option, so it
+    /// is in no cache fingerprint. `None`, the default: the body component
+    /// is not loaded and every output is byte for byte what it was.
+    pub detail_level: Option<u8>,
 }
 
 /// What shapes the graph, as every subcommand that rebuilds it takes it —
@@ -176,6 +182,7 @@ impl Config {
             model_verification: cli.model_verification,
             model_purpose: cli.model_purpose,
             trace_over_ceiling: false,
+            detail_level: cli.detail_level,
         })
     }
 
@@ -207,6 +214,7 @@ impl Config {
             model_verification: false,
             model_purpose: false,
             trace_over_ceiling: false,
+            detail_level: None,
         })
     }
 }
@@ -248,6 +256,7 @@ mod tests {
             sites: false,
             model_verification: false,
             model_purpose: false,
+            detail_level: None,
             command: None,
         }
     }
@@ -268,6 +277,7 @@ mod tests {
             sites: false,
             model_verification: false,
             model_purpose: false,
+            detail_level: None,
             command: None,
         };
         let err = Config::resolve(&cli).unwrap_err();

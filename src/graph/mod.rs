@@ -794,6 +794,19 @@ pub enum FactKind {
     /// the File node, absent when zero. Its one projection is coverage; left
     /// out of the manifest like the decisions it counts. Additive.
     EnumDecisionsUnmatched,
+    /// The `bodies` pass of the second layer failed on this file (plan 2a,
+    /// U4: KTD8): the plugin trapped, ran out of fuel or memory, or refused
+    /// the file with a reason of its own. Carried on the File node, with the
+    /// plugin as its extractor and `bodies: <reason>` as text, redacted like
+    /// every text a plugin returns.
+    ///
+    /// The file loses only its second layer: its declarations and usages are
+    /// the first layer's, and an [`FactKind::ExtractionFailed`] is never
+    /// written for it. Written only by a run with `--detail-level`, so a run
+    /// without one carries none. Detail-only ([`FactKind::is_detail_only`]):
+    /// its projections are coverage and, from a later unit, the detail of a
+    /// type that lost its second layer. Additive.
+    BodyExtractionFailed,
     /// A kind this corpus declared for itself (R1). Its cardinality comes from
     /// the declaration, which is why `merge` can resolve it (R7).
     #[serde(skip)]
@@ -1157,6 +1170,7 @@ impl FactKind {
             FactKind::AnchorsDropped,
             FactKind::EnumDecision,
             FactKind::EnumDecisionsUnmatched,
+            FactKind::BodyExtractionFailed,
         ]
     }
 
@@ -1181,6 +1195,7 @@ impl FactKind {
                 | FactKind::AnchorsDropped
                 | FactKind::EnumDecision
                 | FactKind::EnumDecisionsUnmatched
+                | FactKind::BodyExtractionFailed
         )
     }
 }
@@ -1896,6 +1911,7 @@ mod tests {
                 | FactKind::AnchorsDropped
                 | FactKind::EnumDecision
                 | FactKind::EnumDecisionsUnmatched
+                | FactKind::BodyExtractionFailed
                 | FactKind::Declared(_) => {}
             }
         }
@@ -1918,7 +1934,7 @@ mod tests {
         // quietly smaller core vocabulary.
         assert_eq!(NodeKind::core_kinds().len(), 5);
         assert_eq!(EdgeKind::core_kinds().len(), 11);
-        assert_eq!(FactKind::core_kinds().len(), 28);
+        assert_eq!(FactKind::core_kinds().len(), 29);
         assert_eq!(
             FactKind::core_kinds().iter().collect::<BTreeSet<_>>().len(),
             FactKind::core_kinds().len()

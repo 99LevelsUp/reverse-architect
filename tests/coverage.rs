@@ -725,6 +725,7 @@ fn generate_over(repo: &Path, out: &Path) -> reverse_architect::Generated {
         model_verification: false,
         model_purpose: false,
         trace_over_ceiling: false,
+        detail_level: None,
     })
     .expect("the pipeline runs")
 }

@@ -139,6 +139,7 @@ impl FactKind {
             | FactKind::ResolvedCoverage
             // Each pass that failed says so; one must not hide the other.
             | FactKind::ExtractionFailed
+            | FactKind::BodyExtractionFailed
             // One per database access the code makes — a method that reads a
             // table on two lines makes two, and collapsing them would hide one
             // of the places (plan B, R11).

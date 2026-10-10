@@ -49,6 +49,25 @@ pub fn load_csharp_body() -> Result<Plugin, PluginError> {
     Plugin::load(&format!("bundled:{id}"), bytes)
 }
 
+/// [`CSHARP_BODY`], loaded once per process on first use — only by a run with
+/// the second layer (`--detail-level`), so a run without it never compiles
+/// the component. A session borrows its plugin for the run, hence the
+/// `'static` borrow, as [`bundled`] hands out. A bundled component that fails
+/// to load is a broken build, so it panics with the reason, as there.
+pub fn csharp_body() -> &'static Plugin {
+    static PLUGIN: OnceLock<Plugin> = OnceLock::new();
+    PLUGIN.get_or_init(|| {
+        let plugin = load_csharp_body()
+            .unwrap_or_else(|e| panic!("bundled plugin `{}` is broken: {e}", CSHARP_BODY.0));
+        assert_eq!(
+            plugin.id(),
+            CSHARP_BODY.0,
+            "the bundled body component describes itself under another id"
+        );
+        plugin
+    })
+}
+
 /// Every bundled plugin, loaded once per process.
 ///
 /// Loading compiles the components, which is the expensive part of a plugin's

@@ -685,6 +685,7 @@ fn corpus_and_manifest_agree_on_the_view_set_under_a_profile() {
         model_verification: false,
         model_purpose: false,
         trace_over_ceiling: false,
+        detail_level: None,
     };
     let generated = reverse_architect::generate(&cfg).unwrap();
 

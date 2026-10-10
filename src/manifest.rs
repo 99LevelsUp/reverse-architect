@@ -120,7 +120,9 @@ use std::collections::BTreeMap;
 /// The same holds for the kinds of plan B, U5 (`enum_decision`,
 /// `enum_decisions_unmatched`): core kinds of the graph, never in a v10
 /// manifest — the decisions' projection is the enum's detail and the count's
-/// is coverage.
+/// is coverage. So does the second layer's `body_extraction_failed` (plan 2a,
+/// U4), written only by a run with `--detail-level`: detail-only, its
+/// projection is coverage.
 /// From plan B, U11 the `documents` describe the three levels of the card
 /// corpus (KTD9, R4, R16), so each channel picks what it indexes. Two new
 /// document kinds: `map`, one per module map, id `map:<module key>`, and
@@ -228,6 +230,13 @@ pub struct Manifest {
     /// manifest is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<ManifestPlugin>,
+    /// The second layer's detail level, for a corpus built with
+    /// `--detail-level` (plan 2a, U4: KTD7). Its plugins are in `plugins`
+    /// beside the first layer's — the body component among them. Absent for
+    /// every other corpus, which is then byte for byte what it was; additive
+    /// and without a version bump, like `plugins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_level: Option<u8>,
     /// Every repeated long string in the artifact, written once.
     ///
     /// Node keys and source paths are the two things this export says over and
@@ -653,6 +662,7 @@ pub fn build_manifest(
         schema_version,
         vocabulary,
         plugins: Vec::new(),
+        detail_level: None,
         strings: strings.into_table(),
         documents,
         nodes,

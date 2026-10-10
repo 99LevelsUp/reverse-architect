@@ -61,6 +61,11 @@ pub struct Generated {
     /// artifact rather than a sentence in a view, so a consumer deciding whether
     /// an absence claim is licensed reads a file instead of parsing prose.
     pub coverage: coverage::Coverage,
+    /// The second layer (plan 2a, U4): the model of the members' bodies,
+    /// paired with the graph's declarations — for a run with
+    /// `--detail-level`, `None` otherwise. Nothing renders it yet; the
+    /// analyses and cards of later units read it from here.
+    pub bodies: Option<extract::bodies::BodyLayer>,
 }
 
 impl Generated {
@@ -121,6 +126,7 @@ pub fn generate_reporting(
         graph,
         options: extract_options,
         registry,
+        bodies,
     } = build_graph(config, progress)?;
     // The one profile flows into BOTH projections, so the corpus and the manifest
     // always agree on the selected view set (KTD-C5).
@@ -159,6 +165,22 @@ pub fn generate_reporting(
                 .collect(),
         })
         .collect();
+    // The second layer's own component and level (plan 2a, U4: KTD9) — only
+    // for a run with it, so every other manifest is what it was.
+    if let Some(layer) = &bodies {
+        manifest.detail_level = Some(layer.level());
+        // The run's own plugins are listed already; the component the layer
+        // added is not one of them.
+        for reader in layer.readers().iter().filter(|r| r.component) {
+            manifest.plugins.push(manifest::ManifestPlugin {
+                id: reader.id.clone(),
+                version: reader.version.clone(),
+                sha256: reader.sha256.clone(),
+                origin: plugin::Origin::Bundled.word().to_string(),
+                languages: reader.languages.clone(),
+            });
+        }
+    }
     progress.phase_done();
     progress.phase("render cards", None);
     let (mut card_set, insight, card_rows) = match &layer {
@@ -273,6 +295,7 @@ pub fn generate_reporting(
     // The card levels are counted over what was rendered (plan B, U12), the
     // way the card noise is counted by the layer that built it.
     coverage.cards = Some(coverage::card_levels(&card_set, &cards, &details, &maps));
+    coverage.bodies = bodies.as_ref().map(coverage::bodies);
     progress.phase_done();
     Ok(Generated {
         graph,
@@ -282,6 +305,7 @@ pub fn generate_reporting(
         details,
         maps,
         coverage,
+        bodies,
     })
 }
 
@@ -295,6 +319,8 @@ pub struct Built {
     /// names the component behind each file's usage sites.
     pub options: extract::ExtractOptions,
     pub registry: extract::Registry,
+    /// The second layer, for a run with `--detail-level` (plan 2a, U4).
+    pub bodies: Option<extract::bodies::BodyLayer>,
 }
 
 /// Open the repository and build its merged fact graph from `config`: the
@@ -314,8 +340,18 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     // the cache below and every extractor read one vocabulary (U19).
     let plugins = plugin::PluginSet::with_declared(&config.plugins)?;
     plugins.declare_vocabularies(&mut graph)?;
+    // The second layer (plan 2a, U4: KTD7): only a run with a detail level
+    // loads the body component, and only such a run records it among the
+    // languages — after the first layer's plugins, so no extension changes
+    // hands. It stays out of `plugins`, which the cache fingerprint names.
+    let body_pass = config
+        .detail_level
+        .map(|level| extract::bodies::BodyPass::new(level, &plugins));
     let mut languages = extract::languages::Languages::bundled();
     plugins.register_languages(&mut languages);
+    if let Some(pass) = &body_pass {
+        plugins.register_body_languages(&mut languages, pass.component());
+    }
     let extract_options = extract::ExtractOptions {
         ambiguity_ceiling: config.ambiguity_ceiling,
         secret_prefixes: config.secret_prefixes.clone(),
@@ -373,13 +409,31 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
                 graph.vocabulary().clone(),
             )
         });
-    extract::run_all_with_cached(
+    // The declaration-name positions, kept past the usage pass only for the
+    // second layer's pairing.
+    let names = body_pass.as_ref().map(|_| extract::NamesHandoff::default());
+    extract::run_all_handing_names(
         &repo,
         &mut graph,
         &extract_options,
         progress,
         cache.as_ref(),
+        names.as_ref(),
     )?;
+    // After every first-layer extractor, before the merge sorts the facts
+    // its failures add (KTD8).
+    let bodies = match (&body_pass, &names) {
+        (Some(pass), Some(names)) => Some(extract::bodies::run(
+            pass,
+            &repo,
+            &mut graph,
+            &names.take(),
+            &extract::external::SecretPrefixes::new(&config.secret_prefixes),
+            cache.as_ref(),
+            progress,
+        )?),
+        _ => None,
+    };
     // Merge unifies facts from every extractor before either projection reads
     // the graph (KTD-B5): additive kinds union, scalar conflicts resolve by
     // trust-rank with losers preserved as dissent. `generate` supplies the
@@ -392,5 +446,6 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
         graph,
         options: extract_options,
         registry,
+        bodies,
     })
 }
