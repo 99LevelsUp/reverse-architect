@@ -3328,3 +3328,215 @@ fn the_entry_points_view_carries_the_line_of_coverage_right_above_e9() {
     }
     assert!(!view(&plain, "entry-points.md").contains("Coverage of triggers"));
 }
+
+// ---- U9: the acceptance examples over the output of a run ----
+//
+// AE → test: the tests above, which hold the examples over the analysis or a
+// part of the output, and these, which hold the rest over what a run writes
+// (the card, the registry, `entry-points`).
+//
+// AE1  the_f4_flow_of_the_old_editor_is_drawn_once_and_the_menu_item_refers_to_it
+// AE2  the_new_editors_check_has_the_dead_f4_on_level_1_and_its_steps_on_level_2,
+//      f4_of_each_editor_is_a_row_of_its_own_and_the_new_ones_is_dead_with_its_anchor
+// AE3  f4_of_each_editor_is_a_row_of_its_own_and_the_new_ones_is_dead_with_its_anchor,
+//      the_f4_flow_never_leads_to_both_view_models
+// AE4  ae4_the_external_check_is_an_entry_row_and_a_flow_of_its_own_in_the_output
+// AE5  ae5_a_key_gesture_is_a_registry_row_anchored_at_the_gesture
+// AE6  the_registry_without_a_xaml_component_says_xaml_is_not_covered_above_its_rows,
+//      the_entry_points_view_carries_the_line_of_coverage_right_above_e9
+// AE7  the_entry_points_view_carries_the_line_of_coverage_right_above_e9,
+//      ae7_the_second_layer_is_the_same_bytes_twice_and_without_it_nothing_is_added
+//      (and `layer2.rs`: the pinned fingerprint of a plain run)
+// AE8  the_new_editors_check_has_the_dead_f4_on_level_1_and_its_steps_on_level_2
+// AE9  the_command_class_has_one_flow_and_the_view_refers_to_the_check
+// AE10 ae10_the_card_tells_the_results_of_the_check_and_who_reads_its_state
+
+/// AE4: `ExternalCheck.Run()` is a row "entry from another component" of the
+/// registry, with the anchor of the place it is declared at, and on the card
+/// of `EditorViewModel` a flow of its own: it enters at `Check(bool)`, with
+/// no F4 condition, no CanExecute and no branch on Shift.
+#[test]
+fn ae4_the_external_check_is_an_entry_row_and_a_flow_of_its_own_in_the_output() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let rows = registry_rows(registry(&g));
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let to_check = format!(
+        "- entry from another component · `ExternalCheck.Run()` · active → \
+         [EditorViewModel.CheckCommand]({}) — `src/ViewModels/EditorViewModel.cs:",
+        card_link(&g, &vm)
+    );
+    let row = rows
+        .iter()
+        .find(|r| r.starts_with(&to_check))
+        .unwrap_or_else(|| panic!("{rows:#?}"));
+    assert!(ends_in_anchor(row), "{row}");
+
+    let context = editor_context(&g, &vm, &key(EDITOR_MODELS, "EditorViewModel.Check(bool)"));
+    let flow = flow_block(
+        &context,
+        "Entry from another component: ExternalCheck.Run()",
+    );
+    let trigger = flow
+        .lines()
+        .find(|l| l.starts_with("- Trigger: entry from another component `ExternalCheck.Run()`"))
+        .unwrap_or_else(|| panic!("{flow}"));
+    assert!(ends_in_anchor(trigger), "{trigger}");
+    assert!(
+        flow.lines().any(|l| l
+            .starts_with("- Step: `ExternalCheck.Run()` → `Check(bool)` (card [ExternalCheck](")),
+        "{flow}"
+    );
+    for absent in [
+        "Key.F4",
+        "CanExecute",
+        "ModifierKeys.Shift",
+        "RelayCommand",
+        "From `CheckCommand` on",
+    ] {
+        assert!(!flow.contains(absent), "{absent} in:\n{flow}");
+    }
+    assert!(flow.contains("- Result: `Check(bool)` writes `CheckWasDone` = `true`"));
+    // The flow of F4 is another block of the same context.
+    assert!(flow_block(&context, "Key: Key.F4 — EditorView").contains("ModifierKeys.Shift"));
+}
+
+/// AE5: `new KeyGesture(Key.F4, ModifierKeys.Control)` given to the command
+/// is a registry row "key Ctrl+F4" leading to the command of closing the
+/// errors, anchored at the assignment of the gesture.
+#[test]
+fn ae5_a_key_gesture_is_a_registry_row_anchored_at_the_gesture() {
+    let g = layered(&editor_fixture::files(), 1, "en");
+    let rows = registry_rows(registry(&g));
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let line = line_in(
+        editor_fixture::VIEW_MODEL,
+        "closeErrorsCommand.KeyGestures =",
+    );
+    let expected = format!(
+        "- key · `Key.F4+ModifierKeys.Control` in `EditorViewModel.CloseErrorsCommand` · active → \
+         [EditorViewModel.CloseErrorsCommand]({}) — `src/ViewModels/EditorViewModel.cs:{line}`",
+        card_link(&g, &vm)
+    );
+    assert!(rows.contains(&expected.as_str()), "{rows:#?}");
+    // The gesture is a row of its own, not a second F4 of a view.
+    assert!(rows
+        .iter()
+        .filter(|r| r.contains("`Key.F4+ModifierKeys.Control`"))
+        .all(|r| r.ends_with(&format!(":{line}`"))));
+}
+
+/// AE10: the card of `EditorViewModel` tells, under the flow of F4, the
+/// writes of the properties that notify their change, `CheckWasDone = true`
+/// at the end, and `CheckWasDone = false` on each of the three silent
+/// returns, read by `ExternalCheck` — and the context of the state names
+/// `ExternalCheck` as a reader and the save as a writer, never as a reader.
+#[test]
+fn ae10_the_card_tells_the_results_of_the_check_and_who_reads_its_state() {
+    let g = layered(&editor_fixture::files(), 2, "en");
+    let vm = key(EDITOR_MODELS, "EditorViewModel");
+    let context = editor_context(&g, &vm, &key(EDITOR_MODELS, "EditorViewModel.Check(bool)"));
+    let f4 = flow_block(&context, "Key: Key.F4 — EditorView");
+    for property in ["Errors", "ShowErrors", "MessageErrors", "SelectedIndex"] {
+        let start = format!("- Result: `Check(bool)` writes `{property}`");
+        let line = f4
+            .lines()
+            .find(|l| l.starts_with(&start))
+            .unwrap_or_else(|| panic!("{start}\n{f4}"));
+        assert!(
+            line.contains(", which notifies its change") && ends_in_anchor(line),
+            "{line}"
+        );
+    }
+    let done = |value: &str| {
+        let start = format!("- Result: `Check(bool)` writes `CheckWasDone` = `{value}`, read by ");
+        let line = f4
+            .lines()
+            .find(|l| l.starts_with(&start))
+            .unwrap_or_else(|| panic!("{start}\n{f4}"));
+        assert!(
+            line.starts_with(&format!("{start}`ExternalCheck.Run()` — ")) && ends_in_anchor(line),
+            "{line}"
+        );
+    };
+    done("false");
+    done("true");
+    // The three silent returns: the guard of each says that the reset of the
+    // state still happens.
+    for guard in [
+        "!canErrors",
+        "syntax != SyntaxKind.Sql && syntax != SyntaxKind.Script",
+        "Text == null",
+    ] {
+        let start =
+            format!("- Precondition: does not run when `{guard}` (a guard in `Check(bool)`); ");
+        let line = f4
+            .lines()
+            .find(|l| l.starts_with(&start))
+            .unwrap_or_else(|| panic!("{start}\n{f4}"));
+        assert!(
+            line.contains("still happens: `Check(bool)` writes `CheckWasDone` = `false`")
+                && ends_in_anchor(line),
+            "{line}"
+        );
+    }
+    assert!(!f4.contains("BeforeSave"), "{f4}");
+
+    let card = card_text(&g, &vm);
+    let state = part(
+        part(card, "## State: EditorViewModel.CheckWasDone"),
+        "### Context",
+    );
+    assert!(
+        state.contains("\n- Read by `ExternalCheck.Run()` — "),
+        "{state}"
+    );
+    assert!(
+        state.contains("\n- Written by `EditorView.BeforeSave()` — "),
+        "{state}"
+    );
+    assert!(
+        !state
+            .lines()
+            .any(|l| l.starts_with("- Read by ") && l.contains("BeforeSave")),
+        "{state}"
+    );
+}
+
+/// AE7, KTD13: without `--detail-level` a run adds nothing of the second
+/// layer — no registry, no context — and is the same bytes twice; with the
+/// second layer, two runs on separate directories write the same files, the
+/// same manifest and the same registry.
+#[test]
+fn ae7_the_second_layer_is_the_same_bytes_twice_and_without_it_nothing_is_added() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    common::init_repo_with_files(&repo, "Alice", &editor_fixture::files());
+    let plain: Vec<Generated> = (0..2)
+        .map(|n| run_over(&repo, &dir.path().join(format!("plain-{n}")), None))
+        .collect();
+    assert!(plain.iter().all(|g| g.triggers.is_none()));
+    assert!(plain
+        .iter()
+        .all(|g| g.cards.iter().all(|c| !c.contents.contains("### Context"))));
+    assert_eq!(plain[0].corpus, plain[1].corpus);
+    assert_eq!(plain[0].cards, plain[1].cards);
+    assert_eq!(plain[0].manifest, plain[1].manifest);
+    assert!(plain[0]
+        .corpus
+        .files
+        .iter()
+        .all(|f| !f.contents.contains("Coverage of triggers")));
+
+    let layered_runs: Vec<Generated> = (0..2)
+        .map(|n| run_over(&repo, &dir.path().join(format!("layered-{n}")), Some(2)))
+        .collect();
+    let (a, b) = (&layered_runs[0], &layered_runs[1]);
+    assert!(a.triggers.is_some());
+    assert_eq!(a.corpus, b.corpus);
+    assert_eq!(a.cards, b.cards);
+    assert_eq!(a.details, b.details);
+    assert_eq!(a.maps, b.maps);
+    assert_eq!(a.triggers, b.triggers);
+    assert_eq!(a.manifest, b.manifest);
+    assert_eq!(a.coverage, b.coverage);
+}

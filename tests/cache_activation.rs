@@ -16,9 +16,12 @@
 //! assume (the plan requires it never collide with a real corpus filename,
 //! never that the exact name be part of the public contract).
 
+use reverse_architect::config::Config;
 use reverse_architect::generate;
 
 mod common;
+#[path = "common/editor_fixture.rs"]
+mod editor_fixture;
 
 const CACHE_DIR_NAME: &str = ".ra-cache";
 
@@ -236,4 +239,53 @@ fn generated_output_is_byte_identical_regardless_of_cache_state() {
         baseline.coverage, warm.coverage,
         "baseline vs warm coverage differs"
     );
+}
+
+/// Step 2b (U9, KTD13): the same with the second layer. The bodies the flows
+/// are built of travel through the cache too, so the cards with their
+/// contexts, the registry of triggers and the manifest are the same bytes
+/// with the cache blocked, cold and warm.
+#[test]
+fn the_second_layer_is_byte_identical_regardless_of_cache_state() {
+    let repo = tempfile::tempdir().unwrap();
+    common::init_repo_with_files(repo.path(), "Alice", &editor_fixture::files());
+    let layered = |out: &std::path::Path| Config {
+        detail_level: Some(2),
+        ..common::config_for(repo.path(), out)
+    };
+
+    let out_baseline = tempfile::tempdir().unwrap();
+    std::fs::write(out_baseline.path().join(CACHE_DIR_NAME), b"not a directory").unwrap();
+    let baseline = generate(&layered(out_baseline.path())).expect("baseline run");
+
+    let out_cached = tempfile::tempdir().unwrap();
+    let cold = generate(&layered(out_cached.path())).expect("cold run");
+    let warm = generate(&layered(out_cached.path())).expect("warm run");
+
+    // Guard the guard: the output has what the cache could lose.
+    assert!(baseline.triggers.is_some());
+    assert!(baseline
+        .cards
+        .iter()
+        .any(|c| c.contents.contains("\n### Context\n")));
+    assert!(out_cached.path().join(CACHE_DIR_NAME).is_dir());
+
+    for (name, run) in [("cold", &cold), ("warm", &warm)] {
+        assert_eq!(baseline.corpus, run.corpus, "baseline vs {name} corpus");
+        assert_eq!(baseline.cards, run.cards, "baseline vs {name} cards");
+        assert_eq!(baseline.details, run.details, "baseline vs {name} details");
+        assert_eq!(baseline.maps, run.maps, "baseline vs {name} maps");
+        assert_eq!(
+            baseline.triggers, run.triggers,
+            "baseline vs {name} registry"
+        );
+        assert_eq!(
+            baseline.manifest, run.manifest,
+            "baseline vs {name} manifest"
+        );
+        assert_eq!(
+            baseline.coverage, run.coverage,
+            "baseline vs {name} coverage"
+        );
+    }
 }
