@@ -26,10 +26,11 @@
 //! two types share stays unresolved; an overload is chosen by the number of
 //! arguments only, optional parameters not counted.
 
+use super::link::Basis;
 use crate::extract::bodies::{
     AccessPath, BodyKind, BodyLayer, DeclarationKind, MemberBody, PairedBy, PathRoot,
 };
-use crate::graph::{EdgeKind, FactKind, FactValue, Graph, NodeKey, NodeKind};
+use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, NodeKind, SiteId};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -125,7 +126,17 @@ pub struct Index<'a> {
     members: BTreeMap<NodeKey, Vec<NodeKey>>,
     types_named: BTreeMap<String, Vec<NodeKey>>,
     bases: BTreeMap<NodeKey, Vec<NodeKey>>,
+    /// The members of the C# types by name, each list sorted by key: the
+    /// candidates an access that stopped at a name is shown with (step 2b,
+    /// KTD9) — never what it resolves to.
+    members_named: BTreeMap<String, Vec<NodeKey>>,
+    /// The first layer's relations an external index pinned, by the member
+    /// they leave: the target and the sites it was read at (step 2b, KTD3).
+    indexed: BTreeMap<NodeKey, Vec<(NodeKey, Vec<SiteId>)>>,
 }
+
+/// The kinds of relation an external index pins from a member to a member.
+const INDEXED_KINDS: &[EdgeKind] = &[EdgeKind::Calls, EdgeKind::References];
 
 fn text_fact(facts: &[crate::graph::Fact], kind: FactKind) -> Option<String> {
     facts
@@ -164,7 +175,16 @@ impl<'a> Index<'a> {
         }
         let mut members: BTreeMap<NodeKey, Vec<NodeKey>> = BTreeMap::new();
         let mut bases: BTreeMap<NodeKey, Vec<NodeKey>> = BTreeMap::new();
+        let mut indexed: BTreeMap<NodeKey, Vec<(NodeKey, Vec<SiteId>)>> = BTreeMap::new();
         for e in graph.edges_sorted() {
+            if INDEXED_KINDS.contains(&e.edge.kind)
+                && e.edge.provenance.rung() == Some(Confidence::ResolvedByIndex)
+            {
+                indexed
+                    .entry(e.from.clone())
+                    .or_default()
+                    .push((e.to.clone(), e.edge.sites.clone()));
+            }
             match e.edge.kind {
                 EdgeKind::HasMember => {
                     members
@@ -192,13 +212,37 @@ impl<'a> Index<'a> {
                     .push(key.clone());
             }
         }
+        let csharp: BTreeSet<&NodeKey> = types_named.values().flatten().collect();
+        let mut members_named: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
+        for (key, s) in &symbols {
+            if !s.is_type() && s.owner.as_ref().is_some_and(|o| csharp.contains(o)) {
+                members_named
+                    .entry(s.name.clone())
+                    .or_default()
+                    .push(key.clone());
+            }
+        }
         Index {
             layer,
             symbols,
             members,
             types_named,
             bases,
+            members_named,
+            indexed,
         }
+    }
+
+    /// The members of the repository's C# types named `name`, by key — the
+    /// candidates of an access stopped at that name, never its target.
+    pub fn members_named(&self, name: &str) -> &[NodeKey] {
+        self.members_named.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// The members an external index pinned as the targets of `caller`'s
+    /// relations, with the sites each was read at, by target.
+    pub fn indexed_from(&self, caller: &NodeKey) -> &[(NodeKey, Vec<SiteId>)] {
+        self.indexed.get(caller).map_or(&[], Vec::as_slice)
     }
 
     pub fn symbol(&self, key: &NodeKey) -> Option<&Symbol> {
@@ -346,11 +390,12 @@ impl<'a> Index<'a> {
         skip_own: bool,
     ) -> Result<Found, Unresolved> {
         if !skip_own {
-            if let Some(member) = self.pick(ty, name, call)? {
+            if let Some((member, overloaded)) = self.pick(ty, name, call)? {
                 return Ok(Found {
                     member,
                     owner: ty.clone(),
                     through: None,
+                    overloaded,
                 });
             }
         }
@@ -358,10 +403,11 @@ impl<'a> Index<'a> {
             return Err(Unresolved::NotAMember(name.to_string()));
         };
         match self.pick(base, name, call)? {
-            Some(member) => Ok(Found {
+            Some((member, overloaded)) => Ok(Found {
                 member,
                 owner: base.clone(),
                 through: Some(ty.clone()),
+                overloaded,
             }),
             None if self.ancestors(base).is_empty() => {
                 Err(Unresolved::NotAMember(name.to_string()))
@@ -372,13 +418,14 @@ impl<'a> Index<'a> {
 
     /// The one member of `ty` named `name`: for a call, a method by its
     /// argument count, else a delegate-valued member; for any other access a
-    /// value, else a single method (a method group).
+    /// value, else a single method (a method group). The flag says whether
+    /// the call's arity chose it among several methods.
     fn pick(
         &self,
         ty: &NodeKey,
         name: &str,
         call: Option<u32>,
-    ) -> Result<Option<NodeKey>, Unresolved> {
+    ) -> Result<Option<(NodeKey, bool)>, Unresolved> {
         let named: Vec<(&NodeKey, &Symbol)> = self
             .members_of(ty)
             .iter()
@@ -400,11 +447,13 @@ impl<'a> Index<'a> {
             .map(|(k, _)| *k)
             .collect();
         let one = |list: &[&NodeKey]| match list {
-            [only] => Ok(Some((*only).clone())),
+            [only] => Ok(Some(((*only).clone(), false))),
             _ => Err(ambiguous()),
         };
         match call {
-            Some(arity) if !methods.is_empty() => self.overload(name, &methods, arity).map(Some),
+            Some(arity) if !methods.is_empty() => self
+                .overload(name, &methods, arity)
+                .map(|m| Some((m, methods.len() > 1))),
             _ if !values.is_empty() => one(&values),
             _ if !methods.is_empty() => one(&methods),
             _ => one(&named.iter().map(|(k, _)| *k).collect::<Vec<_>>()),
@@ -413,11 +462,11 @@ impl<'a> Index<'a> {
 
     /// The overload of `name` a call with `arity` arguments picks among
     /// `methods`: the only one, else the one that declares `arity`
-    /// parameters ([`Index::arity_of`]). None or several of that arity is
+    /// parameters ([`Index::by_arity`]). None or several of that arity is
     /// [`Unresolved::AmbiguousMember`] — admitted, never guessed. The one
-    /// choice of an overload the analyses make (`Check()` → `Check(bool)`);
-    /// step 2b extends it to the members of other types instead of writing a
-    /// second one.
+    /// choice of an overload the analyses make (`Check()` → `Check(bool)`),
+    /// for the members of the type in hand and of every type an access goes
+    /// on through alike.
     pub fn overload(
         &self,
         name: &str,
@@ -427,20 +476,40 @@ impl<'a> Index<'a> {
         if let [only] = methods {
             return Ok((*only).clone());
         }
-        let by_arity: Vec<&NodeKey> = methods
+        match self.by_arity(methods, arity) {
+            ByArity::One(one) => Ok(one),
+            ByArity::NoneOf | ByArity::Several(_) => {
+                Err(Unresolved::AmbiguousMember(name.to_string()))
+            }
+        }
+    }
+
+    /// The members among `candidates` that declare `arity` parameters
+    /// ([`Index::arity_of`]) — the one selection by arity under
+    /// [`Index::overload`] and the choice of a constructor
+    /// (`entry::constructor`). Strict: a single candidate of another arity
+    /// is [`ByArity::NoneOf`]; `overload` alone takes a lone method whatever
+    /// its arity (optional parameters are not counted).
+    pub fn by_arity(&self, candidates: &[&NodeKey], arity: u32) -> ByArity {
+        let mut of: Vec<NodeKey> = candidates
             .iter()
-            .copied()
             .filter(|m| self.arity_of(m) == Some(arity))
+            .map(|m| (*m).clone())
             .collect();
-        match by_arity.as_slice() {
-            [one] => Ok((*one).clone()),
-            _ => Err(Unresolved::AmbiguousMember(name.to_string())),
+        match of.len() {
+            0 => ByArity::NoneOf,
+            1 => ByArity::One(of.remove(0)),
+            _ => {
+                of.sort();
+                ByArity::Several(of)
+            }
         }
     }
 
     /// The type a found member's value is of, its base's type parameter
-    /// substituted from the deriving type's base list (R17).
-    fn type_of(&self, found: &Found) -> Result<NodeKey, Unresolved> {
+    /// substituted from the deriving type's base list (R17); the flag says
+    /// whether it was substituted.
+    fn type_of(&self, found: &Found) -> Result<(NodeKey, bool), Unresolved> {
         let (name, args) = self.declared_type(&found.member)?;
         let params = self.type_params(&found.owner)?;
         if args.iter().any(|a| names_any(a, &params)) {
@@ -450,7 +519,7 @@ impl<'a> Index<'a> {
             )));
         }
         let Some(index) = params.iter().position(|p| *p == name) else {
-            return self.type_named(&name);
+            return self.type_named(&name).map(|t| (t, false));
         };
         let Some(derived) = &found.through else {
             return Err(Unresolved::UnboundTypeParameter(name));
@@ -463,14 +532,18 @@ impl<'a> Index<'a> {
         if arg.contains('<') {
             return Err(Unresolved::NestedGeneric(arg.clone()));
         }
-        self.type_named(arg)
+        self.type_named(arg).map(|t| (t, true))
     }
 
     /// The type a local of `scope`'s body is declared with: the declaration
     /// whose scope holds the access, else the one declaration of that name in
     /// the body (a pattern's variable is used after the `if` that declares
-    /// it).
-    fn local_type(&self, scope: &Scope<'_>, name: &str) -> Result<NodeKey, Unresolved> {
+    /// it). With the kind of the declaration.
+    fn local_type(
+        &self,
+        scope: &Scope<'_>,
+        name: &str,
+    ) -> Result<(NodeKey, DeclarationKind), Unresolved> {
         let Some(body) = scope.body else {
             return Err(Unresolved::UntypedLocal(name.to_string()));
         };
@@ -511,64 +584,167 @@ impl<'a> Index<'a> {
         if params.contains(&pick.type_name) {
             return Err(Unresolved::UnboundTypeParameter(pick.type_name.clone()));
         }
-        self.type_named(&pick.type_name)
+        self.type_named(&pick.type_name).map(|t| (t, pick.kind))
     }
 
     /// The members an access names, link by link, as far as they can be told
     /// (see the module docs). `call` is the argument count when the access is
     /// a call: the last name is then chosen among overloads by it.
     pub fn resolve(&self, scope: &Scope<'_>, path: &AccessPath, call: Option<u32>) -> Chain {
-        let mut chain = Chain {
-            links: Vec::new(),
-            stopped: None,
+        self.walk(scope, path, call, &|_, _, _| None).chain
+    }
+
+    /// [`Index::resolve`] with what step 2b grades its links by: the rule
+    /// each link was told by and, when the access stopped, the name it
+    /// stopped at and the type that name was looked up in. `pin` may name the
+    /// member a name is (the type in hand when it is known, the name, the
+    /// call's argument count for the last name): an external index's target,
+    /// taken before the rules and even where they could not tell the type in
+    /// hand (`link`, KTD3). Without a pin the walk is the rules' alone. The
+    /// one walk every analysis resolves an access by.
+    pub(crate) fn walk(
+        &self,
+        scope: &Scope<'_>,
+        path: &AccessPath,
+        call: Option<u32>,
+        pin: Pin<'_>,
+    ) -> Walk {
+        let mut walk = Walk {
+            chain: Chain {
+                links: Vec::new(),
+                stopped: None,
+            },
+            bases: Vec::new(),
+            stop: None,
         };
         let segments = &path.segments;
-        let (mut ty, start, mut skip_own) = match path.root {
-            PathRoot::Expression => {
-                chain.stopped = Some(Unresolved::NoReceiverChain);
-                return chain;
-            }
-            PathRoot::This | PathRoot::Name => (scope.ty.clone(), 0, false),
-            PathRoot::Base => (scope.ty.clone(), 0, true),
-            PathRoot::Local => {
-                let Some(first) = segments.first() else {
-                    chain.stopped = Some(Unresolved::NoReceiverChain);
-                    return chain;
-                };
-                match self.local_type(scope, first) {
-                    Ok(ty) => (ty, 1, false),
-                    Err(why) => {
-                        chain.stopped = Some(why);
-                        return chain;
+        // The type in hand, or why it is not known.
+        let (mut ty, start, mut skip_own, mut basis): (Result<NodeKey, Unresolved>, _, _, _) =
+            match path.root {
+                PathRoot::Expression => {
+                    (Err(Unresolved::NoReceiverChain), 0, false, Basis::Enclosing)
+                }
+                PathRoot::This | PathRoot::Name => {
+                    (Ok(scope.ty.clone()), 0, false, Basis::Enclosing)
+                }
+                PathRoot::Base => (Ok(scope.ty.clone()), 0, true, Basis::Enclosing),
+                PathRoot::Local => {
+                    let Some(first) = segments.first() else {
+                        return walk.stopped(Unresolved::NoReceiverChain, None, None);
+                    };
+                    match self.local_type(scope, first) {
+                        Ok((ty, DeclarationKind::Pattern)) => (Ok(ty), 1, false, Basis::Pattern),
+                        Ok((ty, _)) => (Ok(ty), 1, false, Basis::DeclaredType),
+                        Err(why) => (Err(why), 1, false, Basis::DeclaredType),
                     }
                 }
+            };
+        if segments.len() <= start {
+            if let Err(why) = ty {
+                return walk.stopped(why, None, None);
             }
-        };
+        }
         for (i, name) in segments.iter().enumerate().skip(start) {
             let last = i + 1 == segments.len();
-            let found = match self.lookup(&ty, name, if last { call } else { None }, skip_own) {
-                Ok(found) => found,
-                Err(why) => {
-                    chain.stopped = Some(why);
-                    return chain;
+            let arity = if last { call } else { None };
+            let (found, link_basis) = match (pin(ty.as_ref().ok(), name, arity), &ty) {
+                (Some(member), _) => {
+                    let owner = match (self.symbol(&member).and_then(|s| s.owner.clone()), &ty) {
+                        (Some(owner), _) => owner,
+                        (None, Ok(ty)) => ty.clone(),
+                        (None, Err(_)) => member.clone(),
+                    };
+                    let through = ty.as_ref().ok().filter(|t| **t != owner).cloned();
+                    (
+                        Found {
+                            member,
+                            owner,
+                            through,
+                            overloaded: false,
+                        },
+                        Basis::Index,
+                    )
                 }
+                (None, Err(why)) => {
+                    let why = why.clone();
+                    return walk.stopped(why, Some(name), None);
+                }
+                (None, Ok(in_hand)) => match self.lookup(in_hand, name, arity, skip_own) {
+                    Ok(found) => {
+                        let b = if found.overloaded {
+                            Basis::Overload
+                        } else {
+                            basis
+                        };
+                        (found, b)
+                    }
+                    Err(why) => {
+                        let in_hand = in_hand.clone();
+                        return walk.stopped(why, Some(name), Some(in_hand));
+                    }
+                },
             };
             skip_own = false;
-            chain.links.push(Link {
+            walk.chain.links.push(Link {
                 member: found.member.clone(),
                 owner: found.owner.clone(),
             });
+            walk.bases.push(link_basis);
             if !last {
-                match self.type_of(&found) {
-                    Ok(next) => ty = next,
-                    Err(why) => {
-                        chain.stopped = Some(why);
-                        return chain;
-                    }
-                }
+                ty = self.type_of(&found).map(|(next, substituted)| {
+                    basis = if substituted {
+                        Basis::BaseTypeArgument
+                    } else {
+                        Basis::DeclaredType
+                    };
+                    next
+                });
             }
         }
-        chain
+        walk
+    }
+}
+
+/// What [`Index::walk`] may pin a name to before the rules: the type in
+/// hand when it is known, the name, and the call's argument count for the
+/// last name.
+pub(crate) type Pin<'p> = &'p dyn Fn(Option<&NodeKey>, &str, Option<u32>) -> Option<NodeKey>;
+
+/// The result of [`Index::by_arity`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ByArity {
+    One(NodeKey),
+    /// No candidate declares that many parameters.
+    NoneOf,
+    /// Several do, by key.
+    Several(Vec<NodeKey>),
+}
+
+/// An access walked by [`Index::walk`].
+pub(crate) struct Walk {
+    pub chain: Chain,
+    /// The rule each link of `chain` was told by, link by link.
+    pub bases: Vec<Basis>,
+    /// Where the walk stopped, when it did.
+    pub stop: Option<Stop>,
+}
+
+/// The name an access stopped at, and the type it was looked up in when the
+/// walk knew it (a name the type in hand does not declare, or several
+/// members of it); `None` when the type itself could not be told.
+pub(crate) struct Stop {
+    pub name: Option<String>,
+    pub ty: Option<NodeKey>,
+}
+
+impl Walk {
+    fn stopped(mut self, why: Unresolved, name: Option<&String>, ty: Option<NodeKey>) -> Walk {
+        self.chain.stopped = Some(why);
+        self.stop = Some(Stop {
+            name: name.cloned(),
+            ty,
+        });
+        self
     }
 }
 
@@ -613,6 +789,8 @@ struct Found {
     owner: NodeKey,
     /// The deriving type it was found through, when it was found in a base.
     through: Option<NodeKey>,
+    /// The call's argument count chose it among several methods.
+    overloaded: bool,
 }
 
 /// Where an access is written: the enclosing type, and the body and its node

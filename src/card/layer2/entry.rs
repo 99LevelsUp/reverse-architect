@@ -33,7 +33,8 @@
 //! field — `Execute`, `CanExecute`, whatever they are named. One function for
 //! every class of the shape; step 2b generalizes it to delegates and events.
 
-use super::resolve::{within, Chain, Index, Scope, Unresolved};
+use super::binding::field_call_arity;
+use super::resolve::{within, ByArity, Chain, Index, Scope, Unresolved};
 use crate::extract::bodies::{
     AccessMode, AccessPath, Argument, BodyKind, CallKind, Condition, FlowTarget, Handler,
     Invocation, LiteralComment, MemberBody, PathRoot, Range, SubscriptionMode, ValueRef,
@@ -257,22 +258,28 @@ pub struct Slot {
     pub invoked_by: Vec<NodeKey>,
 }
 
-/// The constructor of `class` that takes `arity` arguments.
-fn constructor(ix: &Index<'_>, class: &NodeKey, arity: u32) -> Result<NodeKey, Unresolved> {
+/// The constructor of `class` that takes `arity` arguments, chosen by
+/// [`Index::by_arity`] — the one selection by arity overloads are chosen by
+/// too.
+pub(crate) fn constructor(
+    ix: &Index<'_>,
+    class: &NodeKey,
+    arity: u32,
+) -> Result<NodeKey, Unresolved> {
     let ctors: Vec<&NodeKey> = ix
         .members_of(class)
         .iter()
         .filter(|k| ix.symbol(k).is_some_and(|s| s.kind == "constructor"))
-        .filter(|k| ix.arity_of(k) == Some(arity))
         .collect();
-    match ctors.as_slice() {
-        [] => Err(Unresolved::NoConstructor(arity)),
-        [one] => Ok((*one).clone()),
-        _ => Err(Unresolved::AmbiguousConstructor(arity)),
+    match ix.by_arity(&ctors, arity) {
+        ByArity::One(one) => Ok(one),
+        ByArity::NoneOf => Err(Unresolved::NoConstructor(arity)),
+        ByArity::Several(_) => Err(Unresolved::AmbiguousConstructor(arity)),
     }
 }
 
-fn is_field_path(p: &AccessPath) -> Option<&str> {
+/// The one name of `this.x` or of a bare `x`.
+pub(crate) fn is_field_path(p: &AccessPath) -> Option<&str> {
     match (p.root, p.segments.as_slice()) {
         (PathRoot::This | PathRoot::Name, [name]) => Some(name),
         _ => None,
@@ -280,7 +287,7 @@ fn is_field_path(p: &AccessPath) -> Option<&str> {
 }
 
 /// The value member `name` of `class` or of one of its bases.
-fn field_named(ix: &Index<'_>, class: &NodeKey, name: &str) -> Option<NodeKey> {
+pub(crate) fn field_named(ix: &Index<'_>, class: &NodeKey, name: &str) -> Option<NodeKey> {
     std::iter::once(class)
         .chain(ix.ancestors(class))
         .find_map(|ty| {
@@ -354,7 +361,7 @@ fn follow(
 
 /// The methods of `class` and of its bases that call `field`
 /// (`_execute(p)`, `_execute.Invoke(p)`, `_execute?.Invoke(p)`).
-fn invokers(ix: &Index<'_>, class: &NodeKey, field: &NodeKey) -> Vec<NodeKey> {
+pub(crate) fn invokers(ix: &Index<'_>, class: &NodeKey, field: &NodeKey) -> Vec<NodeKey> {
     let name = ix.name_of(field).to_string();
     let mut out: BTreeSet<NodeKey> = BTreeSet::new();
     for ty in std::iter::once(class).chain(ix.ancestors(class)) {
@@ -385,10 +392,7 @@ pub fn bind_construction(
     class: &NodeKey,
     arity: u32,
 ) -> Result<Binding, Unresolved> {
-    let ctor = constructor(ix, class, arity)?;
-    let mapping: Vec<(u32, u32)> = (0..arity).map(|p| (p, p)).collect();
-    let mut writes: BTreeMap<NodeKey, BTreeSet<u32>> = BTreeMap::new();
-    follow(ix, class, &ctor, &mapping, 0, &mut writes);
+    let (ctor, writes) = field_writes(ix, class, arity)?;
     let mut slots = Vec::new();
     let mut ambiguous = Vec::new();
     for (field, positions) in writes {
@@ -408,6 +412,22 @@ pub fn bind_construction(
         slots,
         ambiguous,
     })
+}
+
+/// The constructor `new class(…)` with `arity` arguments runs, and the
+/// argument positions each field is written from, through every `: this(…)`
+/// and `: base(…)` — what [`bind_construction`] and step 2b's delegate
+/// binding (`binding`) both read.
+pub(crate) fn field_writes(
+    ix: &Index<'_>,
+    class: &NodeKey,
+    arity: u32,
+) -> Result<(NodeKey, BTreeMap<NodeKey, BTreeSet<u32>>), Unresolved> {
+    let ctor = constructor(ix, class, arity)?;
+    let mapping: Vec<(u32, u32)> = (0..arity).map(|p| (p, p)).collect();
+    let mut writes: BTreeMap<NodeKey, BTreeSet<u32>> = BTreeMap::new();
+    follow(ix, class, &ctor, &mapping, 0, &mut writes);
+    Ok((ctor, writes))
 }
 
 /// A body of the model with where it is.
@@ -499,45 +519,104 @@ fn region_uses(
     }
 }
 
-/// What a delegate argument leads to: the calls under a lambda's body, or
-/// the method group.
-fn delegate_targets(ix: &Index<'_>, ty: &NodeKey, at: At<'_>, arg: &Argument) -> Vec<Target> {
+/// One access a delegate argument leads to: a call under a lambda's body,
+/// or the method group — what 2a's targets and step 2b's links resolve alike.
+pub(crate) struct DelegateSite<'b> {
+    pub node: Option<u32>,
+    pub path: &'b AccessPath,
+    pub place: Range,
+    /// The argument count it is resolved with: a call's, or for a method
+    /// group the count the class calls its field with
+    /// ([`field_call_arity`]).
+    pub call: Option<u32>,
+}
+
+/// What a delegate argument leads to (see [`DelegateSite`]), in the order
+/// the model lists it. `group` is the argument count a method group is
+/// chosen among overloads by.
+pub(crate) fn delegate_sites<'b>(
+    at: At<'b>,
+    arg: &'b Argument,
+    group: Option<u32>,
+) -> Vec<DelegateSite<'b>> {
     match &arg.value {
         ValueRef::Lambda(id) => {
             let Some(lambda) = at.body.lambdas.get(*id as usize) else {
                 return Vec::new();
             };
-            let mut uses = BTreeSet::new();
-            let mut targets = Vec::new();
             let root = lambda.body;
-            region_uses(
-                ix,
-                ty,
-                at,
-                &|n| n.is_some_and(|n| within(at.body, n, root)),
-                &mut uses,
-                &mut targets,
-            );
-            targets
+            at.body
+                .invocations
+                .iter()
+                .filter(|inv| {
+                    inv.kind == CallKind::Call && inv.node.is_some_and(|n| within(at.body, n, root))
+                })
+                .map(|inv| DelegateSite {
+                    node: inv.node,
+                    path: &inv.callee,
+                    place: inv.place,
+                    call: Some(inv.arity),
+                })
+                .collect()
         }
         ValueRef::Access(path) => {
             // The model gives an argument no place of its own; the read of
             // the method group has one.
             let read = at.body.accesses.iter().find(|a| a.target == *path);
-            let scope = Scope {
-                ty,
-                body: Some(at.body),
-                node: read.and_then(|a| a.node),
-            };
             let place = read.map(|a| a.place).unwrap_or_else(|| {
                 at.body
                     .nodes
                     .first()
                     .map_or(Range::from([0, 0, 0, 0]), |n| n.place)
             });
-            vec![target(ix, ty, &scope, path, place, None)]
+            vec![DelegateSite {
+                node: read.and_then(|a| a.node),
+                path,
+                place,
+                call: group,
+            }]
         }
         _ => Vec::new(),
+    }
+}
+
+/// What a delegate argument leads to: the calls under a lambda's body, or
+/// the method group.
+fn delegate_targets(
+    ix: &Index<'_>,
+    ty: &NodeKey,
+    at: At<'_>,
+    arg: &Argument,
+    group: Option<u32>,
+) -> Vec<Target> {
+    delegate_sites(at, arg, group)
+        .into_iter()
+        .map(|site| {
+            let scope = Scope {
+                ty,
+                body: Some(at.body),
+                node: site.node,
+            };
+            target(ix, ty, &scope, site.path, site.place, site.call)
+        })
+        .collect()
+}
+
+/// The class `new …` constructs: resolved from the callee, or for a
+/// target-typed `new()` from the type `declared` is declared with.
+pub(crate) fn construction_class(
+    ix: &Index<'_>,
+    inv: &Invocation,
+    declared: Option<&NodeKey>,
+) -> Option<NodeKey> {
+    if inv.kind != CallKind::Construct {
+        return None;
+    }
+    if inv.callee.root == PathRoot::Expression && inv.callee.segments.is_empty() {
+        let (name, _) = ix.declared_type(declared?).ok()?;
+        ix.type_named(&name).ok()
+    } else {
+        ix.type_named(&inv.callee.segments.join(".")).ok()
     }
 }
 
@@ -553,15 +632,7 @@ fn command_site(
     inv: &Invocation,
     declared: Option<&NodeKey>,
 ) -> Option<Result<CommandSite, (NodeKey, Unresolved)>> {
-    if inv.kind != CallKind::Construct {
-        return None;
-    }
-    let class = if inv.callee.root == PathRoot::Expression && inv.callee.segments.is_empty() {
-        let (name, _) = ix.declared_type(declared?).ok()?;
-        ix.type_named(&name).ok()?
-    } else {
-        ix.type_named(&inv.callee.segments.join(".")).ok()?
-    };
+    let class = construction_class(ix, inv, declared)?;
     let binding = match bind_construction(ix, &class, inv.arity) {
         Ok(binding) => binding,
         Err(why @ Unresolved::AmbiguousConstructor(_)) => return Some(Err((class, why))),
@@ -583,7 +654,13 @@ fn command_site(
                 field: slot.field.clone(),
                 invoked_by: slot.invoked_by.clone(),
                 value: arg.value.clone(),
-                targets: delegate_targets(ix, ty, at, arg),
+                targets: delegate_targets(
+                    ix,
+                    ty,
+                    at,
+                    arg,
+                    field_call_arity(ix, &class, &slot.field),
+                ),
             })
         })
         .collect();
@@ -602,6 +679,39 @@ fn command_site(
         delegates,
         ambiguous: binding.ambiguous,
     }))
+}
+
+/// Whether the construction `inv` in `body`, a body of `member`, flows out
+/// of a property: returned by its getter or expression, or written to the
+/// field the getter returns (a lazy initialization). A target-typed `new()`
+/// that does takes its class from the property's declared type.
+pub(crate) fn flows_out_of(
+    ix: &Index<'_>,
+    member: &NodeKey,
+    body: &MemberBody,
+    inv: &Invocation,
+) -> bool {
+    let Some(symbol) = ix.symbol(member) else {
+        return false;
+    };
+    if symbol.kind != "property"
+        || !matches!(
+            body.kind,
+            BodyKind::Getter | BodyKind::ExpressionProperty | BodyKind::MemberInitializer
+        )
+    {
+        return false;
+    }
+    let returned = |name: &str| {
+        body.accesses
+            .iter()
+            .any(|a| a.mode == AccessMode::Return && is_field_path(&a.target) == Some(name))
+    };
+    match &inv.flow {
+        Some(FlowTarget::MemberReturn) => true,
+        Some(FlowTarget::Member(name)) => *name == symbol.name || returned(name),
+        _ => false,
+    }
 }
 
 /// An entry point with what the clustering needs of it.
@@ -753,7 +863,6 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
     let mut unbound: Vec<UnboundCommand> = Vec::new();
 
     for &m in &members {
-        let symbol = ix.symbol(m).expect("filtered above");
         for at in bodies(ix, m) {
             let body = at.body;
             let place = |range: Range| Place {
@@ -1043,36 +1152,19 @@ pub(crate) fn seeds(ix: &Index<'_>, ty: &NodeKey) -> Seeds {
             }
 
             // Command properties.
-            if symbol.kind == "property"
-                && matches!(
-                    body.kind,
-                    BodyKind::Getter | BodyKind::ExpressionProperty | BodyKind::MemberInitializer
-                )
-            {
-                let returned = |name: &str| {
-                    body.accesses.iter().any(|a| {
-                        a.mode == AccessMode::Return && is_field_path(&a.target) == Some(name)
-                    })
-                };
-                for inv in &body.invocations {
-                    let flows_out = match &inv.flow {
-                        Some(FlowTarget::MemberReturn) => true,
-                        Some(FlowTarget::Member(name)) => *name == symbol.name || returned(name),
-                        _ => false,
-                    };
-                    if !flows_out {
-                        continue;
-                    }
-                    match command_site(ix, ty, at, inv, Some(m)) {
-                        Some(Ok(site)) => commands.entry(m.clone()).or_default().push(site),
-                        Some(Err((class, reason))) => unbound.push(UnboundCommand {
-                            member: m.clone(),
-                            class,
-                            place: place(inv.place),
-                            reason,
-                        }),
-                        None => {}
-                    }
+            for inv in &body.invocations {
+                if !flows_out_of(ix, m, body, inv) {
+                    continue;
+                }
+                match command_site(ix, ty, at, inv, Some(m)) {
+                    Some(Ok(site)) => commands.entry(m.clone()).or_default().push(site),
+                    Some(Err((class, reason))) => unbound.push(UnboundCommand {
+                        member: m.clone(),
+                        class,
+                        place: place(inv.place),
+                        reason,
+                    }),
+                    None => {}
                 }
             }
         }

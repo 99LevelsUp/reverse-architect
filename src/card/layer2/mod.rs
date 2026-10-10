@@ -11,6 +11,12 @@
 //! - [`entry`] — the entry points and the command binding,
 //!   [`bind_construction`]; one implementation step 2b generalizes to
 //!   delegates and events.
+//! - [`link`] — step 2b, U2: every access of a body resolved by the same
+//!   walk, each link graded, the external index first, the candidates of a
+//!   stopped access cut at the ambiguity ceiling (KTD3, KTD9), [`Links`].
+//! - [`binding`] — step 2b, U3: the delegate binding as (method of the
+//!   class, target) pairs, for every class of the shape, and the events a
+//!   class raises (KTD4, KTD6), [`bindings_of`].
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
@@ -25,10 +31,18 @@
 //! hash map; how many threads the run that built the model had changes no
 //! byte of it.
 
+pub mod binding;
 pub mod cluster;
 pub mod entry;
 pub mod flow;
+pub mod link;
 pub mod resolve;
+
+pub use binding::{
+    bindings_of, field_call_arity, raised_events, AmbiguousField, BoundSlot, DelegateBinding,
+    DelegatePair, IdleInvoker, RaisedEvent, SiteBinding,
+};
+pub use link::{Basis, Candidates, GradedLink, Links, Outcome, Resolution, Site};
 
 pub use cluster::{Functionality, FunctionalityName};
 pub use entry::{
@@ -40,7 +54,7 @@ pub use flow::{
     FunctionalityFlow, Gap, Guarding, Mentions, Occurrence, Precondition, Source, State,
     StateChange, StateValue, Step, StepKind, TypeFlow, Written,
 };
-pub use resolve::{Chain, Index, Link, Scope, Unresolved};
+pub use resolve::{ByArity, Chain, Index, Link, Scope, Unresolved};
 
 use crate::card::purpose::{copied_comments, CodePurpose};
 use crate::extract::bodies::{BodyLayer, SecondLayer};
