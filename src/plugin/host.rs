@@ -58,7 +58,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::{Config, Engine, ResourceLimiter, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{
     Deterministic, HostMonotonicClock, HostWallClock, WasiCtx, WasiCtxBuilder, WasiCtxView,
     WasiView,
@@ -308,11 +308,89 @@ impl HostMonotonicClock for FrozenMonotonic {
     }
 }
 
+/// What one call into a plugin cost ([`Session::last_cost`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallCost {
+    /// Fuel the call consumed: its budget less what was left when it
+    /// returned. A call that ran out of fuel used its whole budget.
+    pub fuel_used: u64,
+    /// The fuel the call was given.
+    pub fuel_budget: u64,
+    /// The largest linear memory the store held or asked for while the call
+    /// ran, in bytes. Linear memory never shrinks, so on an instance that
+    /// served earlier calls this includes what they left allocated; a request
+    /// the ceiling refused counts too, so a value above the ceiling means the
+    /// call failed on memory.
+    pub peak_memory_bytes: u64,
+}
+
+/// [`StoreLimits`], deciding exactly as before, plus a record of the largest
+/// linear memory the store has held and the largest any call asked for.
+struct Limits {
+    inner: StoreLimits,
+    /// The largest size a memory has grown to so far.
+    held: usize,
+    /// The largest size asked for since [`Limits::start_call`], refused or
+    /// not, and never below what the store already holds.
+    peak: usize,
+}
+
+impl Limits {
+    fn start_call(&mut self) {
+        self.peak = self.held;
+    }
+}
+
+impl ResourceLimiter for Limits {
+    fn memory_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        self.peak = self.peak.max(desired);
+        let allowed = self.inner.memory_growing(current, desired, maximum)?;
+        if allowed {
+            self.held = self.held.max(desired);
+        }
+        Ok(allowed)
+    }
+
+    fn memory_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.memory_grow_failed(error)
+    }
+
+    fn table_growing(
+        &mut self,
+        current: usize,
+        desired: usize,
+        maximum: Option<usize>,
+    ) -> wasmtime::Result<bool> {
+        self.inner.table_growing(current, desired, maximum)
+    }
+
+    fn table_grow_failed(&mut self, error: wasmtime::Error) -> wasmtime::Result<()> {
+        self.inner.table_grow_failed(error)
+    }
+
+    fn instances(&self) -> usize {
+        self.inner.instances()
+    }
+
+    fn tables(&self) -> usize {
+        self.inner.tables()
+    }
+
+    fn memories(&self) -> usize {
+        self.inner.memories()
+    }
+}
+
 /// Per-store state: the locked WASI context and the path snapshot.
 pub struct State {
     wasi: WasiCtx,
     table: ResourceTable,
-    limits: StoreLimits,
+    limits: Limits,
     paths: Arc<HashSet<String>>,
 }
 
@@ -331,10 +409,14 @@ impl State {
         State {
             wasi: b.build(),
             table: ResourceTable::new(),
-            limits: StoreLimitsBuilder::new()
-                .memory_size(MEMORY_LIMIT)
-                .trap_on_grow_failure(true)
-                .build(),
+            limits: Limits {
+                inner: StoreLimitsBuilder::new()
+                    .memory_size(MEMORY_LIMIT)
+                    .trap_on_grow_failure(true)
+                    .build(),
+                held: 0,
+                peak: 0,
+            },
             paths,
         }
     }
@@ -593,6 +675,7 @@ pub struct Session<'p> {
     passes: &'p [Pass],
     paths: Arc<HashSet<String>>,
     live: Option<(Store<State>, Instance)>,
+    last_cost: Option<CallCost>,
 }
 
 impl<'p> Session<'p> {
@@ -608,6 +691,7 @@ impl<'p> Session<'p> {
             passes,
             paths,
             live: None,
+            last_cost: None,
         };
         session.ensure()?;
         Ok(session)
@@ -642,19 +726,36 @@ impl<'p> Session<'p> {
         file: &str,
         f: impl FnOnce(&Instance, &mut Store<State>) -> wasmtime::Result<T>,
     ) -> Result<T, PluginError> {
+        self.last_cost = None;
         self.ensure()?;
         let (store, instance) = self.live.as_mut().expect("ensured above");
         store.set_fuel(fuel).expect("fuel is enabled on the engine");
-        match f(instance, store) {
+        store.data_mut().limits.start_call();
+        let result = f(instance, store);
+        // Read before a failure discards the store.
+        let out_of_fuel = matches!(
+            &result,
+            Err(e) if matches!(
+                e.downcast_ref::<wasmtime::Trap>(),
+                Some(wasmtime::Trap::OutOfFuel)
+            )
+        );
+        let left = store.get_fuel().expect("fuel is enabled on the engine");
+        self.last_cost = Some(CallCost {
+            fuel_used: if out_of_fuel {
+                fuel
+            } else {
+                fuel.saturating_sub(left)
+            },
+            fuel_budget: fuel,
+            peak_memory_bytes: store.data().limits.peak as u64,
+        });
+        match result {
             Ok(v) => Ok(v),
             Err(e) => {
                 // The instance is unusable after a trap; the next call starts
                 // from a fresh one.
                 self.live = None;
-                let out_of_fuel = matches!(
-                    e.downcast_ref::<wasmtime::Trap>(),
-                    Some(wasmtime::Trap::OutOfFuel)
-                );
                 Err(if out_of_fuel {
                     PluginError::Fuel {
                         plugin: self.plugin.clone(),
@@ -675,10 +776,18 @@ impl<'p> Session<'p> {
         FUEL_FLOOR.saturating_add(FUEL_PER_BYTE.saturating_mul(len as u64))
     }
 
+    /// What the last pass cost, whether it succeeded or failed in the guest;
+    /// `None` when no call reached the guest — the pass was refused, or a
+    /// fresh instance could not be made.
+    pub fn last_cost(&self) -> Option<CallCost> {
+        self.last_cost
+    }
+
     /// Refuse a pass the plugin does not serve, before the instance is
     /// touched — a refusal is not a trap, so the live instance stays.
     /// `bodies` exists only under 0.3, whatever a manifest says.
-    fn serving(&self, pass: Pass, file: &str) -> Result<(), PluginError> {
+    fn serving(&mut self, pass: Pass, file: &str) -> Result<(), PluginError> {
+        self.last_cost = None;
         let exists = pass != Pass::Bodies || matches!(self.pre, Pre::V3(_));
         if exists && self.passes.contains(&pass) {
             Ok(())
@@ -1543,6 +1652,57 @@ mod tests {
             s.usages("next.probe3", b"x").unwrap().usages[0].name,
             "Thing"
         );
+    }
+
+    /// A call's cost is its fuel and its memory, a successful call's as much
+    /// as a failed one's; a run out of fuel used its whole budget.
+    #[test]
+    fn the_last_call_reports_its_fuel_and_memory() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        assert!(s.last_cost().is_none());
+
+        s.bodies("a.probe3", b"x").unwrap();
+        let cost = s.last_cost().expect("the call reached the guest");
+        assert_eq!(cost.fuel_budget, Session::budget(1));
+        assert!(cost.fuel_used > 0 && cost.fuel_used < cost.fuel_budget);
+        assert!(cost.peak_memory_bytes > 0);
+        assert!(cost.peak_memory_bytes <= MEMORY_LIMIT as u64);
+
+        // The same instance again: what it already holds counts.
+        s.bodies("b.probe3", b"x").unwrap();
+        assert!(s.last_cost().unwrap().peak_memory_bytes >= cost.peak_memory_bytes);
+
+        s.bodies("loop.probe3", b"x").unwrap_err();
+        let spent = s.last_cost().expect("a failed call has a cost too");
+        assert_eq!(spent.fuel_used, spent.fuel_budget);
+        assert_eq!(spent.fuel_budget, Session::budget(1));
+
+        // A fresh instance after the failure reports from its own store.
+        s.bodies("next.probe3", b"x").unwrap();
+        let fresh = s.last_cost().unwrap();
+        assert!(fresh.fuel_used < fresh.fuel_budget && fresh.peak_memory_bytes > 0);
+
+        // A refused pass never reached the guest and costs nothing.
+        let old = probe();
+        let mut s = old.session(Arc::new(HashSet::new())).unwrap();
+        s.usages("a.probe", b"").unwrap();
+        assert!(s.last_cost().is_some());
+        s.bodies("a.probe", b"x").unwrap_err();
+        assert!(s.last_cost().is_none());
+    }
+
+    /// A ceiling refusal is recorded as asked for, above the ceiling.
+    #[test]
+    fn a_refused_growth_shows_as_a_peak_above_the_ceiling() {
+        let p = probe();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let config = WireConfig {
+            secret_prefixes: Vec::new(),
+        };
+        s.declarations("memory.probe", b"", &config).unwrap_err();
+        let cost = s.last_cost().unwrap();
+        assert!(cost.peak_memory_bytes > MEMORY_LIMIT as u64, "{cost:?}");
     }
 
     /// A pass the plugin does not serve is refused before the instance is
