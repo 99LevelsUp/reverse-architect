@@ -483,15 +483,22 @@ fn front_matter(card: &str) -> (&str, &str) {
 
 /// The parts of a card the second layer leaves as they are: everything but
 /// the purpose and the keywords, which it rewrites, and the functionalities
-/// and states, which it adds (plan 2a, U6: KTD10).
+/// and states, which it adds (plan 2a, U6: KTD10), and its dynamic access
+/// (step 2c, U8: KTD11).
 fn first_layer_sections(body: &str) -> String {
     let mut out = String::new();
     let mut keep = true;
     for line in body.split_inclusive('\n') {
         if let Some(heading) = line.strip_prefix("## ") {
-            keep = !["Purpose", "Keywords", "Functionality: ", "State: "]
-                .iter()
-                .any(|h| heading.starts_with(h));
+            keep = ![
+                "Purpose",
+                "Keywords",
+                "Functionality: ",
+                "State: ",
+                "Dynamic access",
+            ]
+            .iter()
+            .any(|h| heading.starts_with(h));
         }
         if keep {
             out.push_str(line);
@@ -640,7 +647,10 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
         assert_eq!(other_levels(&pc), other_levels(&lc), "{name}");
         assert_eq!(
             without(pc, &["noise.plugins_by_contract", "cards"]),
-            without(lc, &["bodies", "noise.plugins_by_contract", "cards"]),
+            without(
+                lc,
+                &["bodies", "markup", "noise.plugins_by_contract", "cards"]
+            ),
             "{name}: coverage differs beyond the layer's own rows"
         );
     }

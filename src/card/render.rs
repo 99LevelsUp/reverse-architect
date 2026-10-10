@@ -142,8 +142,13 @@ pub const CARD_SCHEMA_VERSION: u32 = 6;
 /// `### State diagram`), each ending in its `### Context` of step 2b when it
 /// has one (the flows of its triggers under `#### <kind>: <key>`, the reads
 /// and writes from outside), as deep as the level asks
-/// ([`super::layer2_render`]). A type card with `layer2: none` or `failed`
-/// is otherwise the card of a run without the second layer.
+/// ([`super::layer2_render`]), and then — step 2c, on every level — the
+/// `## Dynamic access`: one line per member another place may read, write or
+/// call dynamically (the words of its declaration, its marks with kind, use,
+/// grade and anchor, its matches by name alone), ending in the run's state
+/// of XAML coverage. A type card with `layer2: none` or `failed` is
+/// otherwise the card of a run without the second layer. The version is
+/// unreleased, so step 2c did not move it.
 pub const CARD_SCHEMA_VERSION_LAYER2: u32 = 7;
 
 /// The languages the deterministic prose is authored in.
@@ -509,6 +514,9 @@ pub fn render_card_layered(
                 s.push_str(&super::layer2_render::sections(
                     card, lang, l.level, analysis, index, links,
                 ));
+                // Plan 2c, KTD11: after the sections of 2a, before the
+                // notes, on every level.
+                s.push_str(&super::layer2_render::dynamic_access(lang, analysis));
             }
         }
         CardKind::File => {
@@ -914,6 +922,212 @@ pub(super) fn sites_anchor(sites: &[SiteId]) -> Option<String> {
             .collect::<Vec<_>>()
             .join(", "),
     )
+}
+
+// ---- The documents of XAML files (plan 2c, U8: R10, R19, R22; AE4) ----
+
+/// The section of a XAML document listing the references from C# (R22).
+pub const REFERENCED_FROM_CSHARP: &str = "Referenced from C#";
+
+/// The section of a XAML file's card listing the names it refers to that
+/// nothing declares (plan 2c, U5, AE4).
+pub const UNRESOLVED_REFERENCES: &str = "Unresolved references";
+
+/// The prefix of the kinds the XAML plugin declares (`xaml:element`).
+const XAML_KIND_PREFIX: &str = "xaml:";
+
+/// Whether a card is a document of a XAML file: the file's own card, or the
+/// card of a style, template, resource, element or view it declares.
+fn xaml_document(card: &Card) -> Option<XamlDocument<'_>> {
+    match card.kind {
+        CardKind::File
+            if card
+                .identity
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("xaml")) =>
+        {
+            Some(XamlDocument::File(&card.identity))
+        }
+        CardKind::Declared(_) if card.kind_word.starts_with(XAML_KIND_PREFIX) => {
+            Some(XamlDocument::Declared(&card.identity))
+        }
+        _ => None,
+    }
+}
+
+enum XamlDocument<'c> {
+    /// The file's card, by its path.
+    File(&'c str),
+    /// A declaration's card, by its key.
+    Declared(&'c str),
+}
+
+/// A text of the code through the secret filter, its whitespace collapsed.
+fn scrubbed_text(text: &str) -> String {
+    use crate::extract::external::{redact_secret_block, SecretPrefixes};
+    let (text, _) = redact_secret_block(text, SecretPrefixes::builtin());
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The part of a markup key after its file: `type:Acme.Views.ViewA/PART_List`.
+fn markup_name(key: &str) -> &str {
+    key.split_once('#').map_or(key, |(_, name)| name)
+}
+
+/// One reference from C# (R22): the C# member, how the literal names the
+/// element or resource and how sure it is, and the literal's place.
+fn csharp_ref_line(r: &super::layer2::XamlRef, target: bool, lang: Lang) -> String {
+    use super::layer2::XamlRefKind;
+    let cs = lang == Lang::Cs;
+    let how = match (r.kind, cs) {
+        (XamlRefKind::Name, false) => "by its name".to_string(),
+        (XamlRefKind::Name, true) => "jeho jménem".to_string(),
+        (XamlRefKind::Key, _) => {
+            let scope = match (r.rule, cs) {
+                (Some(Rule::ScopeProject), false) => " in its project",
+                (Some(Rule::ScopeProject), true) => " v jeho projektu",
+                (Some(Rule::NameMatch), false) => " anywhere in the repository",
+                (Some(Rule::NameMatch), true) => " kdekoli v repozitáři",
+                _ => "",
+            };
+            if cs {
+                format!("jeho klíčem{scope}")
+            } else {
+                format!("by its key{scope}")
+            }
+        }
+    };
+    let grade = super::layer2_render::grade_word(r.grade, lang);
+    let member = super::explain::code(super::layer2_render::short(r.member.as_str()));
+    let lead = if target {
+        format!(
+            "{} ← ",
+            super::explain::code(&scrubbed_text(markup_name(r.target.as_str())))
+        )
+    } else {
+        String::new()
+    };
+    let names = if cs { "ho jmenuje" } else { "names it" };
+    format!(
+        "- {lead}{member} {names} {how} ({grade}) — `{}`\n",
+        super::layer2_render::anchor(&r.place)
+    )
+}
+
+/// Put a section before the card's `## Notes`, or at its end.
+fn insert_section(contents: &mut String, section: &str) {
+    match contents.find("\n## Notes\n") {
+        Some(at) => contents.insert_str(at, section),
+        None => contents.push_str(section),
+    }
+}
+
+/// What a run says of its XAML documents beyond what their cards hold (plan
+/// 2c, U8), written into the rendered cards — `files`, one per card of
+/// `cards` in the same order:
+///
+/// - the names a XAML file refers to that nothing declares, under
+///   `## Unresolved references` on the file's card, from the facts of the
+///   first layer (AE4: the reference stays on the file's card), in every run;
+/// - with the second layer (`dynamic` and `state` given), the sentence on the
+///   run's state of XAML coverage under the header of the file's card and of
+///   every declaration's (R19), and the references from C# to the elements and
+///   resources (R22), under `## Referenced from C#` on the declaration's card
+///   and, each with its element or resource, on the file's.
+///
+/// A run without a plugin for XAML has no such card, and its files stay as
+/// they were; a run with one and without the second layer gains only the
+/// unresolved references.
+pub fn add_markup_documents(
+    files: &mut [crate::render::RenderedFile],
+    cards: &[Card],
+    graph: &crate::graph::Graph,
+    layered: Option<(&super::layer2::DynamicAccess, crate::coverage::MarkupState)>,
+    lang: Lang,
+) {
+    use crate::graph::{FactKind, FactValue, NodeKey};
+    let cs = lang == Lang::Cs;
+    for (card, file) in cards.iter().zip(files.iter_mut()) {
+        let Some(doc) = xaml_document(card) else {
+            continue;
+        };
+        if let Some((_, state)) = layered {
+            let sentence = super::layer2_render::markup_document_sentence(state, lang);
+            if let Some(at) = file.contents.find("\n- Identity: ") {
+                file.contents.insert_str(at + 1, &format!("{sentence}\n\n"));
+            }
+        }
+        if let Some((dynamic, _)) = layered {
+            let lines: Vec<String> = match doc {
+                XamlDocument::Declared(key) => dynamic
+                    .refs_to(&NodeKey::new(key))
+                    .map(|r| csharp_ref_line(r, false, lang))
+                    .collect(),
+                XamlDocument::File(path) => {
+                    let prefix = format!("sym:xaml:{path}#");
+                    dynamic
+                        .xaml_refs()
+                        .iter()
+                        .filter(|r| r.target.as_str().starts_with(&prefix))
+                        .map(|r| csharp_ref_line(r, true, lang))
+                        .collect()
+                }
+            };
+            if !lines.is_empty() {
+                let mut section = format!("\n## {REFERENCED_FROM_CSHARP}\n\n");
+                section.push_str(if cs {
+                    "Literály v argumentech volání v C#, jejichž hodnota je jméno elementu v šabloně \
+                     pro typ volajícího nebo klíč zdroje v dosahu:\n\n"
+                } else {
+                    "Literal arguments of C# calls whose value is the name of an element of a \
+                     template for the caller's type or the key of a resource in reach:\n\n"
+                });
+                lines.iter().for_each(|l| section.push_str(l));
+                insert_section(&mut file.contents, &section);
+            }
+        }
+        let XamlDocument::File(path) = doc else {
+            continue;
+        };
+        let Some(node) = graph.node(&NodeKey::new(path)) else {
+            continue;
+        };
+        let mut unresolved: Vec<(Option<u32>, String, crate::graph::Span)> = node
+            .facts
+            .iter()
+            .filter(|f| f.kind == FactKind::UnresolvedReference)
+            .filter_map(|f| match &f.value {
+                FactValue::Text(t) => Some((
+                    f.provenance.span.start(),
+                    scrubbed_text(t),
+                    f.provenance.span,
+                )),
+                _ => None,
+            })
+            .collect();
+        unresolved.sort();
+        unresolved.dedup();
+        if unresolved.is_empty() {
+            continue;
+        }
+        let mut section = format!("\n## {UNRESOLVED_REFERENCES}\n\n");
+        section.push_str(if cs {
+            "Jména, na která soubor odkazuje (`{StaticResource}`, `{DynamicResource}`, \
+             `BasedOn`) a která v repozitáři nic nedeklaruje — přiznaná, ne zahozená:\n\n"
+        } else {
+            "Names this file refers to (`{StaticResource}`, `{DynamicResource}`, `BasedOn`) \
+             that nothing in the repository declares — admitted, not dropped:\n\n"
+        });
+        for (_, text, span) in unresolved {
+            let anchor = super::SourceRef {
+                file: path.to_string(),
+                span,
+            }
+            .anchor();
+            section.push_str(&format!("- {text} — `{anchor}`\n"));
+        }
+        insert_section(&mut file.contents, &section);
+    }
 }
 
 #[cfg(test)]

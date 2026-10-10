@@ -2057,6 +2057,65 @@ fn the_second_layer_is_the_same_bytes_across_runs_and_thread_counts() {
     }
 }
 
+/// Plan 2c, U8 (KTD11, KTD12, R19): with the second layer every analyzed
+/// type's card has `## Dynamic access` on level 1 and on level 3 alike —
+/// after the sections of 2a, before the notes — ending in the state of XAML
+/// coverage, which in a run no plugin of which reads XAML is "not read", as
+/// coverage says; without the second layer no card has it and coverage has
+/// no section of XAML, so those cards stay the bytes the golden snapshots
+/// pin.
+#[test]
+fn the_second_layer_puts_dynamic_access_on_every_level_and_nothing_without_it() {
+    use reverse_architect::coverage::MarkupState;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo_with_files(&repo, "Alice", &[("src/Editor.cs", EDITOR_LAYERED_CS)]);
+    let not_read = "XAML was not read in this run — no plugin of the run reads it — so a member \
+                    without a marker from markup may still be bound, commanded or handled from \
+                    XAML (coverage.json, `markup`).";
+    for level in [1u8, 3] {
+        let run = layered_with_threads(&repo, &tmp.path().join(format!("out-{level}")), level, 1);
+        let analyzed: Vec<&str> = run
+            .cards
+            .iter()
+            .filter(|c| c.contents.contains("\nlayer2: present\n"))
+            .filter(|c| c.contents.contains("\n## Functionality: "))
+            .map(|c| c.contents.as_str())
+            .collect();
+        assert!(!analyzed.is_empty(), "level {level}");
+        for card in analyzed {
+            let at = card
+                .find("\n## Dynamic access\n")
+                .unwrap_or_else(|| panic!("level {level}: no Dynamic access in\n{card}"));
+            let last_2a = ["\n## Functionality: ", "\n## State: "]
+                .iter()
+                .filter_map(|h| card.rfind(h))
+                .max()
+                .unwrap();
+            assert!(last_2a < at, "level {level}");
+            let end = card.find("\n## Notes\n").unwrap_or(card.len());
+            assert!(at < end, "level {level}");
+            assert!(
+                card[at..end].trim_end().ends_with(not_read),
+                "level {level}: {}",
+                &card[at..end]
+            );
+        }
+        let markup = run.coverage.markup.as_ref().expect("a markup section");
+        assert_eq!(markup.state, MarkupState::NotRead);
+        assert!(markup.plugins.is_empty() && markup.files == 0);
+    }
+    let plain = reverse_architect::generate(&common::config_for(&repo, &tmp.path().join("plain")))
+        .expect("the pipeline runs");
+    assert!(plain
+        .cards
+        .iter()
+        .all(|c| !c.contents.contains("## Dynamic access")));
+    assert_eq!(plain.coverage.markup, None);
+    let json = reverse_architect::coverage::to_json(&plain.coverage);
+    assert!(!json.contains("\"markup\""));
+}
+
 /// The plan's risk row, measured and not enforced: adding a type that shares
 /// no word with the others changes the corpus size every rarity is computed
 /// against, so it may reorder the keywords of cards it has nothing to do with.

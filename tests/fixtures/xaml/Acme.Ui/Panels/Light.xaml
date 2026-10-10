@@ -1,0 +1,13 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:t="clr-namespace:Acme.Tools">
+  <ControlTemplate TargetType="t:ViewH">
+    <StackPanel>
+      <Button x:Name="SaveButton"
+              Content="{Binding Label}"
+              Command="{Binding SaveCommand}" />
+      <t:AcmeMenuItem Header="Open" Command="{Binding OpenCommand}" />
+    </StackPanel>
+  </ControlTemplate>
+</ResourceDictionary>

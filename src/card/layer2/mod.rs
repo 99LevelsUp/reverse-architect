@@ -36,7 +36,10 @@
 //!   or a handler of markup, a literal or a `nameof` of C# reads, writes,
 //!   calls or names, with place and grade, the matches by name alone, and the
 //!   references from C# to markup (KTD7, KTD8, KTD10), [`Analysis::dynamic`];
-//!   [`literal_refs`] reads the C# half.
+//!   [`literal_refs`] reads the C# half. Step 2c, U8 and U9: the words of a
+//!   declaration (R17), the lines of every analyzed type's `## Dynamic
+//!   access` with the run's state of XAML coverage ([`TypeAnalysis::dynamic`])
+//!   and the triggers of markup for the registry (R9, KTD15).
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
@@ -74,8 +77,9 @@ pub use context::{
     TriggerCondition, TriggerFlow, TypeContext,
 };
 pub use dynamic::{
-    DynamicAccess, Mark, MarkKind, MarkUse, MarkupSite, MemberMarks, SiteOutcome, Unpaired,
-    XamlRef, XamlRefKind, VIEW_MODEL_FIELD,
+    DynamicAccess, GenericMark, GenericMarks, Mark, MarkKind, MarkUse, MarkupSite, MarkupTrigger,
+    MarkupTriggerKind, MemberLine, MemberMarks, SiteOutcome, TypeDynamic, Unpaired, XamlRef,
+    XamlRefKind, VIEW_MODEL_FIELD,
 };
 pub use effects::{
     FlowResult, FlowResults, FunctionalityResults, ResultKind, StateContext, StopCause,
@@ -100,6 +104,7 @@ pub use resolve::{ByArity, Chain, Index, Link, Scope, Unresolved};
 
 use crate::card::purpose::{copied_comments, CodePurpose};
 use crate::config::DEFAULT_AMBIGUITY_CEILING;
+use crate::coverage::MarkupState;
 use crate::extract::bodies::{BodyLayer, SecondLayer};
 use crate::graph::{Graph, NodeKey};
 use serde::Serialize;
@@ -128,6 +133,11 @@ pub struct TypeAnalysis {
     /// every trigger at each functionality (U5) — for the `### Context` of
     /// the card (U6).
     pub context: TypeContext,
+    /// Step 2c: what the `## Dynamic access` of the card draws (U8) — the
+    /// lines of the type's members and the run's state of XAML coverage.
+    /// Empty from [`analyze`] and [`analyze_with`]; [`analyze_run`] fills
+    /// the lines, and [`Analysis::set_markup_state`] the state.
+    pub dynamic: TypeDynamic,
 }
 
 impl TypeAnalysis {
@@ -177,6 +187,15 @@ impl Analysis {
             .binary_search_by(|t| t.key.cmp(key))
             .ok()
             .map(|i| &self.types[i])
+    }
+
+    /// The run's state of XAML coverage (plan 2c, U8: R19), which every
+    /// analyzed type's `## Dynamic access` ends with: known only once the
+    /// run's plugins and second layer are, after the analysis.
+    pub fn set_markup_state(&mut self, state: MarkupState) {
+        for t in &mut self.types {
+            t.dynamic.state = state;
+        }
     }
 
     /// The rows of the registry that lead to the functionality `key` of the
@@ -230,7 +249,10 @@ pub fn analyze_run(graph: &Graph, layer: &BodyLayer, ceiling: usize) -> Analysis
     let ix = Index::new(graph, layer);
     let links = Links::new(&ix, ceiling);
     let dynamic = DynamicAccess::build(graph, &links);
-    let (types, triggers) = analyze_in(graph, layer, &links, &dynamic);
+    let (mut types, triggers) = analyze_in(graph, layer, &links, &dynamic);
+    for t in &mut types {
+        t.dynamic.lines = dynamic.lines_of(&t.key);
+    }
     Analysis {
         types,
         triggers,
@@ -272,6 +294,7 @@ fn analyze_in(
                 flow,
                 purpose,
                 context: TypeContext::empty(ty),
+                dynamic: TypeDynamic::default(),
             }
         })
         .collect();

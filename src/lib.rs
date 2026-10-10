@@ -218,11 +218,36 @@ pub fn generate_reporting(
     // (plan 2a, U6): the keywords of the analyzed types' cards first, so
     // every count read off the cards below sees them. The dynamic-call
     // markers of step 2c are built in it, before the triggers that read them.
-    let analysis = bodies
+    let mut analysis = bodies
         .as_ref()
         .map(|layer| card::layer2::analyze_run(&graph, layer, config.ambiguity_ceiling));
     if let Some(analysis) = &analysis {
         card::add_layer2_keywords(&mut card_set, &insight, analysis);
+    }
+    // The run's state of XAML coverage (plan 2c, U8: R19, KTD12): from the
+    // plugins that claim XAML, the files they failed on and the second
+    // layer, before any card renders — the analyzed types' `## Dynamic
+    // access` and the XAML documents end in it; coverage carries it.
+    let markup_plugins: Vec<String> = extract_options
+        .plugins
+        .iter()
+        .filter(|p| {
+            p.manifest()
+                .languages
+                .iter()
+                .any(|l| l.name == coverage::MARKUP_LANGUAGE)
+        })
+        .map(|p| p.id().to_string())
+        .collect();
+    let markup = coverage::markup(
+        &graph,
+        registry.languages(),
+        &markup_plugins,
+        bodies.as_ref(),
+        analysis.as_ref().map(|a| a.dynamic.site_counts()),
+    );
+    if let (Some(analysis), Some(markup)) = (&mut analysis, &markup) {
+        analysis.set_markup_state(markup.state);
     }
     // Built once and shared: the card renderer and the signpost (below) both
     // need a CardIndex, and building it is an O(n) clone-into-a-map over the
@@ -236,8 +261,21 @@ pub fn generate_reporting(
         }),
         _ => None,
     };
-    let cards =
+    let mut cards =
         card::render_card_files_layered(&card_set, &card_index, lang, config.links, run.as_ref());
+    // The documents of XAML files (plan 2c, U8): their unresolved references,
+    // and with the second layer the state of XAML coverage and the
+    // references from C# — before the manifest and the sizes read the cards.
+    card::render::add_markup_documents(
+        &mut cards,
+        &card_set,
+        &graph,
+        analysis
+            .as_ref()
+            .zip(markup.as_ref())
+            .map(|(a, m)| (&a.dynamic, m.state)),
+        lang,
+    );
     let details = card::detail::render_detail_files(&card_set, &card_index, lang, config.links);
     let maps = card::map::render_map_files(&card_set, &card_index, lang, config.links);
     // The registry of triggers (plan 2b, U7): with the second layer only,
@@ -344,6 +382,7 @@ pub fn generate_reporting(
     // way the card noise is counted by the layer that built it.
     coverage.cards = Some(coverage::card_levels(&card_set, &cards, &details, &maps));
     coverage.bodies = bodies.as_ref().map(coverage::bodies);
+    coverage.markup = markup;
     progress.phase_done();
     Ok(Generated {
         graph,

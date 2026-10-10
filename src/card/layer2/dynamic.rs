@@ -7,6 +7,20 @@
 //! triggers (U9) read it, and the walk of triggers (2b, U5) asks it which
 //! members not to root as an entry from another component ([`DynamicMarks`]).
 //!
+//! U8 adds the markers a declaration gives with no place (R17,
+//! [`GenericMark`]): a member with the name and kind of a member of an
+//! interface its type implements, a `virtual`, `abstract` or `override`
+//! member, a method with an event handler's parameters — and the lines of a
+//! type's card ([`DynamicAccess::lines_of`]). U9 adds the triggers of markup
+//! ([`MarkupTrigger`]): every element with `trigger: control` — a menu item
+//! when its type is WPF's `MenuItem` or derives from it in the repository,
+//! else a control (KTD15) — and every `key-gesture`, with the members its
+//! command may be: the last member of each access at the element the walk
+//! told (an access names no attribute, so a `Content` binding beside the
+//! command is a candidate too; the registry keeps the one a functionality
+//! enters at), for a key binding the access that spells the command it
+//! names.
+//!
 //! # Markup (U6)
 //!
 //! Every body of kind `markup` is read; its accesses carry no source of
@@ -82,13 +96,14 @@ use super::entry::Place;
 use super::link::{Links, Outcome};
 use super::resolve::{Index, Scope, Unresolved};
 use super::triggers::DynamicMarks;
+use crate::coverage::{MarkupSites, MarkupState};
 use crate::extract::bodies::{
     AccessMode, AccessPath, BodyKind, Handler, MemberAccess, MemberBody, NodeKind as BodyNodeKind,
     PathRoot, Range, Subscription, Tag,
 };
-use crate::graph::{Confidence, FactKind, FactValue, Graph, NodeKey, Rule};
+use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, Rule};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The member a view holds its model in when its base list does not say
 /// the model's type (plan 2c, KTD7).
@@ -96,6 +111,10 @@ pub const VIEW_MODEL_FIELD: &str = "viewModel";
 
 /// The tag a markup body names the type it is about with.
 const TARGET_TYPE: &str = "target-type";
+
+/// How the key of a view's root ends: the plugin keys it `<file>#x:Class`
+/// (plan 2c, KTD3).
+const X_CLASS_KEY: &str = "#x:Class";
 
 /// The tag a markup node names the source of its bindings' data with.
 const DATA_SOURCE: &str = "data-source";
@@ -168,6 +187,102 @@ pub struct MemberMarks {
     /// The places whose name no rule could tell, of this member's name
     /// (R15: one summary line, never a mark).
     pub name_matches: usize,
+    /// The type that declares it (`HasMember`).
+    pub owner: Option<NodeKey>,
+}
+
+/// A marker the declaration itself gives (plan 2c, R17): a member another
+/// part of the program may call without a static call to it, said in one
+/// word on the card and with no place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GenericMark {
+    /// It has the name and kind of a member of an interface its type, or a
+    /// type its type derives from, implements (an `Implements` relation).
+    Interface,
+    /// It is `virtual` or `abstract`: a deriving type may replace it.
+    Virtual,
+    /// It is an `override`: called where its base's member is.
+    Override,
+    /// Its parameters are an event handler's: `object` and a type whose name
+    /// ends in `EventArgs`.
+    Handler,
+}
+
+/// The markers a member's declaration gives, in [`GenericMark`] order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GenericMarks {
+    pub member: NodeKey,
+    pub owner: NodeKey,
+    pub marks: Vec<GenericMark>,
+}
+
+/// One member as the `## Dynamic access` of its type's card lists it (U8):
+/// the words of its declaration, its marks with a place, by place, and its
+/// matches by name alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MemberLine {
+    pub member: NodeKey,
+    pub generic: Vec<GenericMark>,
+    pub marks: Vec<Mark>,
+    pub name_matches: usize,
+}
+
+/// What the `## Dynamic access` of a type's card draws (U8: KTD11): its
+/// members' lines and the state of XAML coverage of the run, which the
+/// section ends with. The state is the run's ([`crate::coverage::markup`]);
+/// an analysis built without one says XAML was not read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TypeDynamic {
+    /// By member key.
+    pub lines: Vec<MemberLine>,
+    pub state: MarkupState,
+}
+
+impl Default for TypeDynamic {
+    fn default() -> TypeDynamic {
+        TypeDynamic {
+            lines: Vec::new(),
+            state: MarkupState::NotRead,
+        }
+    }
+}
+
+/// The kind of a trigger written in markup (plan 2c, U9: R9, KTD15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarkupTriggerKind {
+    /// An element with `Command=` (`trigger: control`) whose type is no menu
+    /// item.
+    Control,
+    /// An element with `Command=` whose type is `MenuItem` or, in the
+    /// repository, derives from it.
+    MenuItem,
+    /// A `KeyBinding` (`key-gesture`): its gesture and command in markup.
+    Key,
+}
+
+/// A trigger written in markup, for the registry of triggers of step 2b
+/// (U9): what it is, its key, where it is and the members its command may
+/// be. The registry turns it into rows by the functionalities those members
+/// are entry points of.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct MarkupTrigger {
+    pub kind: MarkupTriggerKind,
+    /// The control's identity (`control-key`: its name, its key, the
+    /// resource or the text of its label), else the element's name; a key's
+    /// gesture. As written, before the secret filter.
+    pub key: String,
+    /// The declaration the body belongs to — a template, a style — else the
+    /// markup file; for the root of a view with `x:Class`, the full name of
+    /// its class (`Acme.Tools.ViewK`).
+    pub member: NodeKey,
+    /// The element, all its lines.
+    pub place: Place,
+    /// The last member of every access at the element the walk told, in the
+    /// model's order; for a key binding the one of the command it names
+    /// first, when one is that.
+    pub targets: Vec<NodeKey>,
 }
 
 /// Why a markup access was not walked at all.
@@ -262,11 +377,16 @@ pub struct DynamicAccess {
     sites: Vec<MarkupSite>,
     /// By target, place and member.
     refs: Vec<XamlRef>,
+    /// By member key.
+    generic: Vec<GenericMarks>,
+    /// By kind, key, place and member.
+    triggers: Vec<MarkupTrigger>,
 }
 
 impl DynamicAccess {
     /// Every marker of the run whose first layer and second layer `links`
-    /// walks: the markup bodies (U6), the literals and `nameof`s of C# (U7).
+    /// walks: the markup bodies (U6), the literals and `nameof`s of C# (U7),
+    /// the words of the declarations (U8) and the triggers of markup (U9).
     pub fn build(graph: &Graph, links: &Links<'_, '_>) -> DynamicAccess {
         let mut b = Builder {
             graph,
@@ -275,15 +395,69 @@ impl DynamicAccess {
             names: BTreeMap::new(),
             sites: Vec::new(),
             refs: Vec::new(),
+            generic: Vec::new(),
+            triggers: Vec::new(),
         };
         b.markup();
         super::literal_refs::collect(&mut b);
+        b.generic();
+        b.markup_triggers();
         b.finish()
     }
 
     /// Every member with a mark or a match by name, by key.
     pub fn members(&self) -> &[MemberMarks] {
         &self.members
+    }
+
+    /// Every member whose declaration gives a marker (R17), by key.
+    pub fn generic(&self) -> &[GenericMarks] {
+        &self.generic
+    }
+
+    /// The members of the type `ty` the run says anything of — a word of
+    /// its declaration, a mark, a match by name — by key: the lines of the
+    /// `## Dynamic access` of its card (U8).
+    pub fn lines_of(&self, ty: &NodeKey) -> Vec<MemberLine> {
+        let mut lines: BTreeMap<&NodeKey, MemberLine> = BTreeMap::new();
+        let blank = |member: &NodeKey| MemberLine {
+            member: member.clone(),
+            generic: Vec::new(),
+            marks: Vec::new(),
+            name_matches: 0,
+        };
+        for g in self.generic.iter().filter(|g| &g.owner == ty) {
+            lines
+                .entry(&g.member)
+                .or_insert_with(|| blank(&g.member))
+                .generic = g.marks.clone();
+        }
+        for m in self.members.iter().filter(|m| m.owner.as_ref() == Some(ty)) {
+            let line = lines.entry(&m.member).or_insert_with(|| blank(&m.member));
+            line.marks = m.marks.clone();
+            line.name_matches = m.name_matches;
+        }
+        lines.into_values().collect()
+    }
+
+    /// Every trigger written in markup (U9), by kind, key, place and member.
+    pub fn triggers(&self) -> &[MarkupTrigger] {
+        &self.triggers
+    }
+
+    /// The markup places, by how they ended — what coverage counts of them
+    /// (U8: KTD12).
+    pub fn site_counts(&self) -> MarkupSites {
+        let mut c = MarkupSites::default();
+        for s in &self.sites {
+            *match s.outcome {
+                SiteOutcome::Resolved { .. } => &mut c.resolved,
+                SiteOutcome::Ambiguous { .. } => &mut c.ambiguous,
+                SiteOutcome::Unresolved { .. } => &mut c.unresolved,
+                SiteOutcome::Unpaired { .. } => &mut c.unpaired,
+            } += 1;
+        }
+        c
     }
 
     /// What the run says of `member`.
@@ -391,7 +565,60 @@ pub(super) struct Builder<'b, 'i, 'a> {
     names: BTreeMap<NodeKey, usize>,
     sites: Vec<MarkupSite>,
     refs: Vec<XamlRef>,
+    generic: Vec<GenericMarks>,
+    triggers: Vec<MarkupTrigger>,
 }
+
+/// The parameter types a member's key spells (`OnSave(object,EventArgs)`),
+/// split at the commas outside generic arguments; `None` for a key with no
+/// parameter list.
+fn parameters(key: &str) -> Option<Vec<&str>> {
+    let inner = key.strip_suffix(')')?;
+    let open = inner.rfind('(')?;
+    let list = &inner[open + 1..];
+    if list.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in list.char_indices() {
+        match c {
+            '<' | '[' | '(' => depth += 1,
+            '>' | ']' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(list[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(list[start..].trim());
+    Some(out)
+}
+
+/// An event handler's parameters: `object` (or `object?`), then a type whose
+/// last name ends in `EventArgs`.
+fn is_handler_signature(key: &str) -> bool {
+    match parameters(key).as_deref() {
+        Some([sender, args]) => {
+            let sender = sender.trim_end_matches('?');
+            let args = args.split('<').next().unwrap_or(args);
+            let last = args.rsplit('.').next().unwrap_or(args);
+            matches!(sender, "object" | "Object" | "System.Object") && last.ends_with("EventArgs")
+        }
+        _ => false,
+    }
+}
+
+/// The last name of an element's type as markup spells it: `Acme.Ui.Item`,
+/// `http://…|MenuItem`, `MenuItem`.
+fn last_type_name(name: &str) -> &str {
+    name.rsplit(['.', '|']).next().unwrap_or(name)
+}
+
+/// The name WPF's menu item has; a type is a menu item when it is one or
+/// derives from one (plan 2c, KTD15).
+const MENU_ITEM: &str = "MenuItem";
 
 impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
     pub(super) fn graph(&self) -> &'b Graph {
@@ -441,6 +668,7 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
         keys.extend(self.names.keys().cloned());
         keys.sort();
         keys.dedup();
+        let ix = self.index();
         let members = keys
             .into_iter()
             .map(|member| {
@@ -448,20 +676,228 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
                 marks.sort();
                 marks.dedup();
                 let name_matches = self.names.get(&member).copied().unwrap_or(0);
+                let owner = ix.owner_of(&member).cloned();
                 MemberMarks {
                     member,
                     marks,
                     name_matches,
+                    owner,
                 }
             })
             .collect();
         self.refs.sort();
         self.refs.dedup();
+        self.generic.sort_by(|a, b| a.member.cmp(&b.member));
+        self.triggers.sort();
+        self.triggers.dedup();
         DynamicAccess {
             members,
             sites: self.sites,
             refs: self.refs,
+            generic: self.generic,
+            triggers: self.triggers,
         }
+    }
+
+    // ---- The words of a declaration (U8: R17) ----
+
+    /// Every member of the run's C# types whose declaration gives a marker.
+    fn generic(&mut self) {
+        let ix = self.index();
+        // The interfaces each type implements, by the relation the first
+        // layer read.
+        let mut implements: BTreeMap<&NodeKey, Vec<&NodeKey>> = BTreeMap::new();
+        let edges = self.graph.edges_sorted();
+        for e in &edges {
+            if e.edge.kind == EdgeKind::Implements {
+                implements.entry(e.from).or_default().push(e.to);
+            }
+        }
+        let mut out = Vec::new();
+        for ty in ix.csharp_types() {
+            // The interfaces of the type and of its line of bases, and the
+            // interfaces those extend, each once.
+            let mut faces: BTreeSet<&NodeKey> = BTreeSet::new();
+            let mut todo: Vec<&NodeKey> = std::iter::once(ty)
+                .chain(ix.ancestors(ty))
+                .flat_map(|t| implements.get(t).into_iter().flatten().copied())
+                .collect();
+            while let Some(face) = todo.pop() {
+                if faces.insert(face) {
+                    todo.extend(implements.get(face).into_iter().flatten().copied());
+                }
+            }
+            let declared: BTreeSet<(&str, &str)> = faces
+                .iter()
+                .flat_map(|f| ix.members_of(f))
+                .filter_map(|m| ix.symbol(m))
+                .map(|s| (s.name.as_str(), s.kind.as_str()))
+                .collect();
+            for m in ix.members_of(ty) {
+                let Some(s) = ix.symbol(m) else { continue };
+                if s.is_type() {
+                    continue;
+                }
+                let mut marks = Vec::new();
+                if declared.contains(&(s.name.as_str(), s.kind.as_str())) {
+                    marks.push(GenericMark::Interface);
+                }
+                let metas = ix.layer.metas_of(m);
+                let has = |word: &str| {
+                    metas
+                        .iter()
+                        .any(|(_, meta)| meta.modifiers.iter().any(|w| w == word))
+                };
+                if has("virtual") || has("abstract") {
+                    marks.push(GenericMark::Virtual);
+                }
+                if has("override") {
+                    marks.push(GenericMark::Override);
+                }
+                if s.is_method() && is_handler_signature(m.as_str()) {
+                    marks.push(GenericMark::Handler);
+                }
+                if !marks.is_empty() {
+                    out.push(GenericMarks {
+                        member: m.clone(),
+                        owner: ty.clone(),
+                        marks,
+                    });
+                }
+            }
+        }
+        self.generic = out;
+    }
+
+    // ---- The triggers of markup (U9: R9, KTD15) ----
+
+    /// Every element with a command (`trigger: control`) and every key
+    /// binding (`key-gesture`) of the markup bodies.
+    fn markup_triggers(&mut self) {
+        let layer = self.index().layer;
+        let mut out = Vec::new();
+        // The sites the walk told, by the element they are written at, built
+        // once: a large dictionary has many elements and many sites.
+        let mut told_at: BTreeMap<(&str, usize, u32), Vec<&MarkupSite>> = BTreeMap::new();
+        for s in &self.sites {
+            if let (Some(node), SiteOutcome::Resolved { .. }, false) =
+                (s.node, &s.outcome, s.links.is_empty())
+            {
+                told_at
+                    .entry((s.place.path.as_str(), s.body, node))
+                    .or_default()
+                    .push(s);
+            }
+        }
+        for (path, file) in layer.files() {
+            for (index, body) in file.model.members.iter().enumerate() {
+                if body.kind != BodyKind::Markup {
+                    continue;
+                }
+                let member = file
+                    .owners
+                    .get(index)
+                    .and_then(Option::as_ref)
+                    .map_or_else(|| NodeKey::new(path), |(k, _)| k.clone());
+                // The root of a view with code-behind is written in its
+                // class: the full name `x:Class` gives (the body's
+                // `target-type`), as a template names the type it is for.
+                let member = match tag_value(&body.tags, TARGET_TYPE) {
+                    Some(class) if member.as_str().ends_with(X_CLASS_KEY) => NodeKey::new(class),
+                    _ => member,
+                };
+                for node in &body.nodes {
+                    let BodyNodeKind::Element(element) = &node.kind else {
+                        continue;
+                    };
+                    let control = tag_value(&node.tags, "trigger") == Some("control");
+                    if !control && !node.tags.iter().any(|t| t.name == "key-gesture") {
+                        continue;
+                    }
+                    let place = Place {
+                        path: path.to_string(),
+                        range: node.place,
+                    };
+                    let told: Vec<&MarkupSite> = told_at
+                        .get(&(path, index, node.id))
+                        .cloned()
+                        .unwrap_or_default();
+                    let last = |sites: &[&MarkupSite]| -> Vec<NodeKey> {
+                        let mut v: Vec<NodeKey> = Vec::new();
+                        for s in sites {
+                            if let Some(l) = s.links.last() {
+                                if !v.contains(l) {
+                                    v.push(l.clone());
+                                }
+                            }
+                        }
+                        v
+                    };
+                    if control {
+                        let key = tag_value(&node.tags, "control-key")
+                            .unwrap_or_else(|| last_type_name(element));
+                        let kind = if self.is_menu_item(element) {
+                            MarkupTriggerKind::MenuItem
+                        } else {
+                            MarkupTriggerKind::Control
+                        };
+                        out.push(MarkupTrigger {
+                            kind,
+                            key: key.to_string(),
+                            member: member.clone(),
+                            place: place.clone(),
+                            targets: last(&told),
+                        });
+                    }
+                    for gesture in tags(&node.tags, "key-gesture") {
+                        let Some(value) = &gesture.value else {
+                            continue;
+                        };
+                        // The command as written, when an access spells it.
+                        let named: Vec<&MarkupSite> = told
+                            .iter()
+                            .copied()
+                            .filter(|s| gesture.args.first() == Some(&s.path.join(".")))
+                            .collect();
+                        let targets = if named.is_empty() {
+                            last(&told)
+                        } else {
+                            last(&named)
+                        };
+                        out.push(MarkupTrigger {
+                            kind: MarkupTriggerKind::Key,
+                            key: value.clone(),
+                            member: member.clone(),
+                            place: place.clone(),
+                            targets,
+                        });
+                    }
+                }
+            }
+        }
+        self.triggers = out;
+    }
+
+    /// Whether markup's element type `element` is a menu item: WPF's own by
+    /// its name, or a C# type of exactly that full name whose base list, or
+    /// that of a type it derives from, names one (KTD15: by the type, never
+    /// by a list of controls).
+    fn is_menu_item(&self, element: &str) -> bool {
+        if last_type_name(element) == MENU_ITEM {
+            return true;
+        }
+        let ix = self.index();
+        let Ok(ty) = ix.type_exactly(element) else {
+            return false;
+        };
+        std::iter::once(&ty).chain(ix.ancestors(&ty)).any(|t| {
+            ix.layer.type_shapes_of(t).iter().any(|(_, shape)| {
+                shape
+                    .bases
+                    .iter()
+                    .any(|b| b.base.last().is_some_and(|l| l == MENU_ITEM))
+            })
+        })
     }
 
     // ---- Markup (U6) ----

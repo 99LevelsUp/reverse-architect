@@ -3078,8 +3078,8 @@ fn a_run_without_the_detail_level_writes_no_registry_and_removes_the_old_copy() 
 /// R15, KTD11: a component that declares no `emits`, or that read no file,
 /// covers nothing, so its language is not covered; a language another
 /// component claims is listed; a component for XAML that read files covers
-/// nothing until the core turns XAML into rows (step 2c) — the line never
-/// claims a kind no row of the registry can have.
+/// the kinds its rows can have (step 2c, U9) and never an event — the line
+/// never claims a kind no row of the registry can have.
 #[test]
 fn a_component_without_emits_leaves_its_language_not_covered() {
     let component = |languages: &[&str], emits: &[&str], read: bool| BodyComponent {
@@ -3119,9 +3119,63 @@ fn a_component_without_emits_leaves_its_language_not_covered() {
     ]);
     assert_eq!(
         xaml.summary(Lang::En),
-        "C#: event, key, menu item, entry from another component; XAML: not covered"
+        "C#: event, key, menu item, entry from another component; XAML: key, menu item, control"
     );
     assert_eq!(coverage(&[]).summary(Lang::En), none.summary(Lang::En));
+}
+
+/// Plan 2c, U9 (R9, AE6, KTD11, KTD15): a component for XAML that read files
+/// covers the kinds a row of XAML can have that its `emits` map to — a
+/// control and a menu item by `control-key`, a key by `key-gesture` — named
+/// apart, in the registry's order; never an event (a handler of XAML is a
+/// marker, no row) nor an entry from another component; C# is what it was.
+/// A component for XAML that emits nothing of the three, or read nothing,
+/// leaves XAML not covered.
+#[test]
+fn a_component_for_xaml_covers_the_kinds_of_its_rows_by_its_emits() {
+    let component = |languages: &[&str], emits: &[&str], read: bool| BodyComponent {
+        languages: languages.iter().map(|s| s.to_string()).collect(),
+        emits: emits.iter().map(|s| s.to_string()).collect(),
+        read,
+    };
+    let csharp = component(
+        &["csharp"],
+        &["subscription", "key-compare", "key-gesture", "menu-item"],
+        true,
+    );
+    let xaml = coverage(&[
+        csharp.clone(),
+        component(
+            &["xaml"],
+            &[
+                "member-access",
+                "subscription",
+                "key-gesture",
+                "control-key",
+            ],
+            true,
+        ),
+    ]);
+    assert_eq!(
+        xaml.summary(Lang::En),
+        "C#: event, key, menu item, entry from another component; XAML: key, menu item, control"
+    );
+    assert_eq!(
+        xaml.summary(Lang::Cs),
+        "C#: událost, klávesa, položka menu, vstup z jiné komponenty; XAML: klávesa, položka \
+         menu, ovládací prvek"
+    );
+    let keys_only = coverage(&[component(&["xaml"], &["key-gesture"], true)]);
+    assert_eq!(keys_only.summary(Lang::En), "C#: not covered; XAML: key");
+    for idle in [
+        component(&["xaml"], &["subscription", "member-access"], true),
+        component(&["xaml"], &["key-gesture", "control-key"], false),
+    ] {
+        assert_eq!(
+            coverage(&[csharp.clone(), idle]).summary(Lang::En),
+            "C#: event, key, menu item, entry from another component; XAML: not covered"
+        );
+    }
 }
 
 /// The menu of `SECRET_MENU`: an item whose label is a literal of a secret's

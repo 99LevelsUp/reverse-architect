@@ -25,12 +25,19 @@
 //! a resource key — and goes through the secret filter once more; a row that
 //! holds its marker says so before its anchor (R18).
 //!
-//! The rows are data of their own ([`RegistryRow`]), not the analysis's: a
-//! later source of triggers (the XAML of step 2c) adds its rows to the same
-//! list, and the registry sorts and renders whatever it is given.
+//! The rows are data of their own ([`RegistryRow`]), not the analysis's: the
+//! triggers of XAML (step 2c, U9: R9, KTD15) are rows of the same list — a
+//! control with `Command=`, a menu item, a `KeyBinding` — each at its
+//! element, with the template, style or view it is written in as its member
+//! and the functionality an entry point of which its command is; and the
+//! registry sorts and renders whatever it is given. A row of XAML is always
+//! active: whether the way it opens is dead is told by the composition of a
+//! functionality's flows (2b), which reads the rows of C# alone.
 
 use super::explain::{code, cs_n, plural, series, NAMED_IN_SENTENCE};
-use super::layer2::{Analysis, FunctionalityRef, PathState, Place, TriggerKind, TriggerRow};
+use super::layer2::{
+    Analysis, FunctionalityRef, MarkupTriggerKind, PathState, Place, TriggerKind, TriggerRow,
+};
 use super::layer2_render::{anchor, short};
 use super::links::{link, mention, CardIndex};
 use super::map::MAP_PART_ROWS;
@@ -54,6 +61,42 @@ pub const TRIGGERS_ID: &str = "triggers:index";
 /// The registry's document kind.
 pub const TRIGGERS_KIND: &str = "triggers";
 
+// ---- The kinds of the registry ----
+
+/// A kind of trigger as the registry lists it, in its order: the kinds of
+/// the analysis of C# ([`TriggerKind`]) and the control of XAML (plan 2c,
+/// R9), which only markup writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RegistryKind {
+    Event,
+    Key,
+    MenuItem,
+    /// An element with `Command=` whose type is no menu item (KTD15).
+    Control,
+    External,
+}
+
+impl From<TriggerKind> for RegistryKind {
+    fn from(kind: TriggerKind) -> RegistryKind {
+        match kind {
+            TriggerKind::Event => RegistryKind::Event,
+            TriggerKind::Key => RegistryKind::Key,
+            TriggerKind::MenuItem => RegistryKind::MenuItem,
+            TriggerKind::External => RegistryKind::External,
+        }
+    }
+}
+
+impl From<MarkupTriggerKind> for RegistryKind {
+    fn from(kind: MarkupTriggerKind) -> RegistryKind {
+        match kind {
+            MarkupTriggerKind::Control => RegistryKind::Control,
+            MarkupTriggerKind::MenuItem => RegistryKind::MenuItem,
+            MarkupTriggerKind::Key => RegistryKind::Key,
+        }
+    }
+}
+
 // ---- The line of coverage (KTD11) ----
 
 /// A component that read bodies in the run, as the line of coverage sees it:
@@ -73,7 +116,7 @@ pub struct LanguageCoverage {
     /// The language's name as a plugin claims it (`csharp`, `xaml`).
     pub language: String,
     /// In the registry's order; empty when nothing covers the language.
-    pub kinds: Vec<TriggerKind>,
+    pub kinds: Vec<RegistryKind>,
 }
 
 /// Which kinds of trigger are covered in which language (R15), by language.
@@ -87,47 +130,81 @@ pub struct TriggerCoverage {
 /// line admits it — `XAML: not covered` — rather than leave it out (AE6).
 const NAMED_LANGUAGES: &[&str] = &["csharp", "xaml"];
 
-/// The languages the core turns into rows of the registry: the analysis of
-/// bodies reads C# alone (U5), walking back over its callers, so an entry
-/// from another component is found there whenever its bodies were read. A
-/// component of any other language covers nothing yet, whatever it emits —
-/// the registry would otherwise say a kind is covered where no row of it can
-/// exist. Step 2c adds `xaml` here with the rows it reads from XAML.
-const ROW_LANGUAGES: &[&str] = &["csharp"];
+/// The languages the core turns into rows of the registry, each with the
+/// kinds a row of it can have. The analysis of bodies reads C# (2b, U5),
+/// walking back over its callers, so an entry from another component is
+/// found there whenever its bodies were read. XAML gives the rows of its
+/// controls, menu items and key bindings (2c, U9); a handler a XAML file
+/// names is a marker of the member, never a row, so XAML covers no event,
+/// whatever its component emits. A component of any other language covers
+/// nothing — the registry would otherwise say a kind is covered where no row
+/// of it can exist.
+const ROW_LANGUAGES: &[(&str, &[RegistryKind])] = &[
+    (
+        "csharp",
+        &[
+            RegistryKind::Event,
+            RegistryKind::Key,
+            RegistryKind::MenuItem,
+            RegistryKind::External,
+        ],
+    ),
+    (
+        "xaml",
+        &[
+            RegistryKind::Key,
+            RegistryKind::MenuItem,
+            RegistryKind::Control,
+        ],
+    ),
+];
 
-/// The kind of trigger a record or a tag a component emits stands for — the
-/// core's table, not a plugin's (KTD11). `control-key` stands for the control
-/// of step 2c, which is no kind of this registry yet.
-fn kind_of(emitted: &str) -> Option<TriggerKind> {
+/// The kinds of trigger a record or a tag a component emits stands for — the
+/// core's table, not a plugin's (KTD11). `control-key` stands for a control
+/// and a menu item alike: which one an element with a command is, the core
+/// tells by its type (2c, KTD15).
+fn kind_of(emitted: &str) -> &'static [RegistryKind] {
     match emitted {
-        "subscription" => Some(TriggerKind::Event),
-        "key-compare" | "key-gesture" => Some(TriggerKind::Key),
-        "menu-item" => Some(TriggerKind::MenuItem),
-        _ => None,
+        "subscription" => &[RegistryKind::Event],
+        "key-compare" | "key-gesture" => &[RegistryKind::Key],
+        "menu-item" => &[RegistryKind::MenuItem],
+        "control-key" => &[RegistryKind::Control, RegistryKind::MenuItem],
+        _ => &[],
     }
 }
 
 /// The line of coverage of a run whose components read bodies as
 /// `components` say (KTD11). A language the core turns into rows
-/// ([`ROW_LANGUAGES`]) is covered by the kinds the `emits` of its components
-/// that read a file map to, and by the entry from another component. A
-/// component that read nothing, or that declares no `emits`, covers nothing;
-/// a language with no component that covers it is not covered. Every name of
-/// [`NAMED_LANGUAGES`] is listed, and every language a component claims; by
-/// name.
+/// ([`ROW_LANGUAGES`]) is covered by the kinds its rows can have that the
+/// `emits` of its components that read a file map to — and C# by the entry
+/// from another component, which the core finds whenever it read the
+/// bodies. A component that read nothing, or that declares no `emits`, covers
+/// nothing; a language with no component that covers it is not covered.
+/// Every name of [`NAMED_LANGUAGES`] is listed, and every language a
+/// component claims; by name.
 pub fn coverage(components: &[BodyComponent]) -> TriggerCoverage {
-    let mut by: BTreeMap<String, BTreeSet<TriggerKind>> = NAMED_LANGUAGES
+    let mut by: BTreeMap<String, BTreeSet<RegistryKind>> = NAMED_LANGUAGES
         .iter()
         .map(|l| (l.to_string(), BTreeSet::new()))
         .collect();
     for c in components {
         for language in &c.languages {
             let kinds = by.entry(language.clone()).or_default();
-            if !c.read || c.emits.is_empty() || !ROW_LANGUAGES.contains(&language.as_str()) {
+            let Some((_, rows)) = ROW_LANGUAGES.iter().find(|(l, _)| l == language) else {
+                continue;
+            };
+            if !c.read || c.emits.is_empty() {
                 continue;
             }
-            kinds.extend(c.emits.iter().filter_map(|e| kind_of(e)));
-            kinds.insert(TriggerKind::External);
+            kinds.extend(
+                c.emits
+                    .iter()
+                    .flat_map(|e| kind_of(e))
+                    .filter(|k| rows.contains(k)),
+            );
+            if rows.contains(&RegistryKind::External) {
+                kinds.insert(RegistryKind::External);
+            }
         }
     }
     TriggerCoverage {
@@ -152,16 +229,18 @@ fn language_name(language: &str) -> &str {
 }
 
 /// A kind of trigger, lower-case, in `lang`.
-fn kind_word(kind: TriggerKind, lang: Lang) -> &'static str {
+fn kind_word(kind: RegistryKind, lang: Lang) -> &'static str {
     match (kind, lang) {
-        (TriggerKind::Event, Lang::En) => "event",
-        (TriggerKind::Event, Lang::Cs) => "událost",
-        (TriggerKind::Key, Lang::En) => "key",
-        (TriggerKind::Key, Lang::Cs) => "klávesa",
-        (TriggerKind::MenuItem, Lang::En) => "menu item",
-        (TriggerKind::MenuItem, Lang::Cs) => "položka menu",
-        (TriggerKind::External, Lang::En) => "entry from another component",
-        (TriggerKind::External, Lang::Cs) => "vstup z jiné komponenty",
+        (RegistryKind::Event, Lang::En) => "event",
+        (RegistryKind::Event, Lang::Cs) => "událost",
+        (RegistryKind::Key, Lang::En) => "key",
+        (RegistryKind::Key, Lang::Cs) => "klávesa",
+        (RegistryKind::MenuItem, Lang::En) => "menu item",
+        (RegistryKind::MenuItem, Lang::Cs) => "položka menu",
+        (RegistryKind::Control, Lang::En) => "control",
+        (RegistryKind::Control, Lang::Cs) => "ovládací prvek",
+        (RegistryKind::External, Lang::En) => "entry from another component",
+        (RegistryKind::External, Lang::Cs) => "vstup z jiné komponenty",
     }
 }
 
@@ -208,12 +287,13 @@ impl TriggerCoverage {
 /// One row of the registry: a trigger and a functionality it leads to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryRow {
-    pub kind: TriggerKind,
+    pub kind: RegistryKind,
     /// A key with its modifiers, a menu item's label as written, an event's
-    /// name, an external entry's member key — as the code has it, before the
-    /// secret filter.
+    /// name, an external entry's member key, a control's identity, a key
+    /// binding's gesture — as the code has it, before the secret filter.
     pub key: String,
-    /// The member the trigger is written in; an external entry's root.
+    /// The member the trigger is written in; an external entry's root; the
+    /// template, style or view of markup (or its file).
     pub member: NodeKey,
     /// Where it is wired; `None` for a root whose body has no place.
     pub place: Option<Place>,
@@ -224,7 +304,7 @@ pub struct RegistryRow {
 impl From<&TriggerRow> for RegistryRow {
     fn from(r: &TriggerRow) -> RegistryRow {
         RegistryRow {
-            kind: r.trigger.kind,
+            kind: r.trigger.kind.into(),
             key: r.trigger.key.clone(),
             member: r.trigger.member.clone(),
             place: r.trigger.place.clone(),
@@ -258,10 +338,65 @@ impl Registry {
         Registry { rows, coverage }
     }
 
-    /// The registry of the triggers the analysis of C# bodies found (U5).
+    /// The registry of the triggers the analysis of C# bodies found (U5),
+    /// and of the triggers of markup (step 2c, U9).
     pub fn of(analysis: &Analysis, coverage: TriggerCoverage) -> Registry {
-        Registry::new(analysis.triggers.iter().map(RegistryRow::from), coverage)
+        Registry::new(
+            analysis
+                .triggers
+                .iter()
+                .map(RegistryRow::from)
+                .chain(markup_rows(analysis)),
+            coverage,
+        )
     }
+}
+
+/// The rows of the triggers of markup (U9: R9, KTD15): one per trigger and
+/// functionality its command is an entry point of — the member the walk
+/// told at the element (U6), a command property 2a bound — each at the
+/// element's lines. A trigger whose command no functionality enters at has
+/// no row, as a trigger of C# that leads to none.
+fn markup_rows(analysis: &Analysis) -> Vec<RegistryRow> {
+    let triggers = analysis.dynamic.triggers();
+    if triggers.is_empty() {
+        return Vec::new();
+    }
+    // The functionalities each member is an entry point of, built once.
+    let mut entered: BTreeMap<&NodeKey, BTreeSet<FunctionalityRef>> = BTreeMap::new();
+    for ty in &analysis.types {
+        for f in &ty.functionalities {
+            for e in f.entry_points.iter().filter(|e| e.discriminator.is_none()) {
+                entered
+                    .entry(&e.member)
+                    .or_default()
+                    .insert(FunctionalityRef {
+                        ty: ty.key.clone(),
+                        key: f.key.clone(),
+                    });
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for t in triggers {
+        let targets: BTreeSet<&FunctionalityRef> = t
+            .targets
+            .iter()
+            .filter_map(|m| entered.get(m))
+            .flatten()
+            .collect();
+        for target in targets {
+            out.push(RegistryRow {
+                kind: t.kind.into(),
+                key: t.key.clone(),
+                member: t.member.clone(),
+                place: Some(t.place.clone()),
+                state: PathState::Active,
+                target: target.clone(),
+            });
+        }
+    }
+    out
 }
 
 /// A part's weight in rows.
@@ -366,7 +501,7 @@ fn row(r: &RegistryRow, index: &CardIndex, lang: Lang, links: LinkStyle) -> Stri
     let cs = lang == Lang::Cs;
     let member = code(short(r.member.as_str()));
     let key = match r.kind {
-        TriggerKind::External => member,
+        RegistryKind::External => member,
         _ => format!(
             "{} {} {member}",
             code(&scrubbed(short(&r.key))),
