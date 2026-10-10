@@ -15,7 +15,7 @@ from agents.judge_cli import CliReply, JudgeInfrastructureError
 from calibration import (CalibrationSetError, find_calibration, load_set, parse_set,
                          run_calibration, write_result)
 from judge import JudgeCache, JudgeSelection, JudgeSpec
-from prepare import PrepareError
+from prepare import PrepareError, canonical_path
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "calibration.example.json"
 COMMAND_MARKER = "--tajny-prepinac-hodnotitele"
@@ -197,7 +197,9 @@ class OutputTest(TempCase):
         self.assertIn("ě", text)  # ensure_ascii=False
         found = find_calibration(self.base / "out", "j1", judge.PROMPT_VERSION,
                                  parse_set(data).fingerprint)
-        self.assertEqual(found[0], out)
+        # write_result returns the canonical path (realpath, case-folded on Windows),
+        # find_calibration the path as found under the given directory: compare canonically
+        self.assertEqual(canonical_path(found[0]), canonical_path(out))
         self.assertEqual(found[1]["shoda"], 1.0)
         self.assertIsNone(find_calibration(self.base / "out", "j2", judge.PROMPT_VERSION,
                                            parse_set(data).fingerprint))

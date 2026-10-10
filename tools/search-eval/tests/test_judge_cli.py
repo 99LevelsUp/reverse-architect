@@ -129,7 +129,9 @@ class JudgeProcessTest(unittest.TestCase):
             "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME",
             "XDG_CACHE_HOME", "XDG_DATA_HOME", "TEMP", "TMP", "TMPDIR", "CLAUDE_CONFIG_DIR",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", ALLOWED_ENV.upper()}
-        self.assertEqual(sorted(names - allowed), [])
+        # macOS adds __CF_USER_TEXT_ENCODING to every process itself; it is not passed by the code
+        added_by_os = {n for n in names if sys.platform == "darwin" and n.startswith("__CF")}
+        self.assertEqual(sorted(names - allowed - added_by_os), [])
         self.assertEqual(seen["cwd_listing"], [])           # empty working directory
         self.assertEqual(seen["sibling_listing"], [])       # empty sibling, no canary
         self.assertEqual(seen["config_listing"], ["auth/login.txt"])
