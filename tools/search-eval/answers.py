@@ -4,8 +4,9 @@
 
 The tool has subcommands. `kontrola-karet` is the card check (`card_check.py`),
 `hodnot-odpovedi` judges the agent's free answers to questions (KTD10), `kontrola`
-is the owner's review, `zprava` the report of the answers (`answers_report.py`); `kalibrace`
-is added by a later unit. Adding a subcommand takes three steps:
+is the owner's review, `zprava` the report of the answers (`answers_report.py`), `kalibrace`
+the calibration of the judge on a frozen set of sentences (`calibration.py`). Adding a
+subcommand takes three steps:
 
 1. write `configure_<name>(parser)` (its own arguments) and
    `command_<name>(args, services) -> int` (the work; it raises the errors
@@ -17,8 +18,15 @@ is added by a later unit. Adding a subcommand takes three steps:
 
 Common to all subcommands: `--source-repo` is required (the repository whose
 revision the catalog is over; with this repository it fixes the protected roots
-that no state directory may lie under, `prepare.protected_roots`). There are no
+that no file of the tool may lie under, `prepare.protected_roots`). There are no
 silent defaults: every path is named.
+
+Paths (KTD13). The catalog, the judges file, the state directory, the files of the owner's review
+(the JSON and its `.md`), the calibration set, the calibration output and the output of the answer
+report are refused inside the source repository, this tool's repository and every worktree of
+either (exit code 2, the message names the path), before anything is read or written. The state
+directory is also refused when it overlaps a corpus the command is given (`--korpus`, or the corpus
+of a variant of the attempt handed to `hodnot-odpovedi`), because an agent reads those.
 
 Exit codes: 0 done, 2 invalid input (also a missing argument), 3 judge
 unavailable or infrastructure failure (the measurement stays `nedokonceno` and
@@ -30,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,7 +58,8 @@ from catalog import CatalogError, Question, load_catalog  # noqa: E402
 from corpus import CorpusError, same_revision, open_corpus  # noqa: E402
 from judge import (CliJudgeRunner, JudgeCache, JudgeCacheError, JudgeFileError,  # noqa: E402
                    JudgeRunner, JudgeUnavailableError, load_judges, select_judge)
-from prepare import PrepareError, ensure_outside, protected_roots, repo_toplevel  # noqa: E402
+from prepare import (PrepareError, canonical_path, ensure_outside, protected_roots,  # noqa: E402
+                     repo_toplevel)
 
 EXIT_DONE = 0
 EXIT_INPUT = 2
@@ -113,7 +123,11 @@ def configure_card_check(parser: argparse.ArgumentParser) -> None:
 
 
 def command_card_check(args: argparse.Namespace, services: Services) -> int:
-    state = _checked_state_dir(args.source_repo, args.stav)
+    guard = _Guard(args.source_repo)
+    state = guard.outside(args.stav, "Stavový adresář")
+    guard.outside(args.katalog, "Katalog")
+    guard.outside(args.hodnotitele, "Soubor hodnotitelů")
+    _keep_apart(args.stav, "Stavový adresář", args.korpus, "korpus")
     catalog = load_catalog(args.katalog)
     if not catalog.questions:
         raise InputError("Katalog neobsahuje žádnou položku druhu „otazka“; není co kontrolovat.")
@@ -169,13 +183,34 @@ def _summary(measurement: card_check.Measurement) -> str:
     return "\n".join(lines)
 
 
-def _checked_state_dir(source_repo: Path, state: Path) -> Path:
-    """The state directory, canonical, refused under a protected root (the repositories)."""
+class _Guard:
+    """The protected roots of one command (KTD13) and the path checks that use them."""
+
+    def __init__(self, source_repo: Path) -> None:
+        try:
+            self.roots = protected_roots(repo_toplevel(source_repo))
+        except PrepareError as exc:
+            raise InputError(str(exc)) from None
+
+    def outside(self, path: str | os.PathLike[str], what: str) -> Path:
+        """The canonical path, or an input error naming it when it lies under a protected root."""
+        try:
+            return Path(ensure_outside(path, self.roots, what))
+        except PrepareError as exc:
+            raise InputError(str(exc)) from None
+
+
+def _keep_apart(first: str | os.PathLike[str], first_what: str,
+                second: str | os.PathLike[str], second_what: str) -> None:
+    """Refuse two locations of which one lies inside the other (or both are the same)."""
+    a, b = canonical_path(first), canonical_path(second)
     try:
-        roots = protected_roots(repo_toplevel(source_repo))
-        return Path(ensure_outside(state, roots, "Stavový adresář"))
-    except PrepareError as exc:
-        raise InputError(str(exc)) from None
+        overlap = os.path.commonpath([a, b]) in (a, b)
+    except ValueError:  # different drives
+        overlap = False
+    if overlap:
+        raise InputError(f"{first_what} {first} se překrývá s {second_what} {second}: agent by "
+                         "četl záznamy hodnotitele a rozhodnutí. Zvol cestu mimo něj.")
 
 
 # --- hodnot-odpovedi -------------------------------------------------------------------
@@ -321,8 +356,16 @@ def _answers_digest(runs: Sequence[card_check.AnswerRun]) -> str:
 
 
 def command_answers(args: argparse.Namespace, services: Services) -> int:
-    state = _checked_state_dir(args.source_repo, args.stav)
+    guard = _Guard(args.source_repo)
+    state = guard.outside(args.stav, "Stavový adresář")
+    guard.outside(args.katalog, "Katalog")
+    guard.outside(args.hodnotitele, "Soubor hodnotitelů")
     attempt = load_attempt(args.pokus)
+    for variant in attempt.variants:
+        corpus_dir = variant.get("corpus_dir")
+        if isinstance(corpus_dir, str) and corpus_dir:
+            _keep_apart(args.stav, "Stavový adresář", corpus_dir,
+                        f"korpus varianty {variant.get('name')}")
     catalog = load_catalog(args.katalog)
     family = _check_attempt(attempt, {q.id: q for q in catalog.questions}, args.i_nedokonceny)
     runs = _answer_runs(attempt)
@@ -411,10 +454,13 @@ def configure_review(parser: argparse.ArgumentParser) -> None:
 
 
 def command_review(args: argparse.Namespace, services: Services) -> int:
-    state = _checked_state_dir(args.source_repo, args.stav)
+    guard = _Guard(args.source_repo)
+    state = guard.outside(args.stav, "Stavový adresář")
     if args.nacti is not None:
         if args.mereni or args.vystup or args.seminko is not None:
             raise InputError("--nacti se nedá spojit s --mereni, --vystup ani --seminko.")
+        guard.outside(args.nacti, "Soubor ke kontrole")
+        guard.outside(review.proposals_path(args.nacti), "Soubor návrhů ke kontrole")
         result = review.ingest_review(args.nacti, state)
         print(f"Načteno: {result.decided} rozhodnutí ({result.new} nových nebo změněných), "
               f"{result.empty} řádků zůstalo prázdných.")
@@ -424,6 +470,8 @@ def command_review(args: argparse.Namespace, services: Services) -> int:
     if not args.mereni or args.vystup is None:
         raise InputError("Sestavení souboru ke kontrole potřebuje --mereni i --vystup "
                          "(nebo --nacti pro načtení vyplněného souboru).")
+    guard.outside(args.vystup, "Soubor ke kontrole")
+    guard.outside(review.markdown_path(args.vystup), "Čitelná verze souboru ke kontrole")
     loaded = [review.load_measurement(path) for path in args.mereni]
     plan = review.build_review(loaded, review.load_decisions(state), args.seminko)
     json_path, md_path = review.write_review(plan, args.vystup)
@@ -461,10 +509,13 @@ def configure_answers_report(parser: argparse.ArgumentParser) -> None:
 
 def command_answers_report(args: argparse.Namespace, services: Services) -> int:
     # The output path is checked first: nothing is read or written for a path inside a repository.
-    output = _checked_output_dir(args.source_repo, args.vystup)
-    state = _checked_state_dir(args.source_repo, args.stav)
+    guard = _Guard(args.source_repo)
+    output = _checked_output_dir(guard, args.vystup)
+    state = guard.outside(args.stav, "Stavový adresář")
+    guard.outside(args.kalibrace, "Adresář výsledků kalibrace")
     fingerprint = None
     if args.sada_kalibrace is not None:
+        guard.outside(args.sada_kalibrace, "Sada kalibrace")
         try:
             fingerprint = calibration.load_set(args.sada_kalibrace).fingerprint
         except calibration.CalibrationSetError as exc:
@@ -482,16 +533,59 @@ def command_answers_report(args: argparse.Namespace, services: Services) -> int:
     return EXIT_DONE
 
 
-def _checked_output_dir(source_repo: Path, output: Path) -> Path:
+def _checked_output_dir(guard: _Guard, output: Path) -> Path:
     """The output directory, canonical, refused under a protected root and when it is a file."""
-    try:
-        roots = protected_roots(repo_toplevel(source_repo))
-        target = Path(ensure_outside(output, roots, "Výstupní adresář"))
-    except PrepareError as exc:
-        raise InputError(str(exc)) from None
+    target = guard.outside(output, "Výstupní adresář")
     if target.exists() and not target.is_dir():
         raise InputError(f"Výstupní adresář {output} existuje a není adresář.")
     return target
+
+
+# --- kalibrace -------------------------------------------------------------------------
+
+def configure_calibration(parser: argparse.ArgumentParser) -> None:
+    req = parser.add_argument_group("povinné")
+    req.add_argument("--agent-family", required=True, metavar="RODINA",
+                     help="rodina agenta, jehož odpovědi se budou hodnotit (např. claude); "
+                          "hodnotitel se vybírá z jiné rodiny, stejně jako při měření")
+    req.add_argument("--sada", required=True, type=Path, metavar="SADA.JSON",
+                     help="zmrazená sada vět s očekávanými štítky (JSON, formát 1) mimo repozitáře")
+    req.add_argument("--hodnotitele", required=True, type=Path,
+                     help="soubor hodnotitelů (JSON, formát 1)")
+    req.add_argument("--stav", required=True, type=Path,
+                     help="stavový adresář (cache hodnotitele); musí ležet mimo repozitáře")
+    req.add_argument("--vystup", required=True, type=Path, metavar="VYSLEDEK.JSON",
+                     help="soubor s výsledkem kalibrace (JSON); musí ležet mimo repozitáře, "
+                          "jeho adresář pak čte `zprava --kalibrace`")
+
+
+def command_calibration(args: argparse.Namespace, services: Services) -> int:
+    # The output path is checked first: no judge runs for a path inside a repository.
+    guard = _Guard(args.source_repo)
+    output = guard.outside(args.vystup, "Výstup kalibrace")
+    state = guard.outside(args.stav, "Stavový adresář")
+    guard.outside(args.sada, "Sada kalibrace")
+    guard.outside(args.hodnotitele, "Soubor hodnotitelů")
+    if output.is_dir():
+        raise InputError(f"Výstup kalibrace {args.vystup} je adresář; má to být soubor JSON.")
+    calibration_set = calibration.load_set(args.sada)
+    judges = load_judges(args.hodnotitele)
+    runner = services.runner or CliJudgeRunner(isolation_root=state / ISOLATION_DIR)
+    selection = select_judge(judges, args.agent_family, runner)
+    try:
+        result = calibration.run_calibration(calibration_set, selection, runner,
+                                             JudgeCache(state / card_check.JUDGE_CACHE_DIR))
+    except (AgentRunError, JudgeCacheError, KeyboardInterrupt):
+        print("Kalibrace je nedokončená, nic se nezapsalo. Stejný příkaz pokračuje z cache "
+              "hodnotitele.", file=sys.stderr)
+        raise
+    calibration.write_result(result, output, protected=guard.roots)
+    print(f"Kalibrace hotová: {result.total} vět, shoda {result.agreement:.0%}, "
+          f"pokrytí {result.coverage:.0%}, sporných {result.disputed}.")
+    print(f"  uznaná neodpovídající věta: {result.unacknowledged_true['pocet']}")
+    print(f"  přehlédnutá parafráze nepravdy: {result.missed_paraphrase['pocet']}")
+    print(f"Výsledek: {args.vystup}")
+    return EXIT_DONE
 
 
 SUBCOMMANDS: tuple[Subcommand, ...] = (
@@ -509,6 +603,9 @@ SUBCOMMANDS: tuple[Subcommand, ...] = (
                "zpráva odpovědí: fakta a zakázaná tvrzení po otázkách, cestách a korpusech "
                "z hotových měření s rozhodnutími vlastníka",
                configure_answers_report, command_answers_report),
+    Subcommand("kalibrace",
+               "kalibrace hodnotitele na zmrazené sadě vět s očekávanými štítky",
+               configure_calibration, command_calibration),
 )
 
 
@@ -517,8 +614,9 @@ SUBCOMMANDS: tuple[Subcommand, ...] = (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="answers.py",
-        description="Kontrola odpovědí v měření vyhledávání: karty korpusu proti faktům otázek "
-                    "katalogu (a další podpříkazy v dalších krocích).")
+        description="Kontrola odpovědí v měření vyhledávání: karty korpusu a odpovědi agenta "
+                    "proti faktům otázek katalogu, kontrola vlastníka, zpráva a kalibrace "
+                    "hodnotitele.")
     common = argparse.ArgumentParser(add_help=False)
     group = common.add_argument_group("společné povinné")
     group.add_argument("--source-repo", required=True, type=Path,
@@ -533,7 +631,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 _INPUT_ERRORS = (InputError, review.ReviewError, answers_report.ReportError, CatalogError,
-                 CorpusError, JudgeFileError, PrepareError)
+                 CorpusError, JudgeFileError, PrepareError, calibration.CalibrationSetError,
+                 calibration.CalibrationResultError)
 _INFRASTRUCTURE_ERRORS = (JudgeUnavailableError, AgentRunError, JudgeCacheError)
 
 

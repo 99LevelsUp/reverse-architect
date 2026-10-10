@@ -15,7 +15,9 @@ Flow (High-Level Technical Design of the plan):
 1. **Inputs.** The catalog, the two variants and every path are validated
    before anything is written. The output root, the export, the isolation
    root and each corpus are canonicalized (symlinks and junctions resolved)
-   and refused inside this repository or the source repository (KTD9). The
+   and refused inside this repository or the source repository and any of
+   their worktrees (KTD9); the catalog is refused there too, before it is
+   read (KTD13). The
    output root and the catalog are also refused inside the work tree or a
    corpus: the agent reads those freely, and the audit cannot see a leak that
    stays inside the allowed roots. A configuration directory left over from
@@ -301,18 +303,23 @@ def validate_role(role: str) -> None:
         raise ConfigError(f"Role musí být {' nebo '.join(ROLES)}, zadáno „{role}“.")
 
 
+def _protected(config: ExperimentConfig) -> list[str]:
+    """The roots no file of the experiment may lie under: the source repo, this repo, worktrees."""
+    try:
+        return protected_roots(prepare.repo_toplevel(config.source_repo))
+    except PrepareError as exc:
+        raise ConfigError(str(exc)) from None
+
+
 def resolve_paths(config: ExperimentConfig) -> ResolvedPaths:
     """Canonicalize and check every location before anything is written (KTD9).
 
     In the support role the agent's empty work directory is one more location
     the agent reads, so it gets the same checks as the export."""
-    try:
-        source_top = prepare.repo_toplevel(config.source_repo)
-    except PrepareError as exc:
-        raise ConfigError(str(exc)) from None
-    roots = protected_roots(source_top)
+    roots = _protected(config)
     names = config.forbidden_dir_names
     try:
+        ensure_outside(config.catalog_path, roots, "Katalog")
         output = ensure_outside(config.output_root, roots, "Kořen výstupu", names)
         export = ensure_outside(config.export_dir, roots, "Adresář exportu", names)
         isolation = ensure_outside(config.isolation_root, roots, "Kořen izolace", names)
@@ -495,8 +502,13 @@ def run_experiment(config: ExperimentConfig, *, prepare_only: bool = False,
 def _load_catalog(config: ExperimentConfig) -> Catalog:
     """The catalog, if the role has something to measure in it.
 
-    What is measured is decided by the role: questions in both, `chyba` items in
-    the developer role only."""
+    The catalog's location is checked before it is read (KTD13): inside a repository it holds
+    customer data one commit from the public history. What is measured is decided by the
+    role: questions in both, `chyba` items in the developer role only."""
+    try:
+        ensure_outside(config.catalog_path, _protected(config), "Katalog")
+    except PrepareError as exc:
+        raise ConfigError(str(exc)) from None
     try:
         catalog = load_catalog(config.catalog_path)
     except CatalogError as exc:

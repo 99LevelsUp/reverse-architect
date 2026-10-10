@@ -43,16 +43,19 @@ from unittest import mock
 import answers
 import card_check
 import run
-from agents import claude_code
+from agents import claude_code, judge_cli
 from agents.base import CAP_STEPS, CONFIG_DIR_NAME, Cap, RunRequest
 from agents.claude_code import ClaudeCodeAdapter, ClaudeCodeSettings, parse_lines
 from agents.scripted import ScriptedAdapter, load_transcript
 from run import run_experiment
 from tests.experiment_fixture import (FAKE_AGENT, QUESTION_ID, Experiment, fake_agent_env,
                                       free_answer_run, is_preflight, preflight_run)
-from tests.test_card_check import Rule, ScriptedJudge
+from tests.test_calibration import make_set
+from tests.test_card_check import (EVMN, EXT, Rule, ScriptedJudge, a1_types, build_corpus,
+                                   catalog_json, claim, fact, place, question_json)
 
 TESTS = Path(__file__).resolve().parent
+FAKE_JUDGE = str(TESTS / "fixtures" / "fake_judge.py")
 E2E = TESTS / "fixtures" / "e2e"
 TRANSCRIPTS = E2E / "transcripts"
 MARKERS_FILE = E2E / "markers.json"
@@ -505,6 +508,119 @@ class NoLeakTest(unittest.TestCase):
         repo_files = _repo_files()
         self.assertIn(MARKERS_FILE, [p.resolve() for p in repo_files])  # the scan sees fixtures
         repo_leaks = [str(p) for p in repo_files
+                      if p.resolve() != MARKERS_FILE and _contains(p, self.markers)]
+        self.assertEqual(repo_leaks, [], "repozitář")
+
+    # -- the answer check: state directory, review files, report, calibration -----------------
+
+    def answer_check_world(self):
+        """The files of the answer check under the world's root; the markers are in the question
+        (its text and its fact), in the corpus-independent claim and in the calibration set."""
+        secret, customer = MARKERS["__SECRET__"], MARKERS["__CUSTOMER__"]
+        root = self.world.root / "odpovedi"
+        paths = {name: root / name for name in (
+            "stav", "kontrola", "zprava", "katalog", "kalibrace-sada", "kalibrace-vystup",
+            "hodnotitele")}
+        for name in ("kontrola", "katalog", "kalibrace-sada", "hodnotitele"):
+            paths[name].mkdir(parents=True)
+        corpus = build_corpus(root / "korpus", a1_types())
+        item = question_json(
+            [fact("f1", f"Tichý návrat, když chybí dokument ({customer})",
+                  [place(EVMN, "EditorViewModelNew.RunNew()", radky=20)]),
+             fact("f3", "Externí kontrola ověří dokument",
+                  [place(EXT, "ExternalCheck.Run()", radky="30-35")])],
+            [claim("z1", "Změna řádku gridu se ukládá okamžitě",
+                   [place("src/Acme/EditorViewNew.cs", "EditorViewNew.OnCellChanged()",
+                          radky="42-60")])])
+        item["dotaz"] = f"Jak editor ukládá dokument? Heslo je {secret}."
+        catalog = paths["katalog"] / "katalog.json"
+        catalog.write_text(json.dumps(catalog_json(item), ensure_ascii=False), encoding="utf-8")
+        judges = paths["hodnotitele"] / "judges.json"
+        judges.write_text(json.dumps({"format_version": 1, "hodnotitele": [
+            {"id": "stash", "rodina": "openai", "model": "alias", "vystup": "claude-json",
+             "prikaz": [sys.executable, FAKE_JUDGE, "claude", "stash"]}]}), encoding="utf-8")
+        sada = paths["kalibrace-sada"] / "sada.json"
+        data = make_set(extra_sentence=f" {secret}")
+        data["polozky"][0]["tvrzeni"]["text"] += f" ({customer})"
+        sada.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        return paths, corpus, catalog, judges, sada
+
+    def run_answers(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = answers.main(argv)  # the real judge runner: judge_cli and fake_judge.py stash
+        self.assertEqual(code, 0, err.getvalue())
+        return out.getvalue()
+
+    def test_answer_check_files_stay_in_allowed_stores(self):
+        paths, corpus, catalog, judges, sada = self.answer_check_world()
+        repo = str(self.world.repo)
+        state, review_dir = paths["stav"], paths["kontrola"]
+        stashed = []
+        real = judge_cli.run_watched
+
+        def watched(argv, **kwargs):
+            outcome = real(argv, **kwargs)
+            env = kwargs["env"]
+            config = env.get("CLAUDE_CONFIG_DIR") or env["CODEX_HOME"]
+            places = [Path(env["TMPDIR"]), Path(env["XDG_CACHE_HOME"]) / "fake-cli",
+                      Path(config) / "projects", Path(kwargs["cwd"])]
+            stashed.append([_contains(p / "stash-prompt.txt", self.markers) for p in places])
+            return outcome
+
+        with mock.patch.object(judge_cli, "run_watched", watched):
+            self.run_answers(["kontrola-karet", "--source-repo", repo, "--agent-family", "claude",
+                              "--katalog", str(catalog), "--korpus", str(corpus),
+                              "--hodnotitele", str(judges), "--stav", str(state)])
+            measurement = card_check.measurement_path(state)
+            review_file = review_dir / "kontrola.json"
+            self.run_answers(["kontrola", "--source-repo", repo, "--stav", str(state),
+                              "--mereni", str(measurement), "--vystup", str(review_file)])
+            filled = json.loads(review_file.read_text(encoding="utf-8"))
+            for row in filled["radky"]:
+                row["rozhodnuti"] = "vyjadruje" if row["druh"] == "fakt" else "neobsahuje"
+            review_file.write_text(json.dumps(filled, ensure_ascii=False), encoding="utf-8")
+            self.run_answers(["kontrola", "--source-repo", repo, "--stav", str(state),
+                              "--nacti", str(review_file)])
+            self.run_answers(["kalibrace", "--source-repo", repo, "--agent-family", "claude",
+                              "--sada", str(sada), "--hodnotitele", str(judges),
+                              "--stav", str(state),
+                              "--vystup", str(paths["kalibrace-vystup"] / "vysledek.json")])
+            self.run_answers(["zprava", "--source-repo", repo, "--mereni", str(measurement),
+                              "--vystup", str(paths["zprava"]), "--stav", str(state),
+                              "--kalibrace", str(paths["kalibrace-vystup"]),
+                              "--sada-kalibrace", str(sada)])
+
+        # The leak was real: a judge that saw the markers left the prompt in its temp, cache,
+        # configuration and working directories, and the runner removed all four.
+        leaking = [s for s in stashed if any(s)]
+        self.assertTrue(leaking)
+        self.assertEqual(leaking, [[True, True, True, True]] * len(leaking))
+
+        isolation = state / "izolace"
+        self.assertFalse((isolation / CONFIG_DIR_NAME).exists())
+        self.assertEqual(sorted(p.name for p in isolation.iterdir()), [])
+        # Allowed: the state directory (the measurement, the judge's cache), the files of the
+        # review, the report, the catalog, the calibration set and its result.
+        in_state = [p for p in _files(state) if _contains(p, self.markers)]
+        self.assertTrue(in_state)
+        for name in ("kontrola", "zprava"):
+            self.assertTrue([p for p in _files(paths[name]) if _contains(p, self.markers)], name)
+        self.assertTrue(_contains(card_check.measurement_path(state), self.markers))
+
+        allowed = [state, review_dir, paths["zprava"], paths["katalog"], paths["kalibrace-sada"],
+                   paths["kalibrace-vystup"], self.world.catalog.parent]
+        rest = [p for p in _files(self.world.root, skip=allowed) if _contains(p, self.markers)]
+        self.assertEqual(rest, [], "export, korpus, soubor hodnotitelů, zdrojové repo")
+
+        new_temp = set(os.listdir(tempfile.gettempdir())) - self.temp_before
+        new_temp.discard(self.world.root.name)
+        temp_leaks = [p for entry in sorted(new_temp)
+                      for p in _files(Path(tempfile.gettempdir()) / entry)
+                      if _contains(p, self.markers)]
+        self.assertEqual(temp_leaks, [], "systémový dočasný adresář")
+
+        repo_leaks = [str(p) for p in _repo_files()
                       if p.resolve() != MARKERS_FILE and _contains(p, self.markers)]
         self.assertEqual(repo_leaks, [], "repozitář")
 

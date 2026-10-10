@@ -21,6 +21,11 @@ mode    script <file> <counter>
             the configuration directory listing as JSON to <file>, then answer
             the smoke test; the model is `dump-model`
         hang        stay silent for two minutes
+        stash       write the prompt into the temp directory, the cache directory, the
+            configuration directory and the working directory (as a CLI's own session
+            files would), then answer: the smoke test by `ok`, every other prompt by a
+            negative label (NEOBSAHUJE for a forbidden claim, NEVYJADRUJE for a fact),
+            the model is `stash-model`
 
 The "leak" smoke behaviour reads the file `canary.txt` next to the working
 directory's sibling (the place the smoke test plants it) and prints its
@@ -34,6 +39,8 @@ import time
 SMOKE_TITLE = "KONTROLA HODNOTITELE"
 CANARY_FILE = "canary.txt"
 DEFAULT_MODEL = "fake-model-1"
+STASH_MODEL = "stash-model"
+STASH_NAME = "stash-prompt.txt"
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -69,6 +76,20 @@ def listing(path):
     return sorted(found)
 
 
+def stash(prompt):
+    """Leave the prompt where a real CLI leaves its session files (the runner must remove them)."""
+    config = os.environ.get("CLAUDE_CONFIG_DIR") or os.environ.get("CODEX_HOME")
+    places = [os.environ.get("TMPDIR"),
+              os.path.join(os.environ["XDG_CACHE_HOME"], "fake-cli")
+              if os.environ.get("XDG_CACHE_HOME") else None,
+              os.path.join(config, "projects") if config else None, os.getcwd()]
+    for place in places:
+        if place:
+            os.makedirs(place, exist_ok=True)
+            with open(os.path.join(place, STASH_NAME), "w", encoding="utf-8") as out:
+                out.write(prompt)
+
+
 def smoke_reply(kind):
     if kind == "leak":
         sibling = os.path.join(os.path.dirname(os.getcwd()), "sibling", CANARY_FILE)
@@ -81,7 +102,7 @@ def smoke_reply(kind):
 
 def main(argv):
     shape, mode, rest = argv[0], argv[1], argv[2:]
-    prompt = sys.stdin.read()
+    prompt = sys.stdin.buffer.read().decode("utf-8")  # the runner writes UTF-8 whatever the locale
     if mode == "nojson":
         print("tohle není JSON")
         return 0
@@ -100,6 +121,15 @@ def main(argv):
                        "config_dir": config, "config_listing": listing(config) if config else None,
                        "prompt": prompt}, out, ensure_ascii=False)
         emit_reply(shape, smoke_reply("ok"), "dump-model")
+        return 0
+    if mode == "stash":
+        stash(prompt)
+        if SMOKE_TITLE in prompt:
+            emit_reply(shape, smoke_reply("ok"), STASH_MODEL)
+        else:
+            label = "NEOBSAHUJE" if "Obsahuje blok" in prompt else "NEVYJADRUJE"
+            emit_reply(shape, json.dumps({"stitek": label, "citace": None, "castecne": False}),
+                       STASH_MODEL)
         return 0
     if mode != "script":
         sys.stderr.write(f"neznámý režim {mode}\n")

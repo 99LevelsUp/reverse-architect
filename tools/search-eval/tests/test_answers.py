@@ -15,15 +15,19 @@ from pathlib import Path
 from unittest import mock
 
 import answers
+import calibration
 import card_check
+import prepare
 import report
 import review
 import run
-from agents.judge_cli import JudgeInfrastructureError
+from agents.judge_cli import CliReply, JudgeInfrastructureError
 from catalog import parse_catalog
+from tests.test_calibration import SentenceRunner, expected_rule
 from tests.test_card_check import (EVMN, EXT, OTHER_REV, REV, Rule, ScriptedJudge, a1_types,
                                    build_corpus, catalog_json, claim, fact, place,
                                    question_json)
+from tests.test_prepare import commit_all, git, write
 
 REPO = Path(__file__).resolve().parents[3]
 EVN = "src/Acme/EditorViewNew.cs"
@@ -144,7 +148,7 @@ class ArgumentsTest(AnswersCase):
             self.assertEqual(self.run_main(["zkusebni", "--navic", "1"])[0], 2)  # common argument
         self.assertEqual(seen, [("1", "x")])
         self.assertEqual([c.name for c in answers.SUBCOMMANDS],
-                         ["kontrola-karet", "kontrola", "hodnot-odpovedi", "zprava"])
+                         ["kontrola-karet", "kontrola", "hodnot-odpovedi", "zprava", "kalibrace"])
 
     def test_the_parser_names_the_required_arguments(self):
         parser = answers.build_parser()
@@ -752,6 +756,302 @@ class AnswerInputTest(AnswerCheckCase):
                 self.assertIn(name, err)
         self.assertEqual(self.run_main(["hodnot-odpovedi", "--source-repo", str(REPO)])[0], 2)
         self.assertEqual(self.run_main(["hodnot-odpovedi", "--help"])[0], 0)
+
+
+# --- paths (KTD13) ------------------------------------------------------------------------------
+
+CALIBRATION_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "calibration.example.json"
+
+
+class ProtectedPathsCase(AnswersCase):
+    """Three protected roots: a source repository, a tool repository and a worktree of the tool.
+
+    The tool repository is the one `prepare.protected_roots` takes for this runner's own."""
+
+    def setUp(self):
+        super().setUp()
+        self.source = self.make_repo("source-repo")
+        self.tool = self.make_repo("tool-repo")
+        self.worktree = self.tmp / "tool-worktree"
+        git(self.tool, "worktree", "add", "-q", "--detach", str(self.worktree), "HEAD")
+        patcher = mock.patch.object(prepare, "_find_runner_repo", return_value=str(self.tool))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.roots = (("zdrojové repo", self.source), ("repo nástroje", self.tool),
+                      ("worktree repa nástroje", self.worktree))
+
+    def make_repo(self, name):
+        repo = self.tmp / name
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        write(repo, "README.md", "Ukázkové repo.\n")
+        commit_all(repo, "init")
+        return repo
+
+
+def flat(prefix, options):
+    out = list(prefix)
+    for key, value in options.items():
+        out += [key, str(value)]
+    return out
+
+
+class ProtectedPathsTest(ProtectedPathsCase):
+    """Every path KTD13 protects, under every protected root: exit 2, the path named, nothing done."""
+
+    def command_lines(self):
+        """subcommand -> (words before the options, options in order, the protected ones)."""
+        common = {"--source-repo": self.source}
+        nothing = self.tmp / "neexistuje.json"
+        return {
+            "kontrola-karet": (
+                ["kontrola-karet"],
+                {**common, "--agent-family": "claude", "--katalog": self.catalog,
+                 "--korpus": self.corpus, "--hodnotitele": self.judges, "--stav": self.state},
+                ("--katalog", "--hodnotitele", "--stav")),
+            "hodnot-odpovedi": (
+                ["hodnot-odpovedi", str(self.tmp / "neexistuje")],
+                {**common, "--katalog": self.catalog, "--hodnotitele": self.judges,
+                 "--stav": self.state},
+                ("--katalog", "--hodnotitele", "--stav")),
+            "kontrola (sestavení)": (
+                ["kontrola"],
+                {**common, "--stav": self.state, "--mereni": nothing,
+                 "--vystup": self.tmp / "kontrola.json"},
+                ("--stav", "--vystup")),
+            "kontrola (načtení)": (
+                ["kontrola"], {**common, "--stav": self.state, "--nacti": nothing},
+                ("--stav", "--nacti")),
+            "zprava": (
+                ["zprava"],
+                {**common, "--mereni": nothing, "--vystup": self.tmp / "zprava",
+                 "--stav": self.state, "--kalibrace": self.tmp / "kalibrace",
+                 "--sada-kalibrace": self.tmp / "sada.json"},
+                ("--vystup", "--stav", "--kalibrace", "--sada-kalibrace")),
+            "kalibrace": (
+                ["kalibrace"],
+                {**common, "--agent-family": "claude", "--sada": self.tmp / "sada.json",
+                 "--hodnotitele": self.judges, "--stav": self.state,
+                 "--vystup": self.tmp / "kalibrace.json"},
+                ("--sada", "--hodnotitele", "--stav", "--vystup")),
+        }
+
+    def test_every_protected_path_under_every_protected_root_is_refused(self):
+        checked = 0
+        for command, (prefix, options, protected) in self.command_lines().items():
+            for option in protected:
+                for what, root in self.roots:
+                    with self.subTest(command=command, option=option, root=what):
+                        target = root / "uvnitr" / f"{option.lstrip('-')}.json"
+                        runner = ScriptedJudge(RULES)
+                        code, _, err = self.run_main(
+                            flat(prefix, {**options, option: target}), runner)
+                        self.assertEqual(code, 2, err)
+                        self.assertTrue(err.startswith("Chyba vstupu"), err)
+                        self.assertIn(str(target), err)
+                        self.assertIn("leží uvnitř", err)
+                        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+                        self.assertFalse((root / "uvnitr").exists())
+                        checked += 1
+        self.assertEqual(checked, 3 * (3 + 3 + 2 + 2 + 4 + 4))
+
+    def test_a_link_into_a_protected_root_is_refused_like_the_root(self):
+        from tests.test_prepare import _make_dir_link, _remove_dir_link
+        link = self.tmp / "odkaz"
+        if not _make_dir_link(link, self.source):
+            self.skipTest("cannot create a directory symlink or junction here")
+        self.addCleanup(_remove_dir_link, link)
+        code, _, err = self.run_main(self.args(**{"--source-repo": str(self.source),
+                                                  "--stav": str(link / "stav")}),
+                                     ScriptedJudge(RULES))
+        self.assertEqual(code, 2)
+        self.assertIn("Stavový adresář", err)
+        self.assertFalse((self.source / "stav").exists())
+
+    def test_paths_outside_every_protected_root_are_accepted(self):
+        code, _, err = self.run_main(self.args(**{"--source-repo": str(self.source)}),
+                                     ScriptedJudge(RULES))
+        self.assertEqual(code, 0, err)
+
+
+class StateAgainstCorpusTest(AnswersCase):
+    """The state directory holds the judge's records; an agent reads corpora, so they stay apart."""
+
+    def test_the_state_directory_inside_the_measured_corpus_is_refused_before_any_judge(self):
+        runner = ScriptedJudge(RULES)
+        inside = self.corpus / "stav"
+        code, _, err = self.run_main(self.args(**{"--stav": str(inside)}), runner)
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+        self.assertIn(str(inside), err)
+        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+        self.assertFalse(inside.exists())
+
+    def test_the_corpus_inside_the_state_directory_is_refused_too(self):
+        runner = ScriptedJudge(RULES)
+        code, _, err = self.run_main(self.args(**{"--stav": str(self.corpus.parent)}), runner)
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+
+    def test_the_same_directory_is_refused(self):
+        code, _, err = self.run_main(self.args(**{"--stav": str(self.corpus)}),
+                                     ScriptedJudge(RULES))
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+
+
+class AnswerStateAgainstCorpusTest(AnswerCheckCase):
+    def with_corpus_dir(self, directory, corpus):
+        path = directory / "report.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["experiment"]["variants"][1]["corpus_dir"] = str(corpus)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_the_state_directory_inside_the_corpus_of_any_variant_is_refused(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        corpus = self.tmp / "korpus-varianty-b"
+        self.with_corpus_dir(directory, corpus)
+        runner = ScriptedJudge(ANSWER_RULES)
+        inside = corpus / "stav"
+        code, _, err = self.run_main(self.command(directory, **{"--stav": str(inside)}), runner)
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+        self.assertIn("korpus varianty B", err)
+        self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+        self.assertFalse(inside.exists())
+
+    def test_a_state_directory_beside_the_corpus_is_accepted(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        self.with_corpus_dir(directory, self.tmp / "korpus-varianty-b")
+        code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
+        self.assertEqual(code, 0, err)
+
+
+# --- kalibrace ----------------------------------------------------------------------------------
+
+class CalibrationCommandTest(ProtectedPathsCase):
+    """`answers.py kalibrace` over the example set with a scripted judge."""
+
+    def setUp(self):
+        super().setUp()
+        self.sada = self.tmp / "sada.json"
+        self.sada.write_text(CALIBRATION_EXAMPLE.read_text(encoding="utf-8"), encoding="utf-8")
+        self.items = json.loads(self.sada.read_text(encoding="utf-8"))["polozky"]
+        self.output = self.tmp / "vysledky" / "kalibrace.json"
+
+    def judge(self, model="model-1"):
+        """A judge that answers every sentence as the owner expects; the smoke test passes."""
+        sentences = SentenceRunner(expected_rule(self.items), model=model)
+
+        def runner(spec, prompt, siblings):
+            if prompt.startswith("KONTROLA HODNOTITELE"):
+                text = json.dumps({"stav": "OK", "obsah": ""})
+                return CliReply(text=text, model=model, raw=text)
+            return sentences(spec, prompt, siblings)
+
+        runner.sentences = sentences
+        return runner
+
+    def line(self, **replace):
+        values = {"--source-repo": self.source, "--agent-family": "claude", "--sada": self.sada,
+                  "--hodnotitele": self.judges, "--stav": self.state, "--vystup": self.output}
+        values.update(replace)
+        return flat(["kalibrace"], values)
+
+    def test_it_writes_the_result_of_the_example_set(self):
+        code, out, err = self.run_main(self.line(), self.judge())
+        self.assertEqual(code, 0, err)
+        data = calibration.load_result(self.output)
+        self.assertEqual((data["hodnotitel"]["id"], data["jednotek"], data["shoda"]),
+                         ("j1", len(self.items), 1.0))
+        self.assertEqual(data["otisk_sady"], calibration.load_set(self.sada).fingerprint)
+        self.assertNotIn("cli-ktery-se-nespusti", self.output.read_text(encoding="utf-8"))
+        self.assertIn("shoda 100%", out)
+        self.assertIn(str(self.output), out)
+        self.assertTrue((self.state / card_check.JUDGE_CACHE_DIR).is_dir())
+        # the report finds it in the directory
+        found = calibration.find_calibration(self.output.parent, "j1", data["prompt_version"],
+                                             data["otisk_sady"])
+        self.assertIsNotNone(found)
+
+    def test_a_second_run_asks_the_judge_nothing_new(self):
+        self.assertEqual(self.run_main(self.line(), self.judge())[0], 0)
+        second = self.judge()
+        self.assertEqual(self.run_main(self.line(), second)[0], 0)
+        self.assertEqual(second.sentences.prompts, [])
+
+    def test_an_output_inside_a_repository_is_refused_before_any_judge_call(self):
+        for what, root in self.roots:
+            with self.subTest(root=what):
+                runner = self.judge()
+                target = root / "kalibrace.json"
+                code, _, err = self.run_main(self.line(**{"--vystup": target}), runner)
+                self.assertEqual(code, 2)
+                self.assertIn(str(target), err)
+                self.assertFalse(target.exists())
+                self.assertEqual(runner.sentences.prompts, [])
+        self.assertFalse((self.state / card_check.JUDGE_CACHE_DIR).exists())
+
+    def test_the_output_must_be_named_and_be_a_file(self):
+        self.assertEqual(self.run_main(self.line(**{"--vystup": ""}), self.judge())[0], 2)
+        self.output.mkdir(parents=True)
+        code, _, err = self.run_main(self.line(), self.judge())
+        self.assertEqual(code, 2)
+        self.assertIn("adresář", err)
+
+    def test_the_other_arguments_are_required(self):
+        for name in ("--agent-family", "--sada", "--hodnotitele", "--stav", "--vystup",
+                     "--source-repo"):
+            with self.subTest(name):
+                argv = self.line()
+                at = argv.index(name)
+                code, _, err = self.run_main(argv[:at] + argv[at + 2:], self.judge())
+                self.assertEqual(code, 2)
+                self.assertIn(name, err)
+        self.assertEqual(self.run_main(["kalibrace", "--help"])[0], 0)
+
+    def test_a_broken_set_is_code_2(self):
+        self.sada.write_text(json.dumps({"format_version": 1, "polozky": []}), encoding="utf-8")
+        runner = self.judge()
+        code, _, err = self.run_main(self.line(), runner)
+        self.assertEqual(code, 2)
+        self.assertIn("neprázdný seznam", err)
+        self.assertEqual(runner.sentences.prompts, [])
+        self.assertFalse(self.output.exists())
+
+    def test_no_judge_available_is_code_3(self):
+        def failing(spec, prompt, siblings):
+            raise JudgeInfrastructureError("scénář: smoke test nejde")
+
+        code, _, err = self.run_main(self.line(), failing)
+        self.assertEqual(code, 3)
+        self.assertIn("Žádný hodnotitel", err)
+        self.assertFalse(self.output.exists())
+
+    def test_a_judge_that_fails_midway_is_code_3_and_writes_nothing(self):
+        inner = self.judge()
+        calls = []
+
+        def failing(spec, prompt, siblings):
+            if not prompt.startswith("KONTROLA HODNOTITELE"):
+                calls.append(prompt)
+                if len(calls) == 2:
+                    raise JudgeInfrastructureError("scénář: hodnotitel spadl")
+            return inner(spec, prompt, siblings)
+
+        code, _, err = self.run_main(self.line(), failing)
+        self.assertEqual(code, 3)
+        self.assertIn("nedokončená", err)
+        self.assertFalse(self.output.exists())
+
+    def test_interrupt_is_130(self):
+        def interrupted(spec, prompt, siblings):
+            raise KeyboardInterrupt
+
+        code, _, err = self.run_main(self.line(), interrupted)
+        self.assertEqual(code, 130)
+        self.assertFalse(self.output.exists())
 
 
 if __name__ == "__main__":

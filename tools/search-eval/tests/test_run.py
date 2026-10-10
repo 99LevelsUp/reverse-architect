@@ -29,7 +29,7 @@ from tests.experiment_fixture import (FAKE_AGENT, FREE_ANSWER, QUESTION_ID, QUES
                                       Experiment, answer_run, assistant, auth_error_run,
                                       correct_answer, fake_agent_env, free_answer_run, init,
                                       is_preflight, preflight_run, result)
-from tests.test_prepare import _make_dir_link, _remove_dir_link
+from tests.test_prepare import _make_dir_link, _remove_dir_link, commit_all, git, write
 
 CLOCK = datetime(2026, 10, 2, 12, 0, 0)
 
@@ -785,6 +785,86 @@ class PathsTest(ExperimentTestCase):
         self.assert_refused()
         self.assertFalse(self.world.output.exists())
         self.assertFalse(self.world.export.exists())
+
+
+class ProtectedRootsTest(ExperimentTestCase):
+    """KTD13: the catalog and every other path of the run are refused inside a protected root.
+
+    The roots are the source repository, the tool repository and a worktree of the tool."""
+
+    cases = 1
+
+    def setUp(self):
+        super().setUp()
+        self.tool = self.world.root / "tool-repo"
+        self.tool.mkdir()
+        git(self.tool, "init", "-q", "-b", "main")
+        write(self.tool, "README.md", "Ukázkové repo.\n")
+        commit_all(self.tool, "init")
+        self.worktree = self.world.root / "tool-worktree"
+        git(self.tool, "worktree", "add", "-q", "--detach", str(self.worktree), "HEAD")
+        patcher = mock.patch.object(prepare, "_find_runner_repo", return_value=str(self.tool))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.roots = (("zdrojové repo", self.world.repo), ("repo nástroje", self.tool),
+                      ("worktree repa nástroje", self.worktree))
+
+    def overrides(self, what, target):
+        if what == "catalog_path":
+            return {"catalog_path": target}
+        if what == "corpus":
+            return {"variants": (VariantSpec("bez karet"),
+                                 VariantSpec("s kartami", corpus_dir=target))}
+        return {what: target}
+
+    def test_every_path_of_the_run_under_every_protected_root_is_refused(self):
+        refused = 0
+        for what in ("catalog_path", "output_root", "export_dir", "isolation_root", "corpus"):
+            for label, root in self.roots:
+                with self.subTest(path=what, root=label):
+                    target = root / "uvnitr" / "cesta.json"
+                    config = self.world.config(**self.overrides(what, target))
+                    with self.assertRaises(ConfigError) as dry:
+                        run.dry_run(config)
+                    self.assertIn(str(target), str(dry.exception))
+                    with self.assertRaises(ConfigError) as full:
+                        run_experiment(config, adapter_factory=lambda c, p: self.fail("agent"))
+                    self.assertIn(str(target), str(full.exception))
+                    self.assertFalse((root / "uvnitr").exists())
+                    refused += 1
+        self.assertEqual(refused, 15)
+        self.assertFalse(self.world.output.exists())
+
+    def test_the_catalog_is_refused_before_it_is_read(self):
+        # the file does not exist: the location is what the error names, not a missing file
+        for label, root in self.roots:
+            with self.subTest(root=label):
+                target = root / "katalog-ktery-neexistuje.json"
+                with self.assertRaises(ConfigError) as ctx:
+                    run.dry_run(self.world.config(catalog_path=target))
+                self.assertIn("Katalog", str(ctx.exception))
+                self.assertIn("leží uvnitř", str(ctx.exception))
+
+    def test_a_catalog_inside_a_protected_root_is_exit_code_2_on_the_command_line(self):
+        w = self.world
+        for label, root in self.roots:
+            with self.subTest(root=label):
+                catalog = root / "katalog.json"
+                argv = ["--catalog", str(catalog), "--source-repo", str(w.repo),
+                        "--output-root", str(w.output), "--export-dir", str(w.export),
+                        "--isolation-root", str(w.isolation), "--ra-binary", "ra", "--model", "m",
+                        "--cap-seconds", "600", "--cap-steps", "50", "--cap-tokens", "100000",
+                        "--seed", "7", "--role", "vyvojar", "--corpus-dir",
+                        str(w.root / "corpus"), "--dry-run"]
+                err = io.StringIO()
+                with mock.patch.object(run, "run_experiment") as started, redirect_stderr(err):
+                    code = run.main(argv)
+                self.assertEqual(code, 2)
+                started.assert_not_called()
+                self.assertIn(str(catalog), err.getvalue())
+
+    def test_a_catalog_outside_every_root_is_accepted(self):
+        self.assertIn("Běhů v rozvrhu", run.dry_run(self.world.config()))
 
 
 class DryRunTest(ExperimentTestCase):
