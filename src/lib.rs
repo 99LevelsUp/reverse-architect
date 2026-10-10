@@ -237,6 +237,18 @@ pub fn generate_reporting(
         .filter(|n| n.kind == graph::NodeKind::File)
         .filter_map(|n| n.key.as_str().rsplit_once('.').map(|(_, ext)| ext))
         .collect();
+    // The run's plugins that have a file of the corpus to read, by id.
+    let present: std::collections::BTreeSet<String> = extract_options
+        .plugins
+        .iter()
+        .filter(|p| {
+            p.manifest()
+                .extensions()
+                .iter()
+                .any(|e| file_extensions.contains(e))
+        })
+        .map(|p| p.id().to_string())
+        .collect();
     let markup_plugins: Vec<String> = extract_options
         .plugins
         .iter()
@@ -246,12 +258,7 @@ pub fn generate_reporting(
                 .iter()
                 .any(|l| l.name == coverage::MARKUP_LANGUAGE)
         })
-        .filter(|p| {
-            p.manifest()
-                .extensions()
-                .iter()
-                .any(|e| file_extensions.contains(e))
-        })
+        .filter(|p| present.contains(p.id()))
         .map(|p| p.id().to_string())
         .collect();
     let markup = coverage::markup(
@@ -396,7 +403,23 @@ pub fn generate_reporting(
     // The card levels are counted over what was rendered (plan B, U12), the
     // way the card noise is counted by the layer that built it.
     coverage.cards = Some(coverage::card_levels(&card_set, &cards, &details, &maps));
-    coverage.bodies = bodies.as_ref().map(coverage::bodies);
+    // The plugins that could read bodies, by the same rule as the state of
+    // XAML above: a plugin with no file in the corpus is as absent as it is
+    // from the vocabulary, so the list names the run's plugins that claim a
+    // file of the corpus, and the body component.
+    coverage.bodies = bodies.as_ref().map(|layer| {
+        let mut section = coverage::bodies(layer);
+        let component: std::collections::BTreeSet<&str> = layer
+            .readers()
+            .iter()
+            .filter(|r| r.component)
+            .map(|r| r.id.as_str())
+            .collect();
+        section
+            .plugins
+            .retain(|id| present.contains(id) || component.contains(id.as_str()));
+        section
+    });
     coverage.markup = markup;
     progress.phase_done();
     Ok(Generated {

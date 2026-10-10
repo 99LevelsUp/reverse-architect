@@ -176,7 +176,9 @@ pub struct TriggerRow {
     /// functionality; empty for a trigger that is one of its own entry points.
     pub path: Vec<Hop>,
     /// The functionality's members the way enters at, by key; for its own
-    /// entry point, every member of it and the member the entry is written in.
+    /// entry point, the member the entry is written in and the members of the
+    /// functionality its code names (the command a menu item is given among
+    /// them); for a gesture given to its command, that command.
     pub entries: Vec<NodeKey>,
     /// The weakest grade of the way; `None` for none.
     pub grade: Option<Confidence>,
@@ -218,10 +220,6 @@ struct Recognized {
     names: Vec<u32>,
 }
 
-fn body_at<'l>(ix: &Index<'l>, path: &str, index: usize) -> Option<&'l MemberBody> {
-    ix.layer.file(path)?.model.members.get(index)
-}
-
 impl Recognized {
     /// Whether the site is under one of `roots`.
     fn holds(&self, ix: &Index<'_>, s: &BodySite, names: bool) -> bool {
@@ -229,7 +227,7 @@ impl Recognized {
         s.place.path == self.path
             && s.body == self.body
             && s.node.is_some_and(|n| {
-                body_at(ix, &self.path, self.body)
+                ix.body_at(&self.path, self.body)
                     .is_some_and(|b| roots.iter().any(|&r| within(b, n, r)))
             })
     }
@@ -302,7 +300,7 @@ fn external(ix: &Index<'_>, member: &NodeKey) -> Trigger {
 /// subscribed by name (its subscriptions are, see [`Corpus::own_rows`]).
 fn entry_trigger(ix: &Index<'_>, e: &EntryPoint) -> Option<Recognized> {
     let region = e.regions.first()?;
-    let body = body_at(ix, &region.path, region.body)?;
+    let body = ix.body_at(&region.path, region.body)?;
     let (trigger, calls, names) = match e.kind {
         EntryKind::Key => (
             Trigger {
@@ -388,7 +386,6 @@ fn way(e: &Evidence) -> Way<'_> {
             ..
         } => Way::Calls(None),
         Via::Relation { .. } => Way::No,
-        Via::OverCeiling { .. } => Way::Calls(None),
         Via::Link(s) | Via::Candidate(s) => {
             if s.call.is_some() {
                 Way::Calls(Some(s))
@@ -647,20 +644,27 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
         let mut rows: BTreeMap<Identity, TriggerRow> = BTreeMap::new();
 
         // Its own entry points that are triggers, and the gestures given to
-        // its commands.
-        for (trigger, entry) in self.own_triggers(f) {
-            let mut entries: BTreeSet<NodeKey> = f.members.iter().cloned().collect();
-            entries.extend(entry);
-            rows.entry(trigger.identity())
+        // its commands: each enters F where its code does, never at every
+        // member of F — the shared part, and the dead path in it, are what
+        // that trigger reaches (R12).
+        for (trigger, entered) in self.own_triggers(f) {
+            let row = rows
+                .entry(trigger.identity())
                 .or_insert_with(|| TriggerRow {
                     trigger,
                     target: target.clone(),
                     state: PathState::Active,
                     path: Vec::new(),
-                    entries: entries.into_iter().collect(),
+                    entries: Vec::new(),
                     grade: None,
                     own: true,
                 });
+            // One gesture given to a field and to the property returning it
+            // is one trigger entering at both.
+            let mut entries: BTreeSet<NodeKey> =
+                std::mem::take(&mut row.entries).into_iter().collect();
+            entries.extend(entered);
+            row.entries = entries.into_iter().collect();
         }
 
         for m in &f.members {
@@ -737,13 +741,26 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
     }
 
     /// The triggers among `f`'s own entry points, and the gestures given to
-    /// its members, each with the member its code is written in.
-    fn own_triggers(&self, f: &Functionality) -> Vec<(Trigger, Option<NodeKey>)> {
+    /// its members, each with the members of `f` it enters at: an entry
+    /// point's member and the members of `f` its targets name (a menu item's
+    /// command, a delegate's target, a call), a gesture's command.
+    fn own_triggers(&self, f: &Functionality) -> Vec<(Trigger, BTreeSet<NodeKey>)> {
         let ix = self.ix();
+        let entered = |e: &EntryPoint| -> BTreeSet<NodeKey> {
+            std::iter::once(e.member.clone())
+                .chain(
+                    e.targets
+                        .iter()
+                        .filter_map(|t| t.member.as_ref())
+                        .filter(|m| f.members.contains(m))
+                        .cloned(),
+                )
+                .collect()
+        };
         let mut out = Vec::new();
         for e in &f.entry_points {
             if let Some(r) = entry_trigger(ix, e) {
-                out.push((r.trigger, Some(e.member.clone())));
+                out.push((r.trigger, entered(e)));
                 continue;
             }
             if e.kind == EntryKind::Handler && e.discriminator.is_none() {
@@ -760,13 +777,13 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
                         .map_or_else(|| e.member.clone(), |c| c.member.clone());
                     let trigger =
                         event_trigger(&site.event, &subscriber, &site.place, site.source.clone());
-                    out.push((trigger, Some(e.member.clone())));
+                    out.push((trigger, entered(e)));
                 }
             }
         }
         for m in &f.members {
             for g in self.gestures.get(m).into_iter().flatten() {
-                out.push((g.clone(), None));
+                out.push((g.clone(), BTreeSet::from([m.clone()])));
             }
         }
         out
@@ -825,6 +842,13 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
                 } else if !inside {
                     walk.reach(&c.member, x, place, grade);
                 }
+            }
+        }
+        // A name over the ceiling calls, weakly, whatever a call passes
+        // control to: kept for the root, never followed.
+        if method || host || accessor {
+            for c in self.callers.over_ceiling_of(x) {
+                out.pass(c, Confidence::Ambiguous);
             }
         }
         out

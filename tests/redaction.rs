@@ -115,6 +115,11 @@ fn artifacts_of(generated: &Generated, out: &Path) -> Vec<(String, String)> {
     for file in &generated.maps {
         artifacts.push((format!("map {}", file.path), file.contents.clone()));
     }
+    // The registry of triggers of a run with the second layer (plan 2b, U7):
+    // a key, a menu item's label and an event's name reach it from the code.
+    if let Some(file) = &generated.triggers {
+        artifacts.push((format!("registry {}", file.path), file.contents.clone()));
+    }
     artifacts.push((
         "manifest.json".to_string(),
         manifest::to_json(&generated.manifest),
@@ -199,6 +204,13 @@ fn no_secret_value_reaches_any_artifact_of_a_run() {
                 records.is_empty(),
                 level.is_none(),
                 "{name}: a run with the second layer stores its bodies, one without none"
+            );
+            assert_eq!(
+                artifacts
+                    .iter()
+                    .any(|(label, _)| label.starts_with("registry ")),
+                level.is_some(),
+                "{name}: the registry of triggers is swept with the second layer"
             );
             for (label, contents) in &artifacts {
                 assert_no_b_secret(&format!("{label} ({name}, level {level:?})"), contents);

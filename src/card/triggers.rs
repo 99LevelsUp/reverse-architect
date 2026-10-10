@@ -38,12 +38,12 @@ use super::explain::{code, cs_n, plural, series, NAMED_IN_SENTENCE};
 use super::layer2::{
     Analysis, FunctionalityRef, MarkupTriggerKind, PathState, Place, TriggerKind, TriggerRow,
 };
-use super::layer2_render::{anchor, short};
+use super::layer2_render::{anchor, left_out, path_state_phrase, short};
 use super::links::{link, mention, CardIndex};
 use super::map::MAP_PART_ROWS;
 use super::render::{Lang, CARD_SCHEMA_VERSION_LAYER2};
 use crate::cli::LinkStyle;
-use crate::extract::external::{redact_secret_block, SecretPrefixes, REDACTION_MARKER};
+use crate::extract::external::{redact_secret_block, SecretPrefixes};
 use crate::graph::NodeKey;
 use crate::render::split::{fixed_partition, ChunkWeight};
 use crate::render::RenderedFile;
@@ -509,19 +509,12 @@ fn row(r: &RegistryRow, index: &CardIndex, lang: Lang, links: LinkStyle) -> Stri
         ),
     };
     let mut places: Vec<&Place> = r.place.iter().collect();
+    let phrase = path_state_phrase(lang, &r.state).unwrap_or_default();
     let state = match &r.state {
         PathState::Active => (if cs { "aktivní" } else { "active" }).to_string(),
         PathState::Dead { member, place } => {
             places.push(place);
-            format!(
-                "{} {}",
-                if cs {
-                    "mrtvá, vypíná ji"
-                } else {
-                    "dead, turned off at"
-                },
-                code(short(member.as_str()))
-            )
+            format!("{phrase} {}", code(short(member.as_str())))
         }
         PathState::Unresolved { callers } => {
             let names: Vec<String> = callers
@@ -529,15 +522,7 @@ fn row(r: &RegistryRow, index: &CardIndex, lang: Lang, links: LinkStyle) -> Stri
                 .take(NAMED_IN_SENTENCE)
                 .map(|k| code(short(k.as_str())))
                 .collect();
-            format!(
-                "{} {}",
-                if cs {
-                    "nerozřešená, vedou k ní jen volající podle samotného jména:"
-                } else {
-                    "unresolved, only callers matched by name alone reach it:"
-                },
-                series(lang, &names, callers.len())
-            )
+            format!("{phrase} {}", series(lang, &names, callers.len()))
         }
     };
     let target = mention(
@@ -548,15 +533,7 @@ fn row(r: &RegistryRow, index: &CardIndex, lang: Lang, links: LinkStyle) -> Stri
         index,
     );
     let text = format!("{} · {key} · {state} → {target}", kind_word(r.kind, lang));
-    let note = if text.contains(REDACTION_MARKER) {
-        if cs {
-            " (hodnota vynechána jako pravděpodobné tajemství; viz zdroj)"
-        } else {
-            " (a value was left out as a likely secret; see the source)"
-        }
-    } else {
-        ""
-    };
+    let note = left_out(lang, &text);
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let anchors: Vec<String> = places
         .into_iter()

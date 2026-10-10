@@ -266,7 +266,9 @@ pub const ENTRY_POINTS_VIEW: &str = "entry-points";
 /// with the second layer — right before the caveat E9 of the view
 /// `entry-points`, which stays as it is. Done at render time, so
 /// [`ViewType::instances`] keeps its signature and a run without the layer
-/// never reaches here. `false` when `instances` hold no caveat.
+/// never reaches here. `false` when `instances` hold no caveat: the line is
+/// then not placed, and the caller puts it last
+/// ([`crate::render::place_entry_points_line`]).
 pub fn insert_before_entry_caveat(instances: &mut Vec<Instance>, line: String) -> bool {
     match instances
         .iter()

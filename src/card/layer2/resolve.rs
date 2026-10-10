@@ -274,6 +274,13 @@ impl<'a> Index<'a> {
         self.symbols.get(key)
     }
 
+    /// The body at `index` of the file `path`'s model of bodies, when the
+    /// second layer read the file — what a site's `body` points at, and the
+    /// tree [`within`] walks.
+    pub(super) fn body_at(&self, path: &str, index: usize) -> Option<&'a MemberBody> {
+        self.layer.file(path)?.model.members.get(index)
+    }
+
     /// The type that declares `member` (`HasMember`).
     pub fn owner_of(&self, member: &NodeKey) -> Option<&NodeKey> {
         self.symbol(member).and_then(|s| s.owner.as_ref())

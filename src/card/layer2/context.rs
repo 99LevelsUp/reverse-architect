@@ -46,8 +46,11 @@
 //!
 //! A row whose shared part holds a dead path that turns the whole way off —
 //! a CanExecute delegate's target that returns `false`, an empty body an
-//! entry point calls — is dead, with that place (R12, AE2). A trigger's own
-//! row that refers elsewhere is dead when every row it refers to is.
+//! entry point calls — is dead, with that place (R12, AE2). A row whose way
+//! passes through a functionality the same trigger's row into is dead is dead
+//! too, with that row's place: a command that never runs leads nowhere
+//! further. A trigger's own row that refers elsewhere is dead when every row
+//! it refers to is.
 
 use super::callers::{is_strong, Callers, Via};
 use super::cluster::Functionality;
@@ -711,6 +714,7 @@ pub(crate) fn compose(
     for (i, member, place) in dead {
         rows[i].state = PathState::Dead { member, place };
     }
+    pass_death_along_paths(types, rows, &by_trigger);
     for (i, elsewhere) in referring {
         if !matches!(rows[i].state, PathState::Active) {
             continue;
@@ -736,6 +740,60 @@ pub(crate) fn compose(
         flow.state = rows[flow.row].state.clone();
     }
     out
+}
+
+/// A row whose way passes through a functionality its trigger's own row into
+/// is dead goes no further: it is dead too, at that row's place (R12). A key
+/// whose command can never run reaches nothing behind the command's target,
+/// whatever functionality of another type that target calls into. To a fixed
+/// point, so a chain of functionalities passes the death on.
+fn pass_death_along_paths(
+    types: &[TypeAnalysis],
+    rows: &mut [TriggerRow],
+    by_trigger: &BTreeMap<super::triggers::Identity, Vec<usize>>,
+) {
+    let members: BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>> = types
+        .iter()
+        .flat_map(|t| {
+            t.functionalities.iter().map(move |f| {
+                let r = FunctionalityRef {
+                    ty: t.key.clone(),
+                    key: f.key.clone(),
+                };
+                (r, f.members.iter().collect())
+            })
+        })
+        .collect();
+    loop {
+        let mut changed = false;
+        for i in 0..rows.len() {
+            if !matches!(rows[i].state, PathState::Active) {
+                continue;
+            }
+            let same = by_trigger
+                .get(&rows[i].trigger.identity())
+                .map_or(&[][..], Vec::as_slice);
+            let off = rows[i].path.iter().find_map(|hop| {
+                same.iter().find_map(|&j| match &rows[j].state {
+                    PathState::Dead { member, place }
+                        if members
+                            .get(&rows[j].target)
+                            .is_some_and(|m| m.contains(&hop.member)) =>
+                    {
+                        Some((member.clone(), place.clone()))
+                    }
+                    _ => None,
+                })
+            });
+            if let Some((member, place)) = off {
+                rows[i].state = PathState::Dead { member, place };
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Where the body of `member` is: the place of its root node.

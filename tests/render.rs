@@ -656,3 +656,43 @@ fn the_line_of_coverage_stands_right_above_e9_and_nothing_else_moves() {
         }
     }
 }
+
+/// U8: a lens of `entry-points` that holds no sentence E9 still gets the line
+/// of coverage — last, never dropped without a word; a lens with no section
+/// gets one of its own for it.
+#[test]
+fn without_e9_the_line_of_coverage_goes_last_rather_than_missing() {
+    use reverse_architect::lens::{Lens, Section};
+    use reverse_architect::render::place_entry_points_line;
+    use reverse_architect::taxonomy::views::Instance;
+
+    let instance = |text: &str| Instance {
+        text: text.to_string(),
+        indent_level: 0,
+        rung: None,
+    };
+    let lens = |sections: Vec<Section>| Lens {
+        view_id: "entry-points".to_string(),
+        title: "Entry points".to_string(),
+        guiding_question: String::new(),
+        problem: String::new(),
+        mechanism: String::new(),
+        sections,
+        diagram: None,
+        failure_modes: Vec::new(),
+    };
+    fn texts(lens: &Lens) -> Vec<&str> {
+        lens.instances().map(|i| i.text.as_str()).collect()
+    }
+    let entry = "`main` in `src/main.rs` — language-level entry point.";
+
+    let mut without = lens(vec![Section::undivided(vec![instance(entry)])]);
+    place_entry_points_line(&mut without, "Coverage of triggers".to_string());
+    assert_eq!(texts(&without), [entry, "Coverage of triggers"]);
+    assert_eq!(without.sections.len(), 1);
+
+    let mut empty = lens(Vec::new());
+    place_entry_points_line(&mut empty, "Coverage of triggers".to_string());
+    assert_eq!(texts(&empty), ["Coverage of triggers"]);
+    assert_eq!(empty.sections.len(), 1);
+}

@@ -246,17 +246,7 @@ impl Cx<'_> {
     /// `text` holds the marker of a withheld value, and nothing otherwise
     /// (R14): one sentence for a line, however many markers it holds.
     fn left_out(&self, text: &str) -> String {
-        if redacted(text) {
-            format!(
-                " ({})",
-                self.t(
-                    "a value was left out as a likely secret; see the source",
-                    "hodnota vynechána jako pravděpodobné tajemství; viz zdroj"
-                )
-            )
-        } else {
-            String::new()
-        }
+        left_out(self.lang, text)
     }
 
     /// `A, B and C`, or `A, B, C and 2 more`.
@@ -270,6 +260,41 @@ impl Cx<'_> {
     fn card_of(&self, ty: &str) -> String {
         mention(&self.card.path, ty, short(ty), self.links, self.index)
     }
+}
+
+/// ` (a value was left out as a likely secret; see the source)` in `lang`
+/// when `text` holds the marker of a withheld value, and nothing otherwise
+/// (R14, R18) — the one wording of the card and the registry of triggers.
+pub(super) fn left_out(lang: Lang, text: &str) -> String {
+    if !redacted(text) {
+        return String::new();
+    }
+    format!(
+        " ({})",
+        match lang {
+            Lang::En => "a value was left out as a likely secret; see the source",
+            Lang::Cs => "hodnota vynechána jako pravděpodobné tajemství; viz zdroj",
+        }
+    )
+}
+
+/// The words a path that is not active opens with (R12), in `lang` — the
+/// one wording of the card's `### Context` and the registry of triggers:
+/// `dead, turned off at` before the member that turns it off, `unresolved,
+/// only callers matched by name alone reach it:` before the weak callers.
+/// `None` for an active path.
+pub(super) fn path_state_phrase(lang: Lang, state: &PathState) -> Option<&'static str> {
+    Some(match (state, lang) {
+        (PathState::Active, _) => return None,
+        (PathState::Dead { .. }, Lang::En) => "dead, turned off at",
+        (PathState::Dead { .. }, Lang::Cs) => "mrtvá, vypíná ji",
+        (PathState::Unresolved { .. }, Lang::En) => {
+            "unresolved, only callers matched by name alone reach it:"
+        }
+        (PathState::Unresolved { .. }, Lang::Cs) => {
+            "nerozřešená, vedou k ní jen volající podle samotného jména:"
+        }
+    })
 }
 
 /// A key without its `sym:<language>:<qualifier>#` prefix.
@@ -1854,11 +1879,11 @@ fn trigger_line(cx: &Cx<'_>, flow: &TriggerFlow) -> String {
 /// that turns it off, or unresolved, with the weak callers.
 fn path_line(cx: &Cx<'_>, flow: &TriggerFlow) -> Option<String> {
     let lead = cx.t("Path:", "Cesta:");
+    let phrase = path_state_phrase(cx.lang, &flow.state)?;
     match &flow.state {
         PathState::Active => None,
         PathState::Dead { member, place } => Some(format!(
-            "- {lead} {} {}; {}{}",
-            cx.t("dead, turned off at", "mrtvá, vypíná ji"),
+            "- {lead} {phrase} {}; {}{}",
             code(cx.name(member.as_str())),
             cx.t("nothing happens", "nic se nestane"),
             anchor_of(Some(place))
@@ -1866,11 +1891,7 @@ fn path_line(cx: &Cx<'_>, flow: &TriggerFlow) -> Option<String> {
         PathState::Unresolved { callers } => {
             let names: Vec<String> = callers.iter().map(|k| code(cx.name(k.as_str()))).collect();
             Some(format!(
-                "- {lead} {} {}{}",
-                cx.t(
-                    "unresolved, only callers matched by name alone reach it:",
-                    "nerozřešená, vedou k ní jen volající podle samotného jména:"
-                ),
+                "- {lead} {phrase} {}{}",
                 cx.series(&names),
                 anchor_of(flow.trigger.place.as_ref())
             ))

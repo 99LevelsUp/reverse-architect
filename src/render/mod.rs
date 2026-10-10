@@ -67,13 +67,7 @@ pub fn build_corpus_with(
         let mut lens = lens::compose(view, graph);
         let path = format!("{}.md", view.id);
         if let (Some(coverage), taxonomy::views::ENTRY_POINTS_VIEW) = (layer2, view.id) {
-            let line = coverage.entry_points_line(&path, links);
-            for section in &mut lens.sections {
-                if taxonomy::views::insert_before_entry_caveat(&mut section.instances, line.clone())
-                {
-                    break;
-                }
-            }
+            place_entry_points_line(&mut lens, coverage.entry_points_line(&path, links));
         }
         files.push(RenderedFile {
             path,
@@ -82,4 +76,26 @@ pub fn build_corpus_with(
     }
 
     Ok(Corpus { files })
+}
+
+/// Put the line of trigger coverage into the lens of the view
+/// `entry-points` (plan 2b, U8: KTD12): right before its caveat E9, in
+/// whichever section holds it. A lens that holds no E9 gets the line last —
+/// in its last section, or in a section of its own when it has none — so the
+/// line never goes missing without a word.
+pub fn place_entry_points_line(lens: &mut lens::Lens, line: String) {
+    for section in &mut lens.sections {
+        if taxonomy::views::insert_before_entry_caveat(&mut section.instances, line.clone()) {
+            return;
+        }
+    }
+    let line = taxonomy::views::Instance {
+        text: line,
+        indent_level: 0,
+        rung: None,
+    };
+    match lens.sections.last_mut() {
+        Some(last) => last.instances.push(line),
+        None => lens.sections.push(lens::Section::undivided(vec![line])),
+    }
 }

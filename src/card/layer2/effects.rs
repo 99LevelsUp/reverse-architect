@@ -304,15 +304,11 @@ impl<'f> Cluster<'f> {
                     && match r.node {
                         None => true,
                         Some(root) => node.is_some_and(|n| {
-                            body_at(ix, path, body).is_some_and(|b| within(b, n, root))
+                            ix.body_at(path, body).is_some_and(|b| within(b, n, root))
                         }),
                     }
             })
     }
-}
-
-fn body_at<'l>(ix: &Index<'l>, path: &str, index: usize) -> Option<&'l MemberBody> {
-    ix.layer.file(path)?.model.members.get(index)
 }
 
 /// The statement at the top level of `body` that holds `node`; `None` for
@@ -479,7 +475,7 @@ impl<'a, 'i, 'l> FlowResults<'a, 'i, 'l> {
                         && match r.node {
                             None => true,
                             Some(root) => node.is_some_and(|n| {
-                                body_at(ix, path, body).is_some_and(|b| within(b, n, root))
+                                ix.body_at(path, body).is_some_and(|b| within(b, n, root))
                             }),
                         }
                 }
@@ -496,7 +492,7 @@ impl<'a, 'i, 'l> FlowResults<'a, 'i, 'l> {
                 let Some(target) = s.resolution.target() else {
                     continue;
                 };
-                let Some(body) = body_at(ix, &s.place.path, s.body) else {
+                let Some(body) = ix.body_at(&s.place.path, s.body) else {
                     continue;
                 };
                 let rhs = (!mutation)
@@ -701,7 +697,7 @@ impl<'a, 'i, 'l> FlowResults<'a, 'i, 'l> {
     /// Whether `member` writes one of `targets` unconditionally at the top
     /// level of the body `site` is in, before the statement `site` is in.
     fn written_before(&self, member: &NodeKey, site: &BodySite, targets: &[NodeKey]) -> bool {
-        let (Some(node), Some(body)) = (site.node, body_at(self.ix(), &site.place.path, site.body))
+        let (Some(node), Some(body)) = (site.node, self.ix().body_at(&site.place.path, site.body))
         else {
             return false;
         };

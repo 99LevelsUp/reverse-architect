@@ -19,7 +19,10 @@
 //!   (and every type) of the repository's C# types of that name gets the node
 //!   the fact is on as a weak caller ([`Confidence::Ambiguous`]) — for its class
 //!   alone: a candidate is never followed (R4), but nor is it taken for a member
-//!   nothing calls;
+//!   nothing calls. Such callers are kept once per name and referencing node
+//!   and read through the candidate's name ([`Callers::over_ceiling_of`]),
+//!   never as an [`Evidence`] per candidate: a name past the ceiling has
+//!   hundreds of them in a large repository, and as many nodes reference it;
 //! - **every link of every access and call of a body**, resolved by U2
 //!   ([`Links::sites_of`]): each member an access names — the ones it goes on
 //!   through as much as the one it ends in (`this.viewModel.CheckCommand`
@@ -62,9 +65,9 @@ use super::entry::{bodies, Place};
 use super::link::{weakest, Links, Outcome, Resolution, Site};
 use super::resolve::Scope;
 use crate::extract::bodies::{AccessMode, AccessPath, Handler, PathRoot, SubscriptionMode};
-use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, SiteId, Span};
+use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, SiteId};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The relations of the first layer a caller is read from.
 const RELATION_KINDS: &[EdgeKind] = &[
@@ -115,13 +118,6 @@ pub struct BodySite {
 pub enum Via {
     /// A relation of the first layer, with the sites it was read at.
     Relation { kind: EdgeKind, sites: Vec<SiteId> },
-    /// A name the first layer matched more candidates of than the ceiling
-    /// allowed (`Execute: 412 candidates`), and where it said so.
-    OverCeiling {
-        name: String,
-        file: String,
-        span: Span,
-    },
     /// A link of an access or a call of a body.
     Link(BodySite),
     /// A candidate of an access that stopped at several.
@@ -146,11 +142,10 @@ impl Via {
     fn rank(&self) -> u8 {
         match self {
             Via::Relation { .. } => 0,
-            Via::OverCeiling { .. } => 1,
-            Via::Link(_) => 2,
-            Via::Candidate(_) => 3,
-            Via::Delegate { .. } => 4,
-            Via::Subscription { .. } => 5,
+            Via::Link(_) => 1,
+            Via::Candidate(_) => 2,
+            Via::Delegate { .. } => 3,
+            Via::Subscription { .. } => 4,
         }
     }
 
@@ -160,7 +155,7 @@ impl Via {
             Via::Link(s) | Via::Candidate(s) => Some(&s.place),
             Via::Delegate { construction, .. } => Some(construction),
             Via::Subscription { place, .. } => Some(place),
-            Via::Relation { .. } | Via::OverCeiling { .. } => None,
+            Via::Relation { .. } => None,
         }
     }
 }
@@ -217,6 +212,12 @@ pub struct Callers {
     of: BTreeMap<NodeKey, Vec<Caller>>,
     /// By event, then place and member.
     subscribers: BTreeMap<NodeKey, Vec<Subscriber>>,
+    /// The nodes that referenced a name past the ceiling, by the name: one
+    /// entry per name and node, whatever the number of candidates.
+    over_ceiling: BTreeMap<String, BTreeSet<NodeKey>>,
+    /// Every candidate of a name of `over_ceiling` — a member or a type of
+    /// the repository's C# types of that name — with the name.
+    named: BTreeMap<NodeKey, String>,
 }
 
 /// The callers gathered so far: by callee, by caller, in the order found.
@@ -224,6 +225,7 @@ pub struct Callers {
 struct Gather {
     of: BTreeMap<NodeKey, BTreeMap<NodeKey, Vec<Evidence>>>,
     subscribers: BTreeMap<NodeKey, Vec<Subscriber>>,
+    over_ceiling: BTreeMap<String, BTreeSet<NodeKey>>,
 }
 
 impl Gather {
@@ -324,14 +326,24 @@ impl Callers {
                 let Some(name) = over_ceiling_name(text) else {
                     continue;
                 };
-                for c in ix.members_named(name).iter().chain(ix.types_named(name)) {
-                    let via = Via::OverCeiling {
-                        name: name.to_string(),
-                        file: f.provenance.file.clone(),
-                        span: f.provenance.span,
-                    };
-                    g.add(c, &node.key, via, Confidence::Ambiguous);
+                if ix.members_named(name).is_empty() && ix.types_named(name).is_empty() {
+                    continue;
                 }
+                match g.over_ceiling.get_mut(name) {
+                    Some(nodes) => {
+                        nodes.insert(node.key.clone());
+                    }
+                    None => {
+                        g.over_ceiling
+                            .insert(name.to_string(), BTreeSet::from([node.key.clone()]));
+                    }
+                }
+            }
+        }
+        let mut named: BTreeMap<NodeKey, String> = BTreeMap::new();
+        for name in g.over_ceiling.keys() {
+            for c in ix.members_named(name).iter().chain(ix.types_named(name)) {
+                named.insert(c.clone(), name.clone());
             }
         }
 
@@ -463,27 +475,55 @@ impl Callers {
         for list in subscribers.values_mut() {
             list.sort_by(|a, b| (&a.place, &a.member).cmp(&(&b.place, &b.member)));
         }
-        Callers { of, subscribers }
+        Callers {
+            of,
+            subscribers,
+            over_ceiling: g.over_ceiling,
+            named,
+        }
     }
 
-    /// The callers of `member`, by key; empty when nothing calls it.
+    /// The callers of `member`, by key; empty when nothing calls it. A caller
+    /// by a name over the ceiling alone is not among them
+    /// ([`Callers::over_ceiling_of`]).
     pub fn of(&self, member: &NodeKey) -> &[Caller] {
         self.of.get(member).map_or(&[], Vec::as_slice)
+    }
+
+    /// The weak callers of `member` by a name over the ceiling alone, by key
+    /// ([`Confidence::Ambiguous`]): every node that referenced its name past
+    /// the ceiling, but the member itself — never followed, counted for the
+    /// class alone (R4).
+    pub fn over_ceiling_of<'c>(&'c self, member: &'c NodeKey) -> impl Iterator<Item = &'c NodeKey> {
+        self.named
+            .get(member)
+            .and_then(|name| self.over_ceiling.get(name))
+            .into_iter()
+            .flatten()
+            .filter(move |c| *c != member)
+    }
+
+    /// How many entries the names over the ceiling take: one per name and
+    /// node that referenced it past the ceiling, however many candidates the
+    /// name has.
+    pub fn over_ceiling_entries(&self) -> usize {
+        self.over_ceiling.values().map(BTreeSet::len).sum()
     }
 
     /// The class of `member` by its strongest caller (KTD2).
     pub fn class_of(&self, member: &NodeKey) -> CallerClass {
         let callers = self.of(member);
-        if callers.is_empty() {
-            CallerClass::Uncalled
-        } else if callers.iter().any(Caller::is_strong) {
+        if callers.iter().any(Caller::is_strong) {
             CallerClass::Strong
-        } else {
+        } else if !callers.is_empty() || self.over_ceiling_of(member).next().is_some() {
             CallerClass::WeakOnly
+        } else {
+            CallerClass::Uncalled
         }
     }
 
-    /// Every member something calls, by key.
+    /// Every member with a caller of [`Callers::of`], by key — a member
+    /// called by a name over the ceiling alone is not among them.
     pub fn members(&self) -> impl Iterator<Item = &NodeKey> {
         self.of.keys()
     }

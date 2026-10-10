@@ -1037,7 +1037,8 @@ fn a_member_called_by_name_alone_is_weak_and_one_rule_backed_caller_makes_it_str
 
 /// A name the first layer matched past the ceiling (`Ping: 10 candidates`)
 /// gives every candidate a weak caller — never a member nothing calls, never
-/// a strong one; past the ceiling of shown candidates too.
+/// a strong one; past the ceiling of shown candidates too. The caller is read
+/// through the candidate's name, not kept as a caller of each candidate.
 #[test]
 fn a_place_over_the_ceiling_makes_its_candidates_weakly_called_not_roots() {
     let (generated, _) = analyzed(&[("src/Many.cs", MANY)]);
@@ -1046,15 +1047,64 @@ fn a_place_over_the_ceiling_makes_its_candidates_weakly_called_not_roots() {
     for i in 0..10 {
         let ping = key(MANY_NS, &format!("A{i}.Ping()"));
         assert_eq!(callers.class_of(&ping), CallerClass::WeakOnly, "{ping:?}");
-        let c = caller(&callers, &ping, &go);
-        assert_eq!(c.grade, Confidence::Ambiguous);
-        assert!(
-            c.evidence
-                .iter()
-                .any(|e| matches!(&e.via, Via::OverCeiling { name, .. } if name == "Ping")),
-            "{c:?}"
+        let weak: Vec<&NodeKey> = callers.over_ceiling_of(&ping).collect();
+        assert_eq!(weak, [&go], "{ping:?}");
+        assert!(callers.of(&ping).is_empty(), "{:?}", callers.of(&ping));
+    }
+    assert!(callers.over_ceiling_of(&go).next().is_none());
+}
+
+/// Many members of one name past the ceiling, each referenced from many
+/// members: every candidate is weakly called by every referencing member,
+/// and the index holds one entry per referencing member — never one per
+/// candidate and referencing member. The walk reads them as before: the
+/// candidate is a root only weak callers reach, its row unresolved with every
+/// one of them.
+#[test]
+fn many_homonyms_over_the_ceiling_take_one_entry_per_referencing_member() {
+    const N: usize = 20;
+    let mut src = String::from(
+        "namespace Acme.Fan\n{\n    public class Hub { public static object Lookup() { return null; } }\n",
+    );
+    for i in 0..N {
+        src.push_str(&format!(
+            "    public class H{i} {{ int runs; public void Execute() {{ runs++; }} }}\n"
+        ));
+    }
+    for j in 0..N {
+        src.push_str(&format!(
+            "    public class R{j} {{ void Go() {{ Hub.Lookup().Execute(); }} }}\n"
+        ));
+    }
+    src.push_str("}\n");
+    let (generated, analysis) = analyzed(&[("src/Fan.cs", &src)]);
+    let callers = callers_of(&generated);
+    let ns = "sym:csharp:Acme.Fan#";
+    let mut goes: Vec<NodeKey> = (0..N).map(|j| key(ns, &format!("R{j}.Go()"))).collect();
+    goes.sort();
+    for i in 0..N {
+        let execute = key(ns, &format!("H{i}.Execute()"));
+        assert_eq!(
+            callers.class_of(&execute),
+            CallerClass::WeakOnly,
+            "{execute:?}"
+        );
+        let weak: Vec<&NodeKey> = callers.over_ceiling_of(&execute).collect();
+        assert_eq!(weak, goes.iter().collect::<Vec<_>>(), "{execute:?}");
+        assert!(callers.of(&execute).is_empty(), "{execute:?}");
+
+        let ty = key(ns, &format!("H{i}"));
+        let f = holding(&analysis, &ty, &execute);
+        let (_, row) = row_to(&analysis, &ty, f, TriggerKind::External, &execute);
+        assert_eq!(
+            row.state,
+            PathState::Unresolved {
+                callers: goes.clone()
+            },
+            "{execute:?}"
         );
     }
+    assert_eq!(callers.over_ceiling_entries(), N);
 }
 
 /// An access that stopped at two overloads of one arity makes each a weak
@@ -1800,6 +1850,214 @@ fn the_f4_flow_never_leads_to_both_view_models() {
         .map(|r| (&r.trigger.member, &r.target.ty))
         .collect();
     assert_eq!(f4, [(&old, &vm), (&new, &vm_new)]);
+}
+
+/// A command class for the fixtures below, as the editor's.
+const RELAY: &str = r#"
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        private readonly Predicate<object> _canExecute;
+        public KeyGesture[] KeyGestures { get; set; }
+        public RelayCommand(Action<object> execute) : this(execute, null) { }
+        public RelayCommand(Action<object> execute, Predicate<object> canExecute)
+        {
+            _execute = execute;
+            _canExecute = canExecute;
+        }
+        public bool CanExecute(object parameter) { return _canExecute == null || _canExecute(parameter); }
+        public void Execute(object parameter) { _execute(parameter); }
+    }
+"#;
+
+/// A view whose F4 runs a command that can never run, whose target calls into
+/// the core functionality of another analyzed type.
+const CHAIN_VIEWS: &str = r#"namespace Acme.Chain
+{
+    public class ChainView
+    {
+        private ChainViewModel viewModel;
+
+        public ChainView()
+        {
+            PreviewKeyDown += OnKey;
+        }
+
+        void OnKey(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F4)
+            {
+                this.viewModel.CheckCommand.Execute(null);
+            }
+        }
+    }
+}
+"#;
+
+const CHAIN_MODELS: &str = r#"namespace Acme.Chain
+{
+    public class ChainViewModel
+    {
+        private RelayCommand checkCommand;
+        private Ledger ledger;
+
+        public RelayCommand CheckCommand
+        {
+            get
+            {
+                if (checkCommand == null) checkCommand = new RelayCommand(p => Check(), p => CanCheck());
+                return checkCommand;
+            }
+        }
+
+        public void Check() { ledger.Validate(); }
+
+        bool CanCheck() { return false; }
+    }
+
+    public class Ledger
+    {
+        private int validated;
+
+        public void Validate() { validated++; }
+    }
+"#;
+
+const CHAIN_NS: &str = "sym:csharp:Acme.Chain#";
+
+/// R12: F4 runs a command whose CanExecute is `false`; its target calls the
+/// ledger's validation. The row of F4 to the ledger passes through the dead
+/// command, so it is dead at `CanCheck()` like the row to the view model,
+/// and the view's own row, which refers to both, is dead too.
+#[test]
+fn a_row_past_a_dead_command_is_dead_and_so_is_the_view_row_referring_to_it() {
+    let models = format!("{CHAIN_MODELS}{RELAY}}}\n");
+    let (_, analysis) = analyzed(&[
+        ("src/ChainView.cs", CHAIN_VIEWS),
+        ("src/ChainViewModel.cs", &models),
+    ]);
+    let on_key = key(CHAIN_NS, "ChainView.OnKey(object,KeyEventArgs)");
+    let can_check = key(CHAIN_NS, "ChainViewModel.CanCheck()");
+    let dead_at_can_check = |row: &TriggerRow| matches!(&row.state, PathState::Dead { member, .. } if member == &can_check);
+
+    let vm = key(CHAIN_NS, "ChainViewModel");
+    let command = holding(
+        &analysis,
+        &vm,
+        &key(CHAIN_NS, "ChainViewModel.CheckCommand"),
+    );
+    let (_, to_vm) = row_to(&analysis, &vm, command, TriggerKind::Key, &on_key);
+    assert!(dead_at_can_check(to_vm), "{to_vm:?}");
+
+    let ledger = key(CHAIN_NS, "Ledger");
+    let validate = key(CHAIN_NS, "Ledger.Validate()");
+    let f = holding(&analysis, &ledger, &validate);
+    let (i, downstream) = row_to(&analysis, &ledger, f, TriggerKind::Key, &on_key);
+    assert!(
+        downstream
+            .path
+            .iter()
+            .any(|h| command.members.contains(&h.member)),
+        "the way goes through the command: {downstream:?}"
+    );
+    assert!(dead_at_can_check(downstream), "{downstream:?}");
+    let (flow, _) = flow_of(context_of(&analysis, &ledger, f), i);
+    assert_eq!(flow.state, downstream.state);
+
+    let view = key(CHAIN_NS, "ChainView");
+    let own = type_of(&analysis, &view)
+        .functionalities
+        .iter()
+        .find(|f| f.entry_points.iter().any(|e| e.member == on_key))
+        .unwrap();
+    let (_, own_row) = row_to(&analysis, &view, own, TriggerKind::Key, &on_key);
+    assert!(own_row.own);
+    assert!(dead_at_can_check(own_row), "{own_row:?}");
+}
+
+/// A view model whose two commands share its state, so they are one
+/// functionality: the check can never run, the save can, and the save has a
+/// key gesture of its own.
+const TWIN: &str = r#"namespace Acme.Twin
+{
+    public class TwinViewModel
+    {
+        private RelayCommand saveCommand;
+        private RelayCommand checkCommand;
+        private bool dirty;
+
+        public RelayCommand SaveCommand
+        {
+            get
+            {
+                if (saveCommand == null)
+                {
+                    saveCommand = new RelayCommand(p => Save());
+                    saveCommand.KeyGestures = new KeyGesture[] { new KeyGesture(Key.S, ModifierKeys.Control) };
+                }
+                return saveCommand;
+            }
+        }
+
+        public RelayCommand CheckCommand
+        {
+            get
+            {
+                if (checkCommand == null) checkCommand = new RelayCommand(p => Check(), p => CanCheck());
+                return checkCommand;
+            }
+        }
+
+        public void Save() { dirty = false; }
+
+        public void Check() { dirty = true; }
+
+        bool CanCheck() { return false; }
+    }
+"#;
+
+const TWIN_NS: &str = "sym:csharp:Acme.Twin#";
+
+/// R12: a trigger written in the functionality's own type enters it where its
+/// code does — the save's gesture at the save command — so the check's dead
+/// CanExecute in the same functionality does not turn the save's way off.
+#[test]
+fn an_own_gesture_of_a_live_command_stays_active_beside_a_dead_one() {
+    let src = format!("{TWIN}{RELAY}}}\n");
+    let (_, analysis) = analyzed(&[("src/Twin.cs", &src)]);
+    let vm = key(TWIN_NS, "TwinViewModel");
+    let save = key(TWIN_NS, "TwinViewModel.SaveCommand");
+    let check = key(TWIN_NS, "TwinViewModel.CheckCommand");
+    let can_check = key(TWIN_NS, "TwinViewModel.CanCheck()");
+    let f = holding(&analysis, &vm, &save);
+    assert!(
+        f.members.contains(&check) && f.members.contains(&can_check),
+        "both commands are one functionality: {:?}",
+        f.members
+    );
+    // The check's way is dead in it.
+    assert!(
+        rows_to(&analysis, &vm, f).iter().any(|(_, r)| matches!(
+            &r.state,
+            PathState::Dead { member, .. } if member == &can_check
+        )),
+        "{:?}",
+        rows_to(&analysis, &vm, f)
+    );
+
+    let (i, gesture) = row_to(&analysis, &vm, f, TriggerKind::Key, &save);
+    assert!(gesture.own);
+    assert_eq!(gesture.trigger.key, "Key.S+ModifierKeys.Control");
+    assert_eq!(gesture.state, PathState::Active);
+    assert!(gesture.entries.contains(&save), "{:?}", gesture.entries);
+    assert!(
+        !gesture.entries.contains(&check) && !gesture.entries.contains(&can_check),
+        "{:?}",
+        gesture.entries
+    );
+    let (flow, common) = flow_of(context_of(&analysis, &vm, f), i);
+    assert_eq!(flow.state, PathState::Active);
+    assert_eq!(common.dead, None);
 }
 
 /// AE4: `ExternalCheck`, nothing calls it, is an entry from another component

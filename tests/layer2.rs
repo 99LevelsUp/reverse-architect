@@ -353,7 +353,7 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
     assert_eq!(coverage["bodies"]["detail_level"], 2);
     assert_eq!(
         coverage["bodies"]["plugins"],
-        serde_json::json!(["xaml", "csharp-body"])
+        serde_json::json!(["csharp-body"])
     );
     let contracts = |c: &serde_json::Value| c["noise"]["plugins_by_contract"].clone();
     let mut more = contracts(&plain_coverage);
@@ -576,7 +576,9 @@ fn another_languages_bodies_pair_fail_and_are_counted() {
         .all(|f| f.kind != FactKind::ExtractionFailed));
 
     let coverage = layered.coverage.bodies.as_ref().unwrap();
-    assert_eq!(coverage.plugins, ["probe3", "xaml", "csharp-body"]);
+    // XAML claims no file of this corpus: absent from the list (plan 2c,
+    // U10), as it is from the vocabulary and the state of XAML.
+    assert_eq!(coverage.plugins, ["probe3", "csharp-body"]);
     assert_eq!(coverage.failed.len(), 1);
     assert_eq!(coverage.failed[0].path, "loop.probe3");
     assert_eq!(coverage.failed[0].plugin, "probe3");
