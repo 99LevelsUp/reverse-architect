@@ -5,6 +5,7 @@ shape); the judge is a scripted runner that never starts a process. All names
 are generic (`EditorView`, `EditorViewNew`, `ExternalCheck`, ...).
 """
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -14,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 import card_check
+from anchors import judge_text
 from agents.judge_cli import CliReply, JudgeInfrastructureError
 from card_check import (FACT_CONFLICT, FACT_DISPUTED, FACT_MISSING, FACT_MISSING_UNBOUND,
                         FACT_PLACE_UNKNOWN, FACT_PRESENT, MODE_BOUND, MODE_WHOLE,
@@ -23,6 +25,7 @@ from card_check import (FACT_CONFLICT, FACT_DISPUTED, FACT_MISSING, FACT_MISSING
 from catalog import confirmation_fingerprint, parse_catalog
 from corpus import CorpusError, open_corpus
 from judge import JudgeCache, JudgeSelection, JudgeSpec
+from prepare import receipt_path
 
 REV = "a" * 40
 OTHER_REV = "b" * 40
@@ -409,6 +412,11 @@ class FlowTest(CheckCase):
             self.assertEqual(row.status, FACT_PRESENT, row.fact_id)
         unit = unit_of(measurement, "all", doc_id("ExternalCheck"), "vyvojar")
         self.assertEqual((unit.mode, unit.blocks), (MODE_WHOLE, None))
+        # the judge reads the headings that have no block of their own, with the one that has
+        sent = runner.calls_for("Celý tok")[0].blocks
+        self.assertTrue(any(
+            b.startswith("Dynamic access > Context > caller: EditorViewModel.Save\n")
+            for b in sent), sent)
         calls = runner.calls_for("Celý tok")  # three runs of one unit; the other role is cached
         self.assertEqual(len(calls), 3)
         call = calls[0]
@@ -467,7 +475,9 @@ class RolesAndBlocksTest(CheckCase):
         self.assertFalse(any("Nesouvisející" in t or "Other()" in t for t in texts))
         sent = [c for c in runner.calls if any("vrací se tiše" in b for b in c.blocks)]
         self.assertEqual(len(sent), 3)  # three runs of one unit (the card was not sent it)
-        self.assertEqual(sent[0].blocks, texts)  # exactly the bound blocks went to the judge
+        # exactly the bound blocks went to the judge, each with its document title and section
+        self.assertEqual(sent[0].blocks, [judge_text(b["title"], b["section"], b["text"])
+                                          for b in unit.blocks])
 
     def test_fact_of_role_ramcova_is_not_checked_on_a_detail(self):
         catalog = make_catalog(question_json([
@@ -559,7 +569,10 @@ class PlacesAndRevisionTest(CheckCase):
                                 self.state / name)
             measurement = run_card_check(catalog, index, selection(), ScriptedJudge(rules),
                                          JudgeCache(self.state / name / "cache"))
-            results.append(measurement.to_json())
+            data = measurement.to_json()
+            data.pop("id")  # the id and the corpus path name the directory of the corpus
+            data["corpus"].pop("corpus_path")
+            results.append(data)
         self.assertEqual(results[0], results[1])
 
 
@@ -643,6 +656,223 @@ class BindingTest(CheckCase):
             self.assertEqual(row.status, FACT_PRESENT)
             self.assertEqual(row.present_in, (doc_id("EditorView"),))
             self.assertEqual(len(row.disputed_units), 1)
+
+    # -- a forbidden claim that does not bind (the twin of `unbound`, which is a fact) --
+
+    def unbound_claim(self):
+        catalog = make_catalog(question_json(
+            [fact("f", "Odeslání dokumentu", [place(EXT, "ExternalCheck.Run()", radky="30-35")])],
+            [claim("z", "Dokument se odešle jinam",
+                   [place(EXT, "ExternalCheck.Run()", radky="30-35")], fakty=["f"])]))
+        # The judge quotes a sentence of the card that is anchored at lines 90-95, outside the
+        # place of the claim (30-35).
+        return self.check(catalog, [Rule("jinam", "Odešle dokument", "OBSAHUJE")])
+
+    def test_a_forbidden_claim_whose_sentence_does_not_bind_is_a_disputed_unit(self):
+        measurement, _ = self.unbound_claim()
+        unit = unit_of(measurement, "z", doc_id("ExternalCheck"))
+        self.assertEqual(unit.state, card_check.STATE_UNBOUND_CLAIM)
+        self.assertEqual(card_check.STATE_UNBOUND_CLAIM, "obsahuje, ale bez vazby")
+        self.assertTrue(unit.disputed)
+        self.assertEqual((unit.model_label, unit.final_label), ("OBSAHUJE", "NELZE"))
+        self.assertIn("neváže", unit.dispute_reason)
+        [claim_result] = measurement.results().claims
+        self.assertEqual(claim_result.status, card_check.CLAIM_DISPUTED)
+        self.assertEqual(claim_result.disputed_units, (unit.id,))
+        # the claim, still open, makes the fact it refers to disputed (not missing)
+        self.assertEqual({r.status for r in measurement.results().facts}, {FACT_DISPUTED})
+
+    def test_an_owner_decision_obsahuje_makes_the_claim_found_and_the_fact_conflicting(self):
+        measurement, _ = self.unbound_claim()
+        decided = tuple(u.with_decision("OBSAHUJE", "vlastník") if u.disputed else u
+                        for u in measurement.units)
+        results = derive_results(measurement.plan, decided)
+        [claim_result] = results.claims
+        self.assertEqual(claim_result.status, card_check.CLAIM_FOUND)
+        self.assertEqual([f["document"] for f in claim_result.found_in],
+                         [doc_id("ExternalCheck")])
+        self.assertEqual({r.status for r in results.facts}, {FACT_CONFLICT})
+
+    def test_a_claim_on_a_preselected_document_without_a_bound_block_is_unbound(self):
+        filler = "".join(f"- Vedlejší věta číslo {n} o něčem jiném — `{EXT}:100-110`\n"
+                         for n in range(500))
+        body = "## Run\n\n" f"- Zavolá externí registr — `{EXT}:30-35`\n" + filler
+        types = [TypeSpec("ExternalCheck", EXT, 3, 120, (("Run()", 20, 60),),
+                          card=card("ExternalCheck", EXT, 3, 120, body))]
+        catalog = make_catalog(question_json(
+            [fact("f", "Cokoli", [place(EXT, "ExternalCheck.Run()", radky="30-35")])],
+            [claim("z", "Něco jiného", [place(EXT, "ExternalCheck.Run()", radky=50)])]))
+        measurement, runner = self.check(catalog, [], types=types)
+        unit = unit_of(measurement, "z", doc_id("ExternalCheck"))
+        self.assertEqual((unit.mode, unit.state), (MODE_BOUND, STATE_NO_BOUND_BLOCK))
+        self.assertEqual(runner.calls_for("Něco jiného"), [])
+        [claim_result] = measurement.results().claims
+        self.assertEqual(claim_result.status, card_check.CLAIM_UNBOUND)
+        self.assertIn("nemá žádný blok vázaný", claim_result.reasons[0])
+
+
+class JudgeContextTest(CheckCase):
+    """The judge reads a block with its document title and section heading (KTD4)."""
+
+    SILENT_CARD = card("ExternalCheck", EXT, 3, 120, (
+        "## Silent return\n\n"
+        f"- Returns quietly when the document is missing — `{EXT}:44`\n"
+        f"- Other sentence about the check — `{EXT}:44`\n"))
+
+    def silent(self):
+        types = [TypeSpec("ExternalCheck", EXT, 3, 120, (("Run()", 20, 60),),
+                          card=self.SILENT_CARD)]
+        catalog = make_catalog(question_json([
+            fact("f", "Silent return of the check", [place(EXT, "ExternalCheck.Run()", radky=44)])]))
+        return catalog, types
+
+    def test_a_preselected_block_is_sent_with_the_title_and_the_section(self):
+        catalog = make_catalog(question_json([
+            fact("fm", "Tichý návrat v kontrole", [place(EXT, "ExternalCheck.Run()", radky=44)],
+                 role="misto")]))
+        measurement, runner = self.check(
+            catalog, [Rule("Tichý návrat", "vrací se tiše", "VYJADRUJE")],
+            types=RolesAndBlocksTest.detail_types(self))
+        unit = unit_of(measurement, "fm", f"detail:{doc_id('ExternalCheck')}")
+        self.assertEqual(unit.mode, MODE_BOUND)
+        self.assertTrue(all(b["title"] == "Detail of ExternalCheck" and b["section"] == "API"
+                            for b in unit.blocks))
+        sent = [c for c in runner.calls if any("vrací se tiše" in b for b in c.blocks)]
+        self.assertTrue(sent)
+        for block in sent[0].blocks:
+            self.assertTrue(block.startswith("Detail of ExternalCheck > API\n"), block)
+        self.assertTrue(sent[0].blocks[1].endswith("Odešle dokument; vrací se tiše — "
+                                                    f"`{EXT}:44`"))
+
+    def test_the_prompt_the_judge_gets_carries_the_context_in_the_fenced_block(self):
+        calls = []
+
+        def spy(spec, prompt, siblings):
+            if not prompt.startswith("KONTROLA HODNOTITELE"):
+                calls.append(prompt)
+            return runner(spec, prompt, siblings)
+
+        runner = ScriptedJudge([])
+        catalog = make_catalog(question_json([
+            fact("fm", "Tichý návrat v kontrole", [place(EXT, "ExternalCheck.Run()", radky=44)],
+                 role="misto")]))
+        self.check(catalog, runner=spy, types=RolesAndBlocksTest.detail_types(self))
+        prompt = next(p for p in calls if "vrací se tiše" in p)
+        self.assertRegex(prompt, r"DATA-\w+ BLOK 2\nDetail of ExternalCheck > API\nOdešle dokument")
+        self.assertIn("titulem dokumentu", prompt)
+
+    def test_a_card_goes_whole_with_its_title_and_the_headings_that_open_its_sections(self):
+        catalog = AcceptanceShapeTest.a1(self)
+        _, runner = self.check(catalog, AcceptanceShapeTest.rules(self))
+        blocks = runner.calls_for("Externí kontrola")[0].blocks
+        self.assertTrue(blocks[0].startswith("ExternalCheck\n"), blocks[0])  # the title
+        opening = [b for b in blocks if b.startswith("Run\n")]
+        self.assertEqual(len(opening), 1)  # the heading opens the first block of its section only
+        self.assertIn("Zavolá externí registr", opening[0])
+        self.assertTrue(any(b.startswith("Odešle dokument") for b in blocks))
+
+    def test_a_quotation_of_a_section_heading_verifies_and_binds_to_the_block_that_follows(self):
+        catalog, types = self.silent()
+        measurement, _ = self.check(catalog, [Rule("Silent", "Silent return", "VYJADRUJE")],
+                                    types=types)
+        unit = unit_of(measurement, "f", doc_id("ExternalCheck"), "podpora")
+        self.assertEqual(unit.mode, MODE_WHOLE)
+        self.assertEqual(unit.quote, "Silent return")
+        self.assertEqual((unit.state, unit.disputed, unit.final_label),
+                         (card_check.STATE_ASSESSED, False, "VYJADRUJE"))
+        self.assertEqual((unit.binding["section"], unit.binding["anchor"]),
+                         ("Silent return", f"{EXT}:44"))
+        self.assertEqual({r.status for r in measurement.results().facts}, {FACT_PRESENT})
+
+    def test_a_quotation_that_runs_from_the_heading_into_the_text_binds_too(self):
+        catalog, types = self.silent()
+        measurement, _ = self.check(
+            catalog, [Rule("Silent", "Silent return\nReturns quietly", "VYJADRUJE")], types=types)
+        unit = unit_of(measurement, "f", doc_id("ExternalCheck"), "podpora")
+        self.assertEqual((unit.state, unit.disputed), (card_check.STATE_ASSESSED, False))
+        self.assertEqual(unit.binding["section"], "Silent return")
+
+    def test_a_quotation_of_a_heading_whose_section_misses_the_place_is_not_bound(self):
+        catalog, types = self.silent()
+        catalog = make_catalog(question_json([
+            fact("f", "Silent return of the check", [place(EXT, "ExternalCheck.Run()", radky=30)])]))
+        measurement, _ = self.check(catalog, [Rule("Silent", "Silent return", "VYJADRUJE")],
+                                    types=types)
+        unit = unit_of(measurement, "f", doc_id("ExternalCheck"), "podpora")
+        self.assertEqual((unit.state, unit.final_label), (STATE_UNBOUND_FACT, "NELZE"))
+
+    def test_the_prompt_version_names_the_change(self):
+        self.assertEqual(card_check.PROMPT_VERSION, "2")
+
+
+class PlanningStructureTest(unittest.TestCase):
+    def test_the_planner_has_no_none_index_and_no_type_ignore(self):
+        import inspect
+        source = inspect.getsource(card_check)
+        self.assertNotIn("type: ignore", source)
+        self.assertFalse(hasattr(card_check, "_AnswerPlanner"))
+        self.assertFalse(hasattr(card_check, "_Planner"))
+        # corpus and answers are two sources of one planning function
+        self.assertTrue(hasattr(card_check, "_CorpusSource"))
+        self.assertTrue(hasattr(card_check, "_AnswerSource"))
+
+
+class MeasurementIdentityTest(CheckCase):
+    """Two corpora of one revision are two measurements (the report compares exactly that)."""
+
+    def catalog_and_rules(self):
+        return AcceptanceShapeTest.a1(self), AcceptanceShapeTest.rules(self)
+
+    def test_two_corpora_of_one_revision_have_two_ids_and_each_names_its_directory(self):
+        catalog, rules = self.catalog_and_rules()
+        one, _ = self.check(catalog, rules, name="corpus-a")
+        other, _ = self.check(catalog, rules, name="corpus-b")
+        self.assertEqual(one.corpus["revision"], other.corpus["revision"])
+        self.assertNotEqual(one.id, other.id)
+        self.assertEqual(one.corpus["corpus_path"], os.path.realpath(self.tmp / "corpus-a"))
+        self.assertEqual(other.corpus["corpus_path"], os.path.realpath(self.tmp / "corpus-b"))
+        self.assertNotIn("corpus_fingerprint", one.corpus)  # no receipt, no fingerprint
+
+    def test_the_same_corpus_is_the_same_measurement_and_a_new_mtime_does_not_change_it(self):
+        catalog, rules = self.catalog_and_rules()
+        root = self.corpus(name="corpus-a")
+        first = run_card_check(catalog, open_corpus(root, self.state), selection(),
+                               ScriptedJudge(rules), self.cache)
+        manifest = root / "manifest.json"
+        stat = manifest.stat()
+        os.utime(manifest, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+        index = open_corpus(root, self.state)
+        self.assertFalse(index.from_cache)  # the stat key changed, the index was rebuilt
+        again = run_card_check(catalog, index, selection(), ScriptedJudge(rules), self.cache)
+        self.assertEqual(first.id, again.id)  # so the resumption of a measurement still binds
+
+    def test_the_two_fixture_corpora_of_one_revision_have_two_ids(self):
+        # the probe of the review finding: one item, one judge, one family, two corpora
+        fixtures = Path(__file__).resolve().parent / "fixtures"
+        identities = [card_check.corpus_identity_json(open_corpus(fixtures / name, self.state))
+                      for name in ("corpus_l1", "corpus_l2")]
+        self.assertEqual(identities[0]["revision"], identities[1]["revision"])
+        items = [{"id": "Q1", "commit": REV, "otisk_potvrzeni": "x", "kontrolni": False,
+                  "dotaz": "Jak?"}]
+        ids = [card_check.measurement_id(identity, items, {"id": "j1"}, "claude")
+               for identity in identities]
+        self.assertNotEqual(ids[0], ids[1])
+
+    def test_the_fingerprint_of_the_receipt_is_part_of_the_identity(self):
+        catalog, rules = self.catalog_and_rules()
+        root = self.corpus(name="corpus-a")
+
+        def measure(fingerprint):
+            receipt_path(root).write_text(json.dumps({
+                "format_version": 1, "base_revision": REV, "tree_fingerprint": "t" * 8,
+                "corpus_fingerprint": fingerprint}), encoding="utf-8")
+            return run_card_check(catalog, open_corpus(root, self.state), selection(),
+                                  ScriptedJudge(rules), self.cache)
+
+        first, second, third = measure("a" * 8), measure("b" * 8), measure("a" * 8)
+        self.assertEqual(first.corpus["corpus_fingerprint"], "a" * 8)
+        self.assertNotEqual(first.id, second.id)
+        self.assertEqual(first.id, third.id)
 
 
 class MeasurementFileTest(CheckCase):

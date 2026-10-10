@@ -110,7 +110,9 @@ SUPPORTED_FORMAT_VERSIONS = (1, 2)
 
 KIND_BUG = "chyba"
 KIND_QUESTION = "otazka"
-ROLES = ("ramcova", "misto")
+ROLE_FRAMEWORK = "ramcova"  # a fact of the framework: the support reader needs it too
+ROLE_PLACE = "misto"  # a fact of a place: only the developer reads it
+ROLES = (ROLE_FRAMEWORK, ROLE_PLACE)
 
 _SHA = re.compile(r"^[0-9a-f]{7,64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")

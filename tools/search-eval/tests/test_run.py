@@ -1047,6 +1047,37 @@ class FreeAnswerFakeAgentTest(ExperimentTestCase):
         self.assertEqual(outcome.report["questions"][0]["variants"][0]["answered"], 3)
 
 
+class PromptLayerTest(unittest.TestCase):
+    """The prompt layer lives in `prompts.py`; `run.py` re-exports it for its callers."""
+
+    NAMES = ("PATH_BASE", "PROMPT_PLACEHOLDER", "PROMPT_TEMPLATE", "QUESTION_PROMPT_TEMPLATE",
+             "build_prompt", "item_text", "prompt_template", "sources_paragraph")
+
+    def test_run_re_exports_every_name_of_the_prompt_layer(self):
+        import prompts
+        for name in self.NAMES:
+            with self.subTest(name):
+                self.assertIs(getattr(run, name), getattr(prompts, name))
+
+    def test_the_templates_and_functions_are_defined_in_the_prompt_module(self):
+        import prompts
+        for name in ("build_prompt", "item_text", "prompt_template", "sources_paragraph"):
+            self.assertEqual(getattr(prompts, name).__module__, "prompts")
+        self.assertNotIn("PROMPT_TEMPLATE =", Path(run.__file__).read_text(encoding="utf-8"))
+
+    def test_the_prompt_text_is_what_it_was(self):
+        # The bytes of a stored prompt (its SHA-256 is in every report) must not move.
+        template = run.prompt_template("Zdroje.", "podpora", "otazka")
+        self.assertTrue(template.startswith("Odpovídáš na otázku uživatele systému. "))
+        self.assertIn("Dostupné zdroje:\nZdroje.\n", template)
+        self.assertIn("cesta je relativně ke kořeni zdrojáků systému, jak ji uvádí korpus a N",
+                      template)
+        case = run.prompt_template("Zdroje.", "vyvojar")
+        self.assertIn('{"file": "<cesta k souboru relativně k pracovnímu adresáři>", "member":',
+                      case)
+        self.assertEqual(case.count("{zadani_pripadu}"), 1)
+
+
 class VariantConfigTest(unittest.TestCase):
     def test_default_pair_and_validation(self):
         pair = run.default_variants(Path("c"), ["--x"])

@@ -46,16 +46,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from agents.base import (AgentAdapter, AgentEvent, AgentInit, AgentRunError, RunRecord,
-                         RunRequest, TokenUsage, ToolCall, ToolResult,
+                         RunRequest, TokenUsage, ToolCall, ToolResult, build_isolated_env,
                          generic_infrastructure_problem, isolated_config_dir,
-                         last_assistant_text, run_watched, seed_config_files, sum_usages)
+                         last_assistant_text, resolve_executable, run_watched,
+                         seed_config_files, sum_usages)
 
 ALLOWED_BUILTIN_TOOLS = ("Read", "Grep", "Glob")
 CREDENTIALS_FILE = ".credentials.json"
 
-# Inherited from the parent only because the OS or the runtime needs them.
-_INHERITED_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
-                  "LANG", "LC_ALL", "LC_CTYPE", "TZ")
 _PATH_ARG_KEYS = ("file_path", "path", "notebook_path")
 
 
@@ -287,37 +285,10 @@ def build_env(parent: Mapping[str, str], config_dir: str | os.PathLike[str]) -> 
     Non-essential traffic (telemetry, error reporting, update checks) is off
     so the model stays the only destination of the run's data (R14).
     """
-    by_upper = {key.upper(): value for key, value in parent.items()}
-    env = {name: by_upper[name] for name in _INHERITED_ENV if name in by_upper}
-    cfg = Path(config_dir)
-    tmp = cfg / "tmp"
-    env.update({
-        "HOME": str(cfg),
-        "USERPROFILE": str(cfg),
-        "APPDATA": str(cfg / "appdata"),
-        "LOCALAPPDATA": str(cfg / "localappdata"),
-        "XDG_CONFIG_HOME": str(cfg / "xdg-config"),
-        "XDG_CACHE_HOME": str(cfg / "xdg-cache"),
-        "XDG_DATA_HOME": str(cfg / "xdg-data"),
-        "TEMP": str(tmp),
-        "TMP": str(tmp),
-        "TMPDIR": str(tmp),
-        "CLAUDE_CONFIG_DIR": str(cfg),
+    return build_isolated_env(parent, config_dir, fixed={
+        "CLAUDE_CONFIG_DIR": str(Path(config_dir)),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     })
-    return env
-
-
-def _resolve_executable(executable: Sequence[str]) -> list[str]:
-    if not executable:
-        raise AgentRunError("Příkaz agenta je prázdný.")
-    first = executable[0]
-    if os.path.dirname(first):
-        return list(executable)
-    found = shutil.which(first)
-    if found is None:
-        raise AgentRunError(f"Spustitelný soubor {first} nebyl nalezen v PATH.")
-    return [found, *executable[1:]]
 
 
 # --- infrastructure failures -------------------------------------------------
@@ -399,7 +370,7 @@ class ClaudeCodeAdapter(AgentAdapter):
 
     def run(self, request: RunRequest) -> RunRecord:
         s = self.settings
-        executable = _resolve_executable(s.executable)
+        executable = resolve_executable(s.executable)
         if not s.credentials_source.is_file():
             raise AgentRunError(f"Přihlášení agenta {s.credentials_source} neexistuje.")
         keep_apart = [request.workdir, *s.keep_apart]

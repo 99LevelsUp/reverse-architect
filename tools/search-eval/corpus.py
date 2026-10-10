@@ -46,15 +46,15 @@ import hashlib
 import json
 import os
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
-from catalog import Place, member_qualified_names
+from catalog import ROLE_FRAMEWORK, ROLE_PLACE, Place, member_qualified_names
 from prepare import receipt_path
+from report import write_text_atomic
 
-INDEX_FORMAT_VERSION = 1
+INDEX_FORMAT_VERSION = 2  # 2: no `missing_documents`; an unreadable document stops the build
 
 MANIFEST_SINGLE = "manifest.json"
 MANIFEST_STRINGS = "manifest-strings.json"
@@ -244,6 +244,7 @@ class CorpusIdentity:
     revision: str
     source: str  # IDENTITY_FROM_RECEIPT | IDENTITY_FROM_COVERAGE
     tree_fingerprint: str | None = None
+    corpus_fingerprint: str | None = None  # of the corpus's files; the receipt has it
 
     @property
     def label(self) -> str:
@@ -276,9 +277,12 @@ def corpus_identity(corpus: Path, receipt: Path | None = None) -> CorpusIdentity
         if not isinstance(revision, str) or not revision.strip():
             raise CorpusError(f"Účtenka {receipt_file} nemá „base_revision“.")
         fingerprint = data.get("tree_fingerprint")
+        corpus_fingerprint = data.get("corpus_fingerprint")
         return CorpusIdentity(revision=revision, source=IDENTITY_FROM_RECEIPT,
                               tree_fingerprint=fingerprint if isinstance(fingerprint, str)
-                              else None)
+                              else None,
+                              corpus_fingerprint=corpus_fingerprint
+                              if isinstance(corpus_fingerprint, str) else None)
     coverage_file = corpus / COVERAGE
     if not coverage_file.is_file():
         raise CorpusError(f"Korpus {corpus} nemá {COVERAGE} ani účtenku; revize zdrojáků "
@@ -352,9 +356,9 @@ class PlaceDocuments:
 
     def for_role(self, role: str) -> tuple[DocHit, ...]:
         """Hits that count for a fact of `role`: `ramcova` takes cards and maps, `misto` all."""
-        if role == "ramcova":
+        if role == ROLE_FRAMEWORK:
             return tuple(h for h in self.hits if h.slot in FRAMEWORK_SLOTS)
-        if role == "misto":
+        if role == ROLE_PLACE:
             return self.hits
         raise ValueError(f"neznámá role {role!r}")
 
@@ -413,21 +417,6 @@ def _stat_key(corpus: Path) -> list[list[Any]]:
     return out
 
 
-def _write_index_atomic(path: Path, data: dict[str, Any]) -> None:
-    """Atomic write (temp file + `os.replace`), keys in insertion order so `format_version` is first."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, separators=(",", ":"))
-            handle.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
 def index_path(corpus: Path, state_dir: Path) -> Path:
     digest = hashlib.sha256(os.path.realpath(corpus).encode("utf-8")).hexdigest()[:16]
     return Path(state_dir) / f"corpus-index-{digest}.json"
@@ -442,7 +431,6 @@ class CorpusIndex:
         self.identity = identity
         self.from_cache = from_cache
         self.stat = data["stat"]
-        self.missing_documents: int = data["missing_documents"]
         self.docs: list[CorpusDoc] = [
             CorpusDoc(id=d[0], kind=d[1], level=d[2], parent=d[3], title=d[4], path=d[5],
                       header_path=d[6]) for d in data["documents"]]
@@ -629,14 +617,13 @@ def build_index(corpus: Path, identity: CorpusIdentity,
             raise CorpusError("Manifest: dokument bez „id“ nebo „path“.")
 
     anchors: dict[str, list[list[Any]]] = {}
-    missing = 0
     for doc_index, doc in enumerate(docs):
         path = corpus / doc[5]
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            missing += 1
-            continue
+        except OSError as exc:
+            # An index built without a document would be cached and silently lack its anchors.
+            raise CorpusError(f"Dokument {doc[0]}: soubor {doc[5]} nejde načíst: {exc}") from exc
         found: set[tuple[str, int | None, int | None, str]] = set()
         for _, line in iter_content_lines(text):
             if "`" not in line:
@@ -650,7 +637,7 @@ def build_index(corpus: Path, identity: CorpusIdentity,
     return {"format_version": INDEX_FORMAT_VERSION, "identity": {
                 "revision": identity.revision, "source": identity.source,
                 "tree_fingerprint": identity.tree_fingerprint},
-            "stat": stat, "missing_documents": missing, "documents": docs, "keys": keys,
+            "stat": stat, "documents": docs, "keys": keys,
             "nodes": by_file, "files": sorted(files), "anchors": anchors}
 
 
@@ -676,7 +663,7 @@ def open_corpus(corpus_dir: str | os.PathLike[str], state_dir: str | os.PathLike
     if cached is not None:
         return CorpusIndex(corpus, identity, cached, from_cache=True)
     data = build_index(corpus, identity, stat)
-    _write_index_atomic(target, data)
+    write_text_atomic(target, json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n")
     return CorpusIndex(corpus, identity, data, from_cache=False)
 
 
@@ -690,7 +677,6 @@ def _load_cached(target: Path, stat: list[list[Any]],
         return None
     if data.get("stat") != stat or data.get("identity", {}).get("revision") != identity.revision:
         return None
-    if any(name not in data for name in ("documents", "keys", "nodes", "files", "anchors",
-                                         "missing_documents")):
+    if any(name not in data for name in ("documents", "keys", "nodes", "files", "anchors")):
         return None
     return data

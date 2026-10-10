@@ -26,7 +26,12 @@ Paths (KTD13). The catalog, the judges file, the state directory, the files of t
 report are refused inside the source repository, this tool's repository and every worktree of
 either (exit code 2, the message names the path), before anything is read or written. The state
 directory is also refused when it overlaps a corpus the command is given (`--korpus`, or the corpus
-of a variant of the attempt handed to `hodnot-odpovedi`), because an agent reads those.
+of a variant of the attempt handed to `hodnot-odpovedi`), because an agent reads those. The inputs of a
+measurement are protected like its outputs: the measurements (`--mereni`, those a review file names),
+the directory of the attempt. The files of the owner's review (the JSON, its `.md` and the proposals
+file), the report's output and calibration directory and the calibration set also stay apart from every
+corpus of the measurements they are about (`corpus_path` of a card check, `pokus.korpusy_variant` of
+an attempt).
 
 Exit codes: 0 done, 2 invalid input (also a missing argument), 3 judge
 unavailable or infrastructure failure (the measurement stays `nedokonceno` and
@@ -213,6 +218,35 @@ def _keep_apart(first: str | os.PathLike[str], first_what: str,
                          "četl záznamy hodnotitele a rozhodnutí. Zvol cestu mimo něj.")
 
 
+def _measured_corpora(measurements: Sequence[review.LoadedMeasurement]) -> list[tuple[str, str]]:
+    """Every corpus an agent could read for these measurements, as (its name, its directory).
+
+    A card check records the canonical path of its corpus (`corpus_path` of the `corpus` key),
+    the check of the answers of an attempt the directory of each variant's corpus
+    (`pokus.korpusy_variant`, outside `corpus`, so a path is not part of the measurement's id); a
+    measurement made before they were recorded names none.
+    """
+    out: list[tuple[str, str]] = []
+    for loaded in measurements:
+        path = loaded.corpus.get("corpus_path")
+        if isinstance(path, str) and path:
+            out.append((f"korpus měření {loaded.path.name}", path))
+        attempt = loaded.header.get("pokus")
+        for variant in (attempt.get("korpusy_variant") if isinstance(attempt, dict) else None) or ():
+            directory = variant.get("adresar") if isinstance(variant, dict) else None
+            if isinstance(directory, str) and directory:
+                out.append((f"korpus varianty {variant.get('nazev')} měření {loaded.path.name}",
+                            directory))
+    return out
+
+
+def _keep_apart_from_corpora(path: str | os.PathLike[str], what: str,
+                             corpora: Sequence[tuple[str, str]]) -> None:
+    """Refuse `path` when it overlaps a corpus an agent reads (see `_measured_corpora`)."""
+    for label, directory in corpora:
+        _keep_apart(path, what, directory, label)
+
+
 # --- hodnot-odpovedi -------------------------------------------------------------------
 
 def configure_answers(parser: argparse.ArgumentParser) -> None:
@@ -360,6 +394,7 @@ def command_answers(args: argparse.Namespace, services: Services) -> int:
     state = guard.outside(args.stav, "Stavový adresář")
     guard.outside(args.katalog, "Katalog")
     guard.outside(args.hodnotitele, "Soubor hodnotitelů")
+    guard.outside(args.pokus, "Adresář pokusu")
     attempt = load_attempt(args.pokus)
     for variant in attempt.variants:
         corpus_dir = variant.get("corpus_dir")
@@ -387,7 +422,10 @@ def command_answers(args: argparse.Namespace, services: Services) -> int:
         "behy": [{"run": r.run, "otazka": r.question_id, "varianta": r.variant,
                   "odpoved": r.text is not None} for r in runs],
         "bez_odpovedi": [{"run": r.run, "otazka": r.question_id, "varianta": r.variant,
-                          "duvod": r.reason} for r in runs if r.text is None]}}
+                          "duvod": r.reason} for r in runs if r.text is None],
+        "korpusy_variant": [{"nazev": v.get("name"), "adresar": v.get("corpus_dir")}
+                            for v in attempt.variants
+                            if isinstance(v.get("corpus_dir"), str) and v.get("corpus_dir")]}}
 
     path = card_check.measurement_path(state / ANSWERS_DIR / attempt.directory.name)
     plan_id = None
@@ -461,6 +499,13 @@ def command_review(args: argparse.Namespace, services: Services) -> int:
             raise InputError("--nacti se nedá spojit s --mereni, --vystup ani --seminko.")
         guard.outside(args.nacti, "Soubor ke kontrole")
         guard.outside(review.proposals_path(args.nacti), "Soubor návrhů ke kontrole")
+        listed = review.listed_measurements(args.nacti)
+        for path in listed:
+            guard.outside(path, "Měření ze souboru ke kontrole")
+        corpora = _measured_corpora([review.load_measurement(path) for path in listed])
+        _keep_apart_from_corpora(args.nacti, "Soubor ke kontrole", corpora)
+        _keep_apart_from_corpora(review.proposals_path(args.nacti), "Soubor návrhů ke kontrole",
+                                 corpora)
         result = review.ingest_review(args.nacti, state)
         print(f"Načteno: {result.decided} rozhodnutí ({result.new} nových nebo změněných), "
               f"{result.empty} řádků zůstalo prázdných.")
@@ -472,10 +517,18 @@ def command_review(args: argparse.Namespace, services: Services) -> int:
                          "(nebo --nacti pro načtení vyplněného souboru).")
     guard.outside(args.vystup, "Soubor ke kontrole")
     guard.outside(review.markdown_path(args.vystup), "Čitelná verze souboru ke kontrole")
+    for path in args.mereni:
+        guard.outside(path, "Měření")
     loaded = [review.load_measurement(path) for path in args.mereni]
+    corpora = _measured_corpora(loaded)
+    _keep_apart_from_corpora(args.vystup, "Soubor ke kontrole", corpora)
+    _keep_apart_from_corpora(review.markdown_path(args.vystup), "Čitelná verze souboru ke kontrole",
+                             corpora)
+    _keep_apart_from_corpora(review.proposals_path(args.vystup), "Soubor návrhů ke kontrole",
+                             corpora)
     plan = review.build_review(loaded, review.load_decisions(state), args.seminko)
-    json_path, md_path = review.write_review(plan, args.vystup)
-    review.record_sampled(state, plan)
+    # The sample is recorded before the files are published (see `review.write_review`).
+    json_path, md_path = review.write_review(plan, args.vystup, state)
     print(f"Kontrola vlastníka: {len(plan.rows)} řádků, z toho {plan.disputed_count} sporných; "
           f"semínko {plan.seed}.")
     for label, (total, drawn) in sorted(plan.sample_sizes.items()):
@@ -513,9 +566,16 @@ def command_answers_report(args: argparse.Namespace, services: Services) -> int:
     output = _checked_output_dir(guard, args.vystup)
     state = guard.outside(args.stav, "Stavový adresář")
     guard.outside(args.kalibrace, "Adresář výsledků kalibrace")
-    fingerprint = None
+    for path in args.mereni:
+        guard.outside(path, "Měření")
     if args.sada_kalibrace is not None:
         guard.outside(args.sada_kalibrace, "Sada kalibrace")
+    corpora = _measured_corpora([review.load_measurement(path) for path in args.mereni])
+    _keep_apart_from_corpora(args.vystup, "Výstupní adresář", corpora)
+    _keep_apart_from_corpora(args.kalibrace, "Adresář výsledků kalibrace", corpora)
+    fingerprint = None
+    if args.sada_kalibrace is not None:
+        _keep_apart_from_corpora(args.sada_kalibrace, "Sada kalibrace", corpora)
         try:
             fingerprint = calibration.load_set(args.sada_kalibrace).fingerprint
         except calibration.CalibrationSetError as exc:

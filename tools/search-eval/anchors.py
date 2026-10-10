@@ -44,6 +44,7 @@ from typing import Iterable
 
 from catalog import Place, member_qualified_names
 from corpus import Anchor, iter_content_lines, parse_anchors
+from report import ROLE_DEVELOPER, ROLE_SUPPORT
 
 # A document over this many bytes is not given to the judge whole: its blocks
 # are preselected by place instead. Part of the judge's prompt version.
@@ -89,6 +90,7 @@ class ParsedDocument:
     header_anchors: tuple[Anchor, ...]
     has_anchors: bool
     answer: bool = False
+    headings: tuple[str, ...] = ()  # the heading text of every section by section_id; [0] is ""
 
 
 @dataclass(frozen=True)
@@ -107,10 +109,6 @@ class BoundBlock:
     via: str
 
 
-AUDIENCE_DEVELOPER = "vyvojar"
-AUDIENCE_SUPPORT = "podpora"
-
-
 def audiences(slots: Iterable[str]) -> tuple[str, ...]:
     """Whose question a fact answers, given the slots of the documents with a bound block.
 
@@ -121,9 +119,9 @@ def audiences(slots: Iterable[str]) -> tuple[str, ...]:
     """
     found = set(slots)
     if found & {"karta", "mapa"}:
-        return (AUDIENCE_DEVELOPER, AUDIENCE_SUPPORT)
+        return (ROLE_DEVELOPER, ROLE_SUPPORT)
     if found:
-        return (AUDIENCE_DEVELOPER,)
+        return (ROLE_DEVELOPER,)
     return ()
 
 
@@ -151,6 +149,7 @@ class _Builder:
         self.section_id = 0
         self.section = ""
         self.heading_anchors: list[tuple[Anchor, ...]] = [()]
+        self.headings: list[str] = [""]
         self.open: int | None = None   # block that a following plain line continues
         self.stack: list[tuple[int, int]] = []  # (indent, block index) of open list items
 
@@ -165,6 +164,7 @@ class _Builder:
         self.section_id += 1
         self.section = text
         self.heading_anchors.append(parse_anchors(text, self.known, self.plain))
+        self.headings.append(text)
         self.open = None
         self.stack.clear()
 
@@ -244,7 +244,8 @@ def parse_document(text: str, doc_id: str = "", title: str = "", level: str | No
     return ParsedDocument(doc_id=doc_id, title=title, level=level,
                           size_bytes=len(text.encode("utf-8")), blocks=tuple(blocks),
                           heading_anchors=tuple(builder.heading_anchors),
-                          header_anchors=header_anchors, has_anchors=has_anchors)
+                          header_anchors=header_anchors, has_anchors=has_anchors,
+                          headings=tuple(builder.headings))
 
 
 def parse_answer(text: str, doc_id: str = "odpoved", title: str = "Odpověď agenta",
@@ -360,18 +361,67 @@ def bound_blocks(doc: ParsedDocument, place: Place) -> list[BoundBlock]:
     return [b for b in out if b is not None]
 
 
+# --- what the judge reads ------------------------------------------------------------
+
+def judge_text(title: str, section: str, text: str) -> str:
+    """A block as the judge reads it: a line `title > section` above the text (KTD4).
+
+    Either part may be empty and is then left out; with both empty the text is unchanged.
+    """
+    context = " > ".join(part for part in (title, section) if part)
+    return f"{context}\n{text}" if context else text
+
+
+def whole_judge_texts(doc: ParsedDocument) -> list[str]:
+    """The blocks of a document that goes to the judge whole, with the headings that open them.
+
+    The title of the document opens its first block. The heading of a section opens the first
+    block of that section, together with the headings of the sections before it that have no
+    block of their own (`## Dynamic access`, `### Context`, then `#### caller: X` with the
+    block): a heading line belongs to the block that follows it. So the judge reads the
+    document with its title and every heading. An agent's answer has neither.
+    """
+    out: list[str] = []
+    shown = 0  # the last section whose heading is already in a block
+    for block in doc.blocks:
+        section = ""
+        if block.section_id > shown:
+            headings = doc.headings[shown + 1:block.section_id + 1] or (block.section,)
+            section = " > ".join(h for h in headings if h)
+            shown = block.section_id
+        title = "" if doc.answer or block.index != 0 else doc.title
+        out.append(judge_text(title, section, block.text))
+    return out
+
+
 def _normalize(text: str) -> str:
     return " ".join(text.replace("`", "").split()).casefold()
 
 
 def citation_blocks(doc: ParsedDocument, citation: str) -> list[Block]:
-    """The blocks a citation quotes: those whose text contains it, else those it contains."""
+    """The blocks a citation quotes, in the order of preference.
+
+    1. the blocks whose text contains it;
+    2. the blocks whose text as the judge read it contains it (`whole_judge_texts`): a quotation
+       of a heading or of the title lands on the block that follows the heading, one that runs
+       from a heading into the text on the block it runs into;
+    3. the same for a block read as a bound block, with `titul > sekce` above it;
+    4. the blocks of at least 12 characters that the citation contains.
+    """
     cited = _normalize(citation)
     if not cited:
         return []
     whole = [b for b in doc.blocks if cited in _normalize(b.text)]
     if whole:
         return whole
+    read = [b for b, text in zip(doc.blocks, whole_judge_texts(doc)) if cited in _normalize(text)]
+    if read:
+        return read
+    if not doc.answer:
+        bound = [b for b in doc.blocks
+                 if cited in _normalize(judge_text(doc.title, b.section, b.text))]
+        if bound:
+            return bound
     return [b for b in doc.blocks if len(_normalize(b.text)) >= 12 and _normalize(b.text) in cited]
 
 

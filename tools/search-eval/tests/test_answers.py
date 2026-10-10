@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +22,7 @@ import prepare
 import report
 import review
 import run
-from agents.judge_cli import CliReply, JudgeInfrastructureError
+from agents.judge_cli import CliReply, JudgeInfrastructureError, run_judge_cli
 from catalog import parse_catalog
 from tests.test_calibration import SentenceRunner, expected_rule
 from tests.test_card_check import (EVMN, EXT, OTHER_REV, REV, Rule, ScriptedJudge, a1_types,
@@ -252,6 +253,39 @@ class CardCheckCommandTest(AnswersCase):
                                side_effect=AssertionError("load_corpus se volat nesmí")):
             self.assertEqual(self.run_main(self.args(), ScriptedJudge(RULES))[0], 0)
 
+    def test_two_corpora_of_one_revision_are_two_measurements_and_none_is_overwritten(self):
+        other = build_corpus(self.tmp / "other", a1_types())
+        self.assertEqual(self.run_main(self.args(), ScriptedJudge(RULES))[0], 0)
+        first = self.measurement()
+        code, out, err = self.run_main(self.args(**{"--korpus": str(other)}), ScriptedJudge(RULES))
+        self.assertEqual(code, 0, err)
+        second = self.measurement()
+        self.assertEqual(first["corpus"]["revision"], second["corpus"]["revision"])
+        self.assertNotEqual(first["id"], second["id"])
+        archived = self.state / f"measurement.{first['id']}.json"
+        self.assertEqual(json.loads(archived.read_text(encoding="utf-8"))["id"], first["id"])
+        self.assertIn("Dřívější měření", out)
+        self.assertEqual(second["corpus"]["corpus_path"], os.path.realpath(other))
+
+    def test_a_judge_that_cannot_be_started_during_the_run_is_code_3_and_incomplete(self):
+        scripted = ScriptedJudge(RULES)
+        unstartable = str(self.tmp / "neni" / "cli.exe")
+
+        def runner(spec, prompt, siblings):
+            if prompt.startswith("KONTROLA HODNOTITELE"):
+                return scripted(spec, prompt, siblings)  # the smoke test passes
+            return run_judge_cli(command=(unstartable,), family="openai",
+                                 output_shape="claude-json", credentials=[], variables=[],
+                                 prompt=prompt, isolation_root=self.tmp / "izolace", seconds=10)
+
+        code, _, err = self.run_main(self.args(), runner)
+        self.assertEqual(code, 3)
+        self.assertIn("nedokončené", err)
+        self.assertIn("Hodnotitele nejde spustit", err)
+        data = self.measurement()
+        self.assertEqual((data["status"], data["results"]), ("nedokonceno", None))
+        self.assertEqual(list((self.tmp / "izolace").iterdir()), [])
+
 
 class ReviewCommandTest(AnswersCase):
     """`answers.py kontrola`: the file to check and loading it back."""
@@ -353,6 +387,59 @@ class ReviewCommandTest(AnswersCase):
             "--nacti", "x.json", **{"--stav": str(REPO / "tmp-stav")}))
         self.assertEqual(code, 2)
         self.assertIn("Stavový adresář", err)
+
+    def test_one_owner_review_over_two_measurements_of_one_revision_loads_back(self):
+        first_path = self.finished_measurement()
+        first_id = self.measurement()["id"]
+        other = build_corpus(self.tmp / "other", a1_types())
+        self.assertEqual(self.run_main(self.args(**{"--korpus": str(other)}),
+                                       ScriptedJudge(RULES))[0], 0)
+        current = card_check.measurement_path(self.state)
+        archived = self.state / f"measurement.{first_id}.json"
+        self.assertTrue(archived.is_file())
+        self.assertEqual(first_path, current)  # the file the first run wrote was moved aside
+        target = self.tmp / "kontrola.json"
+        code, _, err = self.run_main(self.review_args(
+            "--mereni", str(archived), "--mereni", str(current), "--vystup", str(target),
+            "--seminko", "5"))
+        self.assertEqual(code, 0, err)
+        data = json.loads(target.read_text(encoding="utf-8"))
+        self.assertEqual({row["mereni"] for row in data["radky"]},
+                         {first_id, self.measurement()["id"]})
+        for row in data["radky"]:
+            row["rozhodnuti"] = "vyjadruje" if row["druh"] == "fakt" else "neobsahuje"
+        target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        code, _, err = self.run_main(self.review_args("--nacti", str(target)))
+        self.assertEqual(code, 0, err)
+        for path in (archived, current):
+            self.assertEqual(review.review_state(path, self.state).missing, ())
+
+    def test_a_sample_that_cannot_be_recorded_leaves_no_review_file(self):
+        measurement = self.finished_measurement()
+        target = self.tmp / "kontrola.json"
+        # the record is a directory: the write of the sampled units fails with an OS error
+        review.sampled_path(self.state).mkdir(parents=True)
+        code, _, err = self.run_main(self.review_args(
+            "--mereni", str(measurement), "--vystup", str(target)))
+        self.assertEqual(code, 2)
+        self.assertIn("nejde uložit", err)
+        self.assertEqual((target.exists(), target.with_suffix(".md").exists()), (False, False))
+
+    def test_the_sample_is_known_before_the_review_file_is_published(self):
+        measurement = self.finished_measurement()
+        target = self.tmp / "kontrola.json"
+        order = []
+        real = review._write_json_atomic
+
+        def spy(path, data):
+            order.append(path.name)
+            return real(path, data)
+
+        with mock.patch.object(review, "_write_json_atomic", spy):
+            code, _, err = self.run_main(self.review_args(
+                "--mereni", str(measurement), "--vystup", str(target)))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(order, [review.SAMPLED_FILE, "kontrola.json"])
 
 
 # --- hodnot-odpovedi (KTD10) --------------------------------------------------------------------
@@ -623,11 +710,12 @@ class AnswerShapeTest(AnswerCheckCase):
             self.assertIn(key, data)
         self.assertEqual(data["items"], [{"id": "Q1", "commit": REV,
                                           "otisk_potvrzeni": self.question.otisk_potvrzeni,
-                                          "kontrolni": False}])
+                                          "kontrolni": False, "dotaz": self.question.dotaz}])
         self.assertEqual(data["corpus"]["source"], "odpověď agenta")
         self.assertEqual([v["korpus"]["corpus_fingerprint"] for v in data["corpus"]["varianty"]],
                          ["c" * 8, "c" * 8])
         self.assertNotIn("corpus_dir", json.dumps(data))
+        self.assertEqual(data["pokus"]["korpusy_variant"], [])  # the test attempt has no corpus
         self.assertNotIn("cli-ktery-se-nespusti", json.dumps(data))
         for unit in data["units"]:
             self.assertEqual(unit["document_path"], "odpověď agenta")
@@ -818,7 +906,7 @@ class ProtectedPathsTest(ProtectedPathsCase):
                 ["kontrola"],
                 {**common, "--stav": self.state, "--mereni": nothing,
                  "--vystup": self.tmp / "kontrola.json"},
-                ("--stav", "--vystup")),
+                ("--stav", "--vystup", "--mereni")),
             "kontrola (načtení)": (
                 ["kontrola"], {**common, "--stav": self.state, "--nacti": nothing},
                 ("--stav", "--nacti")),
@@ -827,7 +915,7 @@ class ProtectedPathsTest(ProtectedPathsCase):
                 {**common, "--mereni": nothing, "--vystup": self.tmp / "zprava",
                  "--stav": self.state, "--kalibrace": self.tmp / "kalibrace",
                  "--sada-kalibrace": self.tmp / "sada.json"},
-                ("--vystup", "--stav", "--kalibrace", "--sada-kalibrace")),
+                ("--vystup", "--stav", "--kalibrace", "--sada-kalibrace", "--mereni")),
             "kalibrace": (
                 ["kalibrace"],
                 {**common, "--agent-family": "claude", "--sada": self.tmp / "sada.json",
@@ -853,7 +941,7 @@ class ProtectedPathsTest(ProtectedPathsCase):
                         self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
                         self.assertFalse((root / "uvnitr").exists())
                         checked += 1
-        self.assertEqual(checked, 3 * (3 + 3 + 2 + 2 + 4 + 4))
+        self.assertEqual(checked, 3 * (3 + 3 + 3 + 2 + 5 + 4))
 
     def test_a_link_into_a_protected_root_is_refused_like_the_root(self):
         from tests.test_prepare import _make_dir_link, _remove_dir_link
@@ -926,6 +1014,135 @@ class AnswerStateAgainstCorpusTest(AnswerCheckCase):
         self.with_corpus_dir(directory, self.tmp / "korpus-varianty-b")
         code, _, err = self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))
         self.assertEqual(code, 0, err)
+
+
+class MeasurementInputsTest(ProtectedPathsCase):
+    """The inputs of a measurement are protected like its outputs: nothing is read from a repository."""
+
+    def test_the_measurements_of_the_review_and_of_the_report_are_refused_inside_a_root(self):
+        for what, root in self.roots:
+            inside = root / "uvnitr" / "measurement.json"
+            lines = {
+                "kontrola": flat(["kontrola"], {
+                    "--source-repo": self.source, "--stav": self.state, "--mereni": inside,
+                    "--vystup": self.tmp / "kontrola.json"}),
+                "zprava": flat(["zprava"], {
+                    "--source-repo": self.source, "--mereni": inside,
+                    "--vystup": self.tmp / "zprava", "--stav": self.state,
+                    "--kalibrace": self.tmp / "kalibrace"})}
+            for command, argv in lines.items():
+                with self.subTest(command=command, root=what):
+                    code, _, err = self.run_main(argv)
+                    self.assertEqual(code, 2, err)
+                    self.assertIn(str(inside), err)
+                    self.assertIn("leží uvnitř", err)
+                    self.assertFalse((root / "uvnitr").exists())
+
+    def test_a_measurement_named_inside_a_review_file_is_refused(self):
+        for number, (what, root) in enumerate(self.roots):
+            inside = root / "uvnitr" / "measurement.json"
+            listed = self.tmp / f"kontrola-{number}.json"
+            listed.write_text(json.dumps({"format_version": 1, "radky": [], "mereni": [
+                {"id": "m", "cesta": str(inside)}]}), encoding="utf-8")
+            with self.subTest(root=what):
+                code, _, err = self.run_main(flat(["kontrola"], {
+                    "--source-repo": self.source, "--stav": self.state, "--nacti": listed}))
+                self.assertEqual(code, 2, err)
+                self.assertIn(str(inside), err)
+                self.assertIn("leží uvnitř", err)
+                self.assertFalse(review.decisions_path(self.state).exists())
+
+    def test_the_attempt_directory_is_refused_inside_a_root(self):
+        for what, root in self.roots:
+            inside = root / "uvnitr" / "pokus"
+            with self.subTest(root=what):
+                runner = ScriptedJudge(RULES)
+                code, _, err = self.run_main(flat(["hodnot-odpovedi", str(inside)], {
+                    "--source-repo": self.source, "--katalog": self.catalog,
+                    "--hodnotitele": self.judges, "--stav": self.state}), runner)
+                self.assertEqual(code, 2, err)
+                self.assertIn("Adresář pokusu", err)
+                self.assertIn(str(inside), err)
+                self.assertEqual((runner.calls, runner.smoke_calls), ([], 0))
+
+
+class ReviewFilesAgainstCorpusTest(AnswersCase):
+    """The owner's files stay out of the corpus an agent reads (the card check's corpus)."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertEqual(self.run_main(self.args(), ScriptedJudge(RULES))[0], 0)
+        self.measurement_path = card_check.measurement_path(self.state)
+
+    def review_line(self, *extra):
+        return ["kontrola", "--source-repo", str(REPO), "--stav", str(self.state), *extra]
+
+    def test_the_review_files_inside_the_measured_corpus_are_refused(self):
+        inside = self.corpus / "kontrola.json"
+        code, _, err = self.run_main(self.review_line(
+            "--mereni", str(self.measurement_path), "--vystup", str(inside)))
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+        self.assertIn("korpus měření", err)
+        self.assertEqual((inside.exists(), inside.with_suffix(".md").exists()), (False, False))
+        self.assertFalse(review.sampled_path(self.state).exists())
+        beside = self.tmp / "kontrola.json"
+        self.assertEqual(self.run_main(self.review_line(
+            "--mereni", str(self.measurement_path), "--vystup", str(beside)))[0], 0)
+
+    def test_a_filled_review_file_inside_the_corpus_is_not_loaded(self):
+        beside = self.tmp / "kontrola.json"
+        self.assertEqual(self.run_main(self.review_line(
+            "--mereni", str(self.measurement_path), "--vystup", str(beside)))[0], 0)
+        data = json.loads(beside.read_text(encoding="utf-8"))
+        for row in data["radky"]:
+            row["rozhodnuti"] = "vyjadruje" if row["druh"] == "fakt" else "neobsahuje"
+        inside = self.corpus / "vyplnena.json"
+        inside.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        code, _, err = self.run_main(self.review_line("--nacti", str(inside)))
+        self.assertEqual(code, 2)
+        self.assertIn("překrývá", err)
+        self.assertFalse(review.decisions_path(self.state).exists())
+        beside.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.assertEqual(self.run_main(self.review_line("--nacti", str(beside)))[0], 0)
+
+    def test_the_report_files_and_the_calibration_set_inside_the_corpus_are_refused(self):
+        values = {"--vystup": self.tmp / "zprava", "--kalibrace": self.tmp / "kalibrace"}
+        for option in ("--vystup", "--kalibrace", "--sada-kalibrace"):
+            inside = self.corpus / "uvnitr" / option.lstrip("-")
+            options = {"--source-repo": REPO, "--mereni": self.measurement_path,
+                       "--stav": self.state, **values}
+            options[option] = inside
+            with self.subTest(option=option):
+                code, _, err = self.run_main(flat(["zprava"], options))
+                self.assertEqual(code, 2, err)
+                self.assertIn("překrývá", err)
+                self.assertIn(str(inside), err)
+                self.assertFalse(inside.exists())
+
+
+class ReviewFilesAgainstVariantCorpusTest(AnswerCheckCase):
+    """The same for the answer check: the corpus of any variant of the attempt."""
+
+    def test_the_review_files_inside_the_corpus_of_a_variant_are_refused(self):
+        directory = self.attempt([self.answered(1, "A", SILENT_WITH_TYPE)])
+        corpus = self.tmp / "korpus-varianty-b"
+        AnswerStateAgainstCorpusTest.with_corpus_dir(self, directory, corpus)
+        self.assertEqual(self.run_main(self.command(directory), ScriptedJudge(ANSWER_RULES))[0], 0)
+        data = self.load()
+        self.assertEqual(data["pokus"]["korpusy_variant"], [{"nazev": "B", "adresar": str(corpus)}])
+        self.assertNotIn(str(corpus), json.dumps(data["corpus"]))  # no path in what the id hashes
+        inside = corpus / "kontrola.json"
+        code, _, err = self.run_main(["kontrola", "--source-repo", str(REPO), "--stav",
+                                      str(self.state), "--mereni", str(self.measurement_file()),
+                                      "--vystup", str(inside)])
+        self.assertEqual(code, 2)
+        self.assertIn("korpus varianty B", err)
+        self.assertFalse(inside.exists())
+        beside = self.tmp / "kontrola.json"
+        self.assertEqual(self.run_main(["kontrola", "--source-repo", str(REPO), "--stav",
+                                        str(self.state), "--mereni", str(self.measurement_file()),
+                                        "--vystup", str(beside)])[0], 0)
 
 
 # --- kalibrace ----------------------------------------------------------------------------------

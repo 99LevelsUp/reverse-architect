@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 import card_check
 import review
@@ -308,6 +309,200 @@ class IngestTest(ReviewCase):
             review.ingest_review(path, self.state)
 
 
+class NormalizeTextTest(unittest.TestCase):
+    """The key of the owner's decision and the judge's cache normalize text by one function."""
+
+    def test_there_is_one_function(self):
+        import judge
+        self.assertIs(review.normalize_text, judge.normalize_text)
+
+    def test_it_collapses_every_whitespace_character_as_the_removed_copy_did(self):
+        import sys
+        import unicodedata
+        import judge
+        checked = 0
+        for code in range(sys.maxunicode + 1):
+            char = chr(code)
+            if not char.isspace():
+                continue
+            for text in (f"a{char}b", f"{char}a{char}{char}b{char}", f"a{char}\n{char}b"):
+                old = " ".join(unicodedata.normalize("NFC", text).split())
+                self.assertEqual(judge.normalize_text(text), old, hex(code))
+            checked += 1
+        self.assertGreater(checked, 20)
+
+
+class IntegrityTest(ReviewCase):
+    """The checks that guard the owner's decision store: every branch refuses and stores nothing."""
+
+    def filled_file(self, units=None, values=None):
+        path = self.write_review(self.review_of(units or [make_unit(1, disputed=True)]))
+        if values:
+            self.fill(path, values)
+        return path
+
+    def rewrite(self, path, mutate):
+        data = json.loads(path.read_text("utf-8"))
+        mutate(data)
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+    def test_two_rows_of_one_unit_decided_differently_are_refused_and_nothing_is_stored(self):
+        path = self.filled_file()
+
+        def twin(data):
+            copy = dict(data["radky"][0], radek=2)
+            data["radky"][0]["rozhodnuti"] = "vyjadruje"
+            copy["rozhodnuti"] = "nevyjadruje"
+            data["radky"].append(copy)
+
+        self.rewrite(path, twin)
+        with self.assertRaisesRegex(review.ReviewError,
+                                    "řádek 2: stejná jednotka je v souboru rozhodnutá jinak "
+                                    r"\(řádek 1\)"):
+            review.ingest_review(path, self.state)
+        self.assertFalse(review.decisions_path(self.state).exists())
+        # the same decision on both rows is one decision
+        self.rewrite(path, lambda data: data["radky"][1].update(rozhodnuti="vyjadruje"))
+        self.assertEqual(review.ingest_review(path, self.state).decided, 1)
+
+    def test_a_falsehood_that_is_not_text_is_refused(self):
+        for wrong in (5, ["a"], {"b": 1}, True):
+            with self.subTest(wrong=wrong):
+                path = self.filled_file(values={1: "nevyjadruje"})
+                self.rewrite(path, lambda data: data["radky"][0].update(nepravda=wrong))
+                with self.assertRaisesRegex(review.ReviewError,
+                                            "řádek 1: „nepravda“ musí být text"):
+                    review.ingest_review(path, self.state)
+                self.assertFalse(review.decisions_path(self.state).exists())
+                path.unlink()
+                path.with_suffix(".md").unlink()
+
+    def test_a_damaged_proposals_file_stops_the_loading_before_a_decision_is_stored(self):
+        path = self.filled_file(values={1: ("nevyjadruje", "Karta tvrdí opak")})
+        proposals = review.proposals_path(path)
+        proposals.write_text("{rozbité", encoding="utf-8")
+        with self.assertRaisesRegex(review.ReviewError, "nejde načíst; oprav ho"):
+            review.ingest_review(path, self.state)
+        self.assertFalse(review.decisions_path(self.state).exists())
+        for broken in ('{"navrhy": [{"bez": "klice"}]}', "[]", '{"navrhy": 5}'):
+            proposals.write_text(broken, encoding="utf-8")
+            with self.assertRaisesRegex(review.ReviewError, "nejde načíst"):
+                review.ingest_review(path, self.state)
+        proposals.unlink()
+        self.assertEqual(review.ingest_review(path, self.state).proposals, 1)
+
+    def test_a_stored_decision_that_does_not_fit_the_unit_is_refused_by_the_report_state(self):
+        unit = make_unit(1)
+        path = write_units(self.tmp, [unit])
+        key = review.decision_key(unit)
+        for name, record in (
+                ("kind", {"druh": KIND_FORBIDDEN, "stitek": LABEL_CONTAINS}),
+                ("label of the other kind", {"druh": KIND_FACT, "stitek": LABEL_CONTAINS}),
+                ("no label", {"druh": KIND_FACT})):
+            with self.subTest(name):
+                review.save_decisions(self.state, {key: {**record, "rozhodl": "vlastník"}})
+                with self.assertRaisesRegex(review.ReviewError,
+                                            "nesedí k jejímu druhu.*poškozený"):
+                    review.review_state(path, self.state)
+        review.save_decisions(self.state, {key: {"druh": KIND_FACT, "stitek": LABEL_ABSENT,
+                                                 "rozhodl": "vlastník"}})
+        self.assertEqual(review.review_state(path, self.state).decided, (unit.id,))
+
+    def test_the_review_file_must_not_be_named_md_and_is_not_written(self):
+        plan = self.review_of([make_unit(1)])
+        target = self.tmp / "kontrola.md"
+        with self.assertRaisesRegex(review.ReviewError, "nesmí mít příponu .md"):
+            review.write_review(plan, target)
+        with self.assertRaisesRegex(review.ReviewError, "nesmí mít příponu .md"):
+            review.markdown_path(self.tmp / "KONTROLA.MD")
+        self.assertFalse(target.exists())
+
+    def test_a_damaged_decisions_file_is_refused(self):
+        review.decisions_path(self.state).write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(review.ReviewError, "nejdou načíst"):
+            review.load_decisions(self.state)
+        review.decisions_path(self.state).write_text('{"format_version": 9}', encoding="utf-8")
+        with self.assertRaisesRegex(review.ReviewError, "podporovaný formát"):
+            review.load_decisions(self.state)
+
+    def test_a_measurement_named_twice_under_one_id_adds_its_keys(self):
+        # Two files of one measurement id (the second names other units): the rows of the first
+        # must still be found when the filled file is loaded back.
+        loaded = [self.measurement([make_unit(1, disputed=True)], name="a.json", mid="m1"),
+                  self.measurement([make_unit(2, disputed=True)], name="b.json", mid="m1")]
+        plan = review.build_review(loaded, {}, 7)
+        path = self.tmp / "kontrola.json"
+        review.write_review(plan, path)
+        self.fill(path, {1: "vyjadruje", 2: "nevyjadruje"})
+        self.assertEqual(review.ingest_review(path, self.state).decided, 2)
+        self.assertEqual(len(review.load_decisions(self.state)), 2)
+
+
+class ShownTextTest(ReviewCase):
+    """What the owner is shown of a preselected unit is what the judge read (KTD4)."""
+
+    BLOCK = {"text": "Odešle dokument.", "section": "API", "title": "Detail of ViewA",
+             "anchor": "a.cs:1", "via": "kotva"}
+
+    def bound(self, block):
+        return make_unit(1, mode=card_check.MODE_BOUND, document_text=None, blocks=(block,))
+
+    def test_a_bound_block_is_shown_with_its_title_and_section(self):
+        self.assertEqual(review.shown_text(self.bound(self.BLOCK)),
+                         "Detail of ViewA > API\nOdešle dokument.")
+
+    def test_a_block_recorded_without_a_title_is_shown_as_it_was_judged(self):
+        old = {k: v for k, v in self.BLOCK.items() if k != "title"}
+        self.assertEqual(review.shown_text(self.bound(old)), "Odešle dokument.")
+
+    def test_the_decision_key_follows_the_context_the_judge_read(self):
+        base = self.bound(self.BLOCK)
+        moved = self.bound(dict(self.BLOCK, section="Jinde"))
+        self.assertNotEqual(review.decision_key(base), review.decision_key(moved))
+        self.assertEqual(review.decision_key(base), review.decision_key(self.bound(self.BLOCK)))
+
+    def test_the_review_row_names_the_section_of_each_block(self):
+        plan = self.review_of([self.bound(self.BLOCK)])
+        self.assertEqual(plan.rows[0].to_json()["bloky"],
+                         [{"text": "Odešle dokument.", "sekce": "API", "kotva": "a.cs:1"}])
+        self.assertIn("sekce API", review.render_markdown(plan))
+
+
+class SampleBeforeFilesTest(ReviewCase):
+    """The sample is recorded before the review file exists (a report must wait for it)."""
+
+    def test_the_sample_is_recorded_before_either_file_is_written(self):
+        plan = self.review_of([make_unit(n) for n in range(3)])
+        order = []
+        real = review._write_json_atomic
+
+        def spy(path, data):
+            order.append(path.name)
+            return real(path, data)
+
+        with mock.patch.object(review, "_write_json_atomic", spy):
+            review.write_review(plan, self.tmp / "kontrola.json", self.state)
+        self.assertEqual(order, [review.SAMPLED_FILE, "kontrola.json"])
+        self.assertEqual(len(review.load_sampled(self.state)), 3)
+
+    def test_when_the_record_fails_no_review_file_is_written(self):
+        plan = self.review_of([make_unit(n) for n in range(3)])
+        target = self.tmp / "kontrola.json"
+        with mock.patch.object(review, "record_sampled",
+                               side_effect=review.ReviewError("záznam vzorku selhal")):
+            with self.assertRaisesRegex(review.ReviewError, "záznam vzorku selhal"):
+                review.write_review(plan, target, self.state)
+        self.assertEqual((target.exists(), target.with_suffix(".md").exists()), (False, False))
+
+    def test_an_existing_file_is_refused_before_anything_is_recorded(self):
+        plan = self.review_of([make_unit(1)])
+        target = self.tmp / "kontrola.json"
+        target.write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(review.ReviewError, "už existuje"):
+            review.write_review(plan, target, self.state)
+        self.assertFalse(review.sampled_path(self.state).exists())
+
+
 class RealCheckTest(CheckCase):
     """The final labels and results of a real measurement follow the owner's decisions."""
 
@@ -356,8 +551,11 @@ class RealCheckTest(CheckCase):
         self.assertEqual(len(decided), len(judged))
         self.assertTrue(all(u.model_label is not None for u in decided))
         statuses = {(r.fact_id, r.role): r.status for r in after.results.facts}
-        self.assertTrue(any(s == card_check.FACT_CONFLICT for s in statuses.values()) or
-                        any(s == card_check.FACT_PRESENT for s in statuses.values()))
+        # The claim sits on another card than the fact, so the owner's "vyjadruje" decides the
+        # fact for both roles and the claim is found without a conflict.
+        self.assertEqual(statuses, {("f1", "podpora"): card_check.FACT_PRESENT,
+                                    ("f1", "vyvojar"): card_check.FACT_PRESENT})
+        self.assertEqual([r.status for r in after.results.claims], [card_check.CLAIM_FOUND])
 
     def test_a_card_rewrite_shows_the_unit_again(self):
         path = self.dir / "measurement.json"

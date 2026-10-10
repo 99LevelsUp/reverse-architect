@@ -364,9 +364,26 @@ def isolated_config_dir(isolation_root: str | os.PathLike[str],
         remove_tree(target)
 
 
-# Inherited from the parent only because the OS or the runtime needs them. The
-# Claude adapter keeps its own copy of this list (`claude_code._INHERITED_ENV`);
-# the two are meant to stay equal.
+def resolve_executable(command: Sequence[str], *, who: str = "agenta",
+                       error: type[AgentRunError] = AgentRunError) -> list[str]:
+    """`command` with its first word resolved through PATH (a path with a directory is kept).
+
+    `who` names the owner of the command in the Czech messages (the agent, the judge);
+    `error` is the exception raised for an empty command or an executable that is not found.
+    """
+    if not command:
+        raise error(f"Příkaz {who} je prázdný.")
+    first = command[0]
+    if os.path.dirname(first):
+        return list(command)
+    found = shutil.which(first)
+    if found is None:
+        raise error(f"Spustitelný soubor {who} {first} nebyl nalezen v PATH.")
+    return [found, *command[1:]]
+
+
+# Inherited from the parent only because the OS or the runtime needs them; the one list of
+# every adapter and of the judge.
 INHERITED_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
                  "LANG", "LC_ALL", "LC_CTYPE", "TZ")
 
@@ -376,8 +393,7 @@ def build_isolated_env(parent: Mapping[str, str], config_dir: str | os.PathLike[
                        fixed: Mapping[str, str] | None = None) -> dict[str, str]:
     """The child's whole environment, built from an allow-list (agent-neutral).
 
-    Counterpart of `claude_code.build_env` for CLIs that are not Claude Code
-    (the judge, KTD6). Only the OS/runtime variables of `INHERITED_ENV` and the
+    Used by `claude_code.build_env` and by the judge (KTD6). Only the OS/runtime variables of `INHERITED_ENV` and the
     variables named in `passthrough` (names matched case-insensitively, as on
     Windows) are taken from `parent`; home, temp and cache directories all
     point into `config_dir`; `fixed` adds the variables one CLI family needs

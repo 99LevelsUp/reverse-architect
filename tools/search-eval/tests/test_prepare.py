@@ -485,5 +485,52 @@ def _remove_dir_link(link: Path) -> None:
         os.unlink(link)
 
 
+class AtomicWriteTest(unittest.TestCase):
+    """One atomic writer for every file of the tool (the others were copies of it)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def test_every_module_writes_through_the_one_function(self):
+        import card_check
+        import corpus
+        import judge
+        import report
+        import review
+        self.assertIs(report.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(card_check.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(corpus.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(review.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(judge.write_json_atomic, prepare.write_json_atomic)
+
+    def test_no_module_keeps_its_own_temp_file_dance(self):
+        tool = Path(__file__).resolve().parent.parent
+        owners = sorted(p.name for p in tool.glob("*.py") if "mkstemp(" in p.read_text("utf-8"))
+        self.assertEqual(owners, ["prepare.py"])
+
+    def test_the_text_is_replaced_in_one_step_in_a_directory_that_is_made_when_missing(self):
+        target = self.tmp / "a" / "b" / "file.txt"
+        prepare.write_text_atomic(target, "první\n")
+        prepare.write_text_atomic(target, "druhý\n")
+        self.assertEqual(target.read_bytes(), "druhý\n".encode("utf-8"))  # LF, UTF-8, no BOM
+        self.assertEqual([p.name for p in target.parent.iterdir()], ["file.txt"])
+
+    def test_the_json_is_indented_sorted_unescaped_and_ends_with_a_newline(self):
+        target = self.tmp / "data.json"
+        prepare.write_json_atomic(target, {"b": 1, "a": "č"})
+        self.assertEqual(target.read_text("utf-8"), '{\n  "a": "č",\n  "b": 1\n}\n')
+
+    def test_a_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(self):
+        target = self.tmp / "file.txt"
+        prepare.write_text_atomic(target, "stará\n")
+        with mock.patch.object(prepare.os, "replace", side_effect=OSError("zamčeno")):
+            with self.assertRaises(OSError):
+                prepare.write_text_atomic(target, "nová\n")
+        self.assertEqual(target.read_text("utf-8"), "stará\n")
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["file.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()

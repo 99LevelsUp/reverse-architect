@@ -37,7 +37,6 @@ import json
 import math
 import os
 import random
-import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,7 +47,9 @@ from card_check import (LABEL_ABSENT, LABEL_CONTAINS, LABEL_NOT_CONTAINS, LABEL_
                         STATE_NO_BOUND_BLOCK, STATUS_DONE, ClaimPlan, FactPlan, Plan, Results,
                         UnitResult, derive_results, FACT_PLACE_UNKNOWN, CLAIM_PLACE_UNKNOWN,
                         FACT_NO_ANSWER, CLAIM_NO_ANSWER)
-from judge import KIND_FACT, KIND_FORBIDDEN
+from anchors import judge_text
+from judge import KIND_FACT, KIND_FORBIDDEN, normalize_text
+from report import write_text_atomic
 
 REVIEW_FORMAT_VERSION = 1
 DECISIONS_FORMAT_VERSION = 1
@@ -82,11 +83,6 @@ class ReviewError(ValueError):
 
 # --- text, keys -------------------------------------------------------------------------
 
-def normalize_text(text: str) -> str:
-    """Unicode NFC, runs of whitespace collapsed to one space, trimmed."""
-    return " ".join(unicodedata.normalize("NFC", text).split())
-
-
 def _fold(value: str) -> str:
     """A typed decision for comparison: no diacritics, lower case, single spaces."""
     decomposed = unicodedata.normalize("NFD", value)
@@ -95,7 +91,12 @@ def _fold(value: str) -> str:
 
 
 def shown_text(unit: UnitResult) -> str:
-    """What the review shows the owner of the unit: the whole document, or the bound blocks."""
+    """What the review shows the owner of the unit: the whole document, or the bound blocks.
+
+    A bound block is shown as the judge read it, with its document title and section heading
+    (`anchors.judge_text`); a block recorded without a `title` key (a measurement from before
+    the judge read the context) is shown as it was judged, by its text alone.
+    """
     if unit.mode == MODE_WHOLE:
         if unit.document_text is None:
             raise ReviewError(f"Jednotka {unit.id}: měření neuchovalo text dokumentu; "
@@ -104,7 +105,9 @@ def shown_text(unit: UnitResult) -> str:
     if unit.mode == MODE_BOUND:
         if unit.blocks is None:
             raise ReviewError(f"Jednotka {unit.id}: měření neuchovalo vázané bloky.")
-        return "\n\n".join(block["text"] for block in unit.blocks)
+        return "\n\n".join(
+            judge_text(block["title"] or "", block.get("section") or "", block["text"])
+            if "title" in block else block["text"] for block in unit.blocks)
     raise ReviewError(f"Jednotka {unit.id}: neznámý režim „{unit.mode}“.")
 
 
@@ -214,21 +217,8 @@ def load_decisions(state_dir: str | os.PathLike[str]) -> dict[str, dict[str, Any
     return data["rozhodnuti"]
 
 
-def _write_text_atomic(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
 def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
-    _write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
 def save_decisions(state_dir: str | os.PathLike[str], decisions: dict[str, dict[str, Any]]) -> None:
@@ -414,15 +404,24 @@ def markdown_path(json_path: Path) -> Path:
     return json_path.with_suffix(".md")
 
 
-def write_review(review: Review, json_path: Path) -> tuple[Path, Path]:
-    """Write the JSON to fill in and the `.md` to read; an existing file is never overwritten."""
+def write_review(review: Review, json_path: Path,
+                 state_dir: str | os.PathLike[str] | None = None) -> tuple[Path, Path]:
+    """Write the JSON to fill in and the `.md` to read; an existing file is never overwritten.
+
+    With `state_dir` the sampled rows are recorded there (`record_sampled`) before either file
+    is published: a review file must never exist without its sample being known to the report,
+    or the report would not wait for the owner's decisions of the sampled units. When the
+    record cannot be saved, no review file is written.
+    """
     md = markdown_path(json_path)
     for target in (json_path, md):
         if target.exists():
             raise ReviewError(f"Soubor {target} už existuje; mohl by obsahovat vyplněná "
                               "rozhodnutí. Načti ho (--nacti) nebo zvol jiný název.")
+    if state_dir is not None:
+        record_sampled(state_dir, review)
     _write_json_atomic(json_path, review.to_json())
-    _write_text_atomic(md, render_markdown(review))
+    write_text_atomic(md, render_markdown(review))
     return json_path, md
 
 
@@ -441,10 +440,8 @@ def proposals_path(review_path: Path) -> Path:
     return review_path.with_name(review_path.stem + PROPOSALS_SUFFIX)
 
 
-def ingest_review(review_path: str | os.PathLike[str],
-                  state_dir: str | os.PathLike[str]) -> IngestResult:
-    """Validate the filled review and store its decisions; nothing is stored when a row is wrong."""
-    file = Path(review_path)
+def _read_review_file(file: Path) -> dict[str, Any]:
+    """The filled review file as JSON; anything that is not a review file is refused."""
     try:
         data = json.loads(file.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -455,6 +452,25 @@ def ingest_review(review_path: str | os.PathLike[str],
             or not isinstance(data.get("radky"), list) or not isinstance(data.get("mereni"), list)):
         raise ReviewError(f"Soubor {file} není soubor ke kontrole vlastníka (formát "
                           f"{REVIEW_FORMAT_VERSION}).")
+    return data
+
+
+def listed_measurements(review_path: str | os.PathLike[str]) -> list[Path]:
+    """The paths of the measurements a review file names (what `ingest_review` will read)."""
+    file = Path(review_path)
+    paths: list[Path] = []
+    for entry in _read_review_file(file)["mereni"]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("cesta"), str):
+            raise ReviewError(f"Soubor {file}: záznam měření je neúplný.")
+        paths.append(Path(entry["cesta"]))
+    return paths
+
+
+def ingest_review(review_path: str | os.PathLike[str],
+                  state_dir: str | os.PathLike[str]) -> IngestResult:
+    """Validate the filled review and store its decisions; nothing is stored when a row is wrong."""
+    file = Path(review_path)
+    data = _read_review_file(file)
     measured: dict[str, dict[str, UnitResult]] = {}  # measurement id -> key -> first unit
     for entry in data["mereni"]:
         if not isinstance(entry, dict) or "id" not in entry or "cesta" not in entry:
@@ -463,11 +479,10 @@ def ingest_review(review_path: str | os.PathLike[str],
         if loaded.id != entry["id"]:
             raise ReviewError(f"Měření {entry['cesta']} má id {loaded.id}, soubor ke kontrole "
                               f"čeká {entry['id']}; měření se mezitím změnilo.")
-        keys: dict[str, UnitResult] = {}
+        keys = measured.setdefault(loaded.id, {})  # a measurement named twice adds its keys
         for unit in loaded.units:
             if _reviewable(unit):
                 keys.setdefault(decision_key(unit), unit)
-        measured[loaded.id] = keys
 
     errors: list[str] = []
     accepted: dict[str, dict[str, Any]] = {}
@@ -520,6 +535,8 @@ def ingest_review(review_path: str | os.PathLike[str],
         raise ReviewError("Soubor ke kontrole se nenačetl, protože obsahuje chyby:\n  "
                           + "\n  ".join(errors))
 
+    target = proposals_path(file)
+    proposals = _read_proposals(target)  # before anything is stored: a damaged file stops it all
     stored = load_decisions(state_dir)
     changed = 0
     for key, record in accepted.items():
@@ -529,8 +546,6 @@ def ingest_review(review_path: str | os.PathLike[str],
         stored[key] = record
     if accepted:
         save_decisions(state_dir, stored)
-    target = proposals_path(file)
-    proposals = _read_proposals(target)
     proposals.update(new_proposals)
     if new_proposals:
         _write_json_atomic(target, {"format_version": PROPOSALS_FORMAT_VERSION,
@@ -634,9 +649,13 @@ def record_sampled(state_dir: str | os.PathLike[str], plan: Review) -> int:
     for row in drawn:
         stored[row.key] = {"mereni": row.measurement_id, "jednotky": list(row.unit_ids)}
     if drawn:
-        _write_json_atomic(sampled_path(state_dir), {
-            "format_version": SAMPLED_FORMAT_VERSION, "seminko": plan.seed,
-            "vylosovano": stored})
+        try:
+            _write_json_atomic(sampled_path(state_dir), {
+                "format_version": SAMPLED_FORMAT_VERSION, "seminko": plan.seed,
+                "vylosovano": stored})
+        except OSError as exc:
+            raise ReviewError(f"Seznam vylosovaných jednotek {sampled_path(state_dir)} nejde "
+                              f"uložit: {exc}") from None
     return len(drawn)
 
 

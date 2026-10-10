@@ -264,9 +264,9 @@ class AssessmentTest(TempDirCase):
     def test_prompt_version_changes_the_key(self):
         u, sel = unit(), self.selection()
         before = cache_key(u, "j1", "model-1", 1)
-        with mock.patch.object(judge, "PROMPT_VERSION", "2"):
+        with mock.patch.object(judge, "PROMPT_VERSION", "99"):
             self.assertNotEqual(cache_key(u, "j1", "model-1", 1), before)
-            self.assertIn("verze promptu 2", build_prompt(u))
+            self.assertIn("verze promptu 99", build_prompt(u))
         self.assertEqual(cache_key(u, "j1", "model-1", 1), before)
         self.assertEqual(len({cache_key(u, "j1", "model-1", n) for n in (1, 2, 3)}), 3)
 
@@ -510,6 +510,32 @@ class ProcessPipelineTest(TempDirCase):
         selection = select_judge([leaking, fine], "claude", runner)
         self.assertEqual(selection.spec.id, "fine")
         self.assertIn("R17", selection.skipped[0][1])
+
+    def test_a_judge_that_cannot_be_started_is_skipped_by_the_smoke_test(self):
+        runner = self.runner()
+        unstartable = JudgeSpec(id="nejde", family="openai", model="alias",
+                                output_shape="codex-jsonl",
+                                command=(str(self.base / "neni" / "cli.exe"),))
+        fine = self.judge_spec("fine", "openai", FIXTURES / "judge" / "three-agree.json")
+        selection = select_judge([unstartable, fine], "claude", runner)
+        self.assertEqual(selection.spec.id, "fine")
+        self.assertEqual(selection.skipped[0][0], "nejde")
+        self.assertIn("Hodnotitele nejde spustit", selection.skipped[0][1])
+        self.assertEqual(list((self.base / "isolation").iterdir()), [])
+
+    def test_a_judge_that_cannot_be_started_during_the_run_stops_the_measurement(self):
+        runner = self.runner()
+        selection = select_judge([self.judge_spec("a", "openai",
+                                                  FIXTURES / "judge" / "three-agree.json")],
+                                 "claude", runner)
+        gone = JudgeSelection(spec=JudgeSpec(
+            id="a", family="openai", model="alias", output_shape="codex-jsonl",
+            command=(str(self.base / "neni" / "cli.exe"),)), smoke_model=selection.smoke_model,
+            same_family=False, agent_family="claude")
+        cache = JudgeCache(self.base / "cache-gone")
+        with self.assertRaisesRegex(JudgeInfrastructureError, "Hodnotitele nejde spustit"):
+            assess(unit(), gone, runner, cache)
+        self.assertFalse(cache.directory.exists() and list(cache.directory.iterdir()))
 
     def test_a_process_failure_stops_the_measurement(self):
         runner = self.runner()

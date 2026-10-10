@@ -40,12 +40,13 @@ from __future__ import annotations
 import json
 import os
 import statistics
-import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from agents.base import Cap, TokenUsage
+from catalog import KIND_BUG, KIND_QUESTION
+from prepare import write_text_atomic  # noqa: F401  (re-exported: `report.write_text_atomic`)
 from score import ANSWERED, FAILURE, SPOILED, SUCCESS, UNANSWERED
 
 INFRASTRUCTURE = "infrastructure"  # a run state the runner adds to score's three
@@ -169,7 +170,7 @@ class CaseInfo:
     id: str
     used_for_card_tuning: bool
     prompt_names_location: bool
-    druh: str = "chyba"
+    druh: str = KIND_BUG
 
     @property
     def flagged(self) -> bool:
@@ -261,8 +262,8 @@ def _difference(compared: Any, reference: Any) -> Any:
 def build_report(info: ExperimentInfo, results: Sequence[RunResult]) -> dict[str, Any]:
     """The whole report as a JSON-ready dict (see the module docstring)."""
     reference, compared = (v.name for v in info.variants)
-    question_ids = [c.id for c in info.cases if c.druh == "otazka"]
-    info = replace(info, cases=tuple(c for c in info.cases if c.druh == "chyba"))
+    question_ids = [c.id for c in info.cases if c.druh == KIND_QUESTION]
+    info = replace(info, cases=tuple(c for c in info.cases if c.druh == KIND_BUG))
     cases = [_case_entry(case, info, results) for case in info.cases]
     by_id = {c["case_id"]: c for c in cases}
     unflagged = [c for c in info.cases if not c.flagged]
@@ -728,16 +729,3 @@ def write_report(directory: str | os.PathLike[str], info: ExperimentInfo,
                       json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     write_text_atomic(target / "report.md", render_markdown(data))
     return data
-
-
-def write_text_atomic(path: Path, text: str) -> None:
-    """Replace `path` in one step, so a crash never leaves half a file behind."""
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise

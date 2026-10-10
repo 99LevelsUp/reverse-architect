@@ -235,6 +235,17 @@ class EnvironmentTest(unittest.TestCase):
         self.assertEqual(env["HOME"], str(Path("/iso/cfg")))
         self.assertEqual(env["TEMP"], str(Path("/iso/cfg/tmp")))
 
+    def test_the_environment_is_the_judges_allow_list_plus_the_two_claude_variables(self):
+        # One allow-list and one isolation block for the agent and the judge (no second copy).
+        from agents import claude_code
+        from agents.base import build_isolated_env
+        expected = build_isolated_env(self.PARENT, "/iso/cfg", fixed={
+            "CLAUDE_CONFIG_DIR": str(Path("/iso/cfg")),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"})
+        self.assertEqual(build_env(self.PARENT, "/iso/cfg"), expected)
+        self.assertFalse(hasattr(claude_code, "_INHERITED_ENV"))
+        self.assertFalse(hasattr(claude_code, "_resolve_executable"))
+
 
 class AdapterProcessTest(unittest.TestCase):
     def setUp(self):

@@ -438,6 +438,23 @@ class RefusalTest(ReportCase):
         with self.assertRaisesRegex(answers_report.ReportError, "hodnotitel j2"):
             self.report([self.one, other])
 
+    def test_another_judge_family_is_refused_even_when_id_model_and_prompt_agree(self):
+        other = self.edit(self.one, lambda raw: raw["judge"].update(rodina="jina"), "c2")
+        with self.assertRaisesRegex(answers_report.ReportError,
+                                    "rodina openai.*rodina jina.*Přehodnoť"):
+            self.report([self.one, other])
+
+    def test_items_with_a_different_question_text_are_refused(self):
+        def change(raw):
+            raw["items"][0]["dotaz"] = "Jak jinak editor ukládá dokument?"
+
+        other = self.edit(self.one, change, "c2")
+        fingerprints = [json.loads(p.read_text("utf-8"))["items"][0]["otisk_potvrzeni"]
+                        for p in (self.one, other)]
+        self.assertEqual(fingerprints[0], fingerprints[1])  # the confirmation fingerprint is unchanged
+        with self.assertRaisesRegex(answers_report.ReportError, "Položka Q1.*text otázky"):
+            self.report([self.one, other])
+
     def test_corpora_over_different_revisions_are_refused(self):
         catalog = make_catalog(question_json(
             [fact("f1", F1, [place(EVMN, "EditorViewModelNew.RunNew()", radky=20)])],

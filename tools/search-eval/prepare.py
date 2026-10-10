@@ -384,7 +384,7 @@ def generate_corpus(ra_command: Sequence[str], export: ExportResult,
         corpus_fingerprint=fingerprint_dir(corpus),
         generation_seconds=elapsed,
     )
-    _write_json_atomic(receipt_file, {
+    write_json_atomic(receipt_file, {
         "format_version": RECEIPT_FORMAT_VERSION,
         "fingerprint_algorithm": FINGERPRINT_ALGORITHM,
         **asdict(receipt),
@@ -432,14 +432,21 @@ def _run_ra(argv: Sequence[str], what: str) -> str:
     return result.stdout
 
 
-def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace `path` in one step (temp file beside it + `os.replace`), so a crash never leaves
+    half a file behind. The directory is created when it is missing."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+            handle.write(text)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    """`write_text_atomic` of the JSON (indented, keys sorted, trailing newline)."""
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")

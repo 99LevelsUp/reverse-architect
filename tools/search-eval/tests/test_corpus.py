@@ -349,9 +349,13 @@ class IndexCacheTest(CorpusTestCase):
 
 
 class StreamingTest(CorpusTestCase):
-    def write_big_corpus(self, rows):
+    def write_big_corpus(self, rows, documents=False):
+        """`rows` document rows; with `documents` the one file they all point to exists."""
         target = self.tmp / "big"
         target.mkdir()
+        if documents:
+            (target / "cards" / "map").mkdir(parents=True)
+            (target / "cards" / "map" / "shared.md").write_text("# Map\n", encoding="utf-8")
         (target / "coverage.json").write_text(json.dumps({"repo_revision": SHA, "files": []}),
                                               encoding="utf-8")
         (target / "manifest-strings.json").write_text(
@@ -362,11 +366,13 @@ class StreamingTest(CorpusTestCase):
             for n in range(rows):
                 handle.write(json.dumps({"id": f"map:m{n}", "kind": "map", "level": "map",
                                          "title": f"Map {n}", "guiding_question": filler,
-                                         "path": f"cards/map/m{n}.md", "chunks": []}) + "\n")
+                                         "path": ("cards/map/shared.md" if documents
+                                                  else f"cards/map/m{n}.md"),
+                                         "chunks": []}) + "\n")
         return target
 
     def test_100000_document_rows_are_processed_as_a_stream(self):
-        target = self.write_big_corpus(100_000)
+        target = self.write_big_corpus(100_000, documents=True)
         path = target / "manifest-documents.jsonl"
         self.assertGreater(path.stat().st_size, 20_000_000)
         self.assertTrue(inspect.isgenerator(corpus.iter_jsonl(path)))
@@ -380,7 +386,20 @@ class StreamingTest(CorpusTestCase):
         self.assertLess(peak, 1_000_000)  # one record at a time, not the 20 MB file
         index = open_corpus(target, self.state)
         self.assertEqual(len(index.docs), 100_000)
-        self.assertEqual(index.missing_documents, 100_000)
+
+    def test_an_unreadable_document_stops_the_index_and_nothing_is_cached(self):
+        # Without the document a cached index would silently lack its anchors (a card that
+        # an antivirus locked or a copy that was cut short would never be found again).
+        target = self.copy_corpus("corpus_l1")
+        card = next(target.glob("cards/**/*.md"))
+        card.unlink()
+        with self.assertRaises(CorpusError) as caught:
+            open_corpus(target, self.state)
+        self.assertIn(card.name, str(caught.exception))
+        self.assertIn("nejde načíst", str(caught.exception))
+        self.assertEqual(list(self.state.glob("corpus-index-*.json")), [])
+        card.write_text("# Card\n", encoding="utf-8")  # readable again: the index is built
+        self.assertFalse(open_corpus(target, self.state).from_cache)
 
     def test_a_broken_line_names_the_file_and_the_line(self):
         target = self.write_big_corpus(3)

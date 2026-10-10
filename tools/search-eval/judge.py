@@ -50,11 +50,11 @@ from typing import Any, Callable, Mapping, Sequence
 from agents.base import AgentRunError
 from agents.judge_cli import (DEFAULT_SHAPE, OUTPUT_SHAPES, SIBLING_PLACEHOLDER, CliReply,
                               JudgeInfrastructureError, run_judge_cli)
-from prepare import _write_json_atomic
+from prepare import write_json_atomic
 
 JUDGES_FORMAT_VERSION = 1
 CACHE_FORMAT_VERSION = 1
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"  # 2: a block carries its document title and section heading (KTD4)
 RESPONSE_SCHEMA_VERSION = 1
 RUNS = 3
 
@@ -280,8 +280,11 @@ def select_judge(judges: Sequence[JudgeSpec], agent_family: str, runner: JudgeRu
 class JudgeUnit:
     """One assessment: one fact or forbidden claim against the blocks of one document.
 
-    `kind` is `fact` or `forbidden`; `blocks` are the document's bound blocks
-    in their order. There is deliberately no field for corpus, variant or agent.
+    `kind` is `fact` or `forbidden`; `blocks` are the texts the judge reads, in document
+    order, each as `anchors.judge_text` made it (a bound block with its document title and
+    section heading; a block of a whole document with the title and heading that open it).
+    A quotation is verified against exactly these texts. There is deliberately no field for
+    corpus, variant or agent.
     """
 
     kind: str
@@ -336,7 +339,8 @@ def build_prompt(unit: JudgeUnit) -> str:
         "",
         f"{subject.capitalize()}:\n{fence} TVRZENÍ\n{unit.claim_text}\n{fence} KONEC TVRZENÍ",
         "",
-        "Bloky dokumentu v původním pořadí:",
+        "Bloky dokumentu v původním pořadí (blok může začínat řádkem s titulem dokumentu a "
+        "nadpisem sekce; ten je součástí posuzovaného textu):",
     ]
     for number, block in enumerate(unit.blocks, start=1):
         parts.append(f"{fence} BLOK {number}\n{block}\n{fence} KONEC BLOKU {number}")
@@ -471,7 +475,7 @@ class JudgeCache:
 
     def put(self, key: str, outcome: RunOutcome, judge_id: str) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
-        _write_json_atomic(self._path(key), {
+        write_json_atomic(self._path(key), {
             "format_version": CACHE_FORMAT_VERSION,
             "key": key,
             "judge_id": judge_id,

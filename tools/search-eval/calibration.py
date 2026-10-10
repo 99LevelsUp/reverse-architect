@@ -31,7 +31,7 @@ from typing import Any, Sequence
 from judge import (KIND_FACT, KIND_FORBIDDEN, LABEL_UNKNOWN, LABELS_FACT, LABELS_FORBIDDEN,
                    PROMPT_VERSION, Assessment, JudgeCache, JudgeRunner, JudgeSelection, JudgeUnit,
                    assess)
-from prepare import _write_json_atomic, canonical_path, ensure_outside
+from prepare import canonical_path, ensure_outside, write_json_atomic
 
 SET_FORMAT_VERSION = 1
 RESULT_FORMAT_VERSION = 1
@@ -256,7 +256,7 @@ def write_result(result: CalibrationResult, output: str | os.PathLike[str], *,
         raise CalibrationSetError("Výstupní cesta kalibrace je povinná.")
     path = ensure_outside(output, [canonical_path(r) for r in protected], "Výstup kalibrace")
     path.parent.mkdir(parents=True, exist_ok=True)
-    _write_json_atomic(path, result.to_json())
+    write_json_atomic(path, result.to_json())
     return path
 
 

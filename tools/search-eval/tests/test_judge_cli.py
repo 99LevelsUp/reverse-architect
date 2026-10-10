@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agents.base import INHERITED_ENV, build_isolated_env
+from agents.base import INHERITED_ENV, AgentRunError, build_isolated_env, resolve_executable
 from agents.judge_cli import (SHAPE_CLAUDE, SHAPE_CODEX, SIBLING_PLACEHOLDER,
                               JudgeInfrastructureError, _read_claude, _read_codex,
                               run_judge_cli)
@@ -176,6 +176,35 @@ class JudgeProcessTest(unittest.TestCase):
         with self.assertRaisesRegex(JudgeInfrastructureError, "časového limitu"):
             self.call("claude", "hang", seconds=1)
         self.assertEqual(list(self.isolation.iterdir()), [])
+
+    def test_a_cli_that_cannot_be_started_is_an_infrastructure_error_and_leaves_nothing(self):
+        # Popen, the scratch directory and the sibling files raise OSError; the caller (the smoke
+        # test, the measurement) knows only JudgeInfrastructureError, so it must not escape.
+        not_runnable = str(self.login)  # a file that is no program (WinError 193 on Windows)
+        absent = str(self.base / "neni" / "cli.exe")
+        for name, command in (("absent file", absent), ("no program", not_runnable)):
+            with self.subTest(name), self.assertRaisesRegex(
+                    JudgeInfrastructureError, "Hodnotitele nejde spustit"):
+                self.call("claude", command=(command,))
+            self.assertEqual(list(self.isolation.iterdir()), [], name)
+
+    def test_an_isolation_root_or_sibling_file_that_cannot_be_written_is_the_same_error(self):
+        with self.assertRaisesRegex(JudgeInfrastructureError, "Hodnotitele nejde spustit"):
+            self.call("claude", "dump", str(self.dump), isolation_root=self.login)  # a file
+        with self.assertRaisesRegex(JudgeInfrastructureError, "Hodnotitele nejde spustit"):
+            self.call("claude", "dump", str(self.dump),
+                      sibling_files={"neni/adresar/canary.txt": "x"})
+        self.assertEqual(list(self.isolation.iterdir()), [])
+
+    def test_resolve_executable_is_shared_and_raises_the_exception_it_is_given(self):
+        with self.assertRaisesRegex(AgentRunError, "Příkaz agenta je prázdný"):
+            resolve_executable([])
+        with self.assertRaisesRegex(JudgeInfrastructureError, "Příkaz hodnotitele je prázdný"):
+            resolve_executable([], who="hodnotitele", error=JudgeInfrastructureError)
+        with self.assertRaisesRegex(JudgeInfrastructureError, "hodnotitele .* nebyl nalezen"):
+            resolve_executable(["neexistujici-cli-xyz"], who="hodnotitele",
+                               error=JudgeInfrastructureError)
+        self.assertEqual(resolve_executable(["dir/cli", "-p"]), ["dir/cli", "-p"])
 
     def test_missing_login_source_and_executable_are_reported(self):
         with self.assertRaisesRegex(JudgeInfrastructureError, "přihlášení"):

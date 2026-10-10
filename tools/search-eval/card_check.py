@@ -30,6 +30,12 @@ Decisions this module implements (the plan's R6-R9, KTD3-KTD5):
   (`anchors.citation_binds`), and a sentence that does not is a disputed unit
   with the state `vyjadřuje, ale bez vazby`. A preselected document without a
   bound block is not judged (`bez vázaného bloku`).
+* **Context (KTD4).** The judge reads a block with its document title and the heading of its
+  section (`anchors.judge_text`: a line `titul > sekce` above a bound block; a document that goes
+  whole opens with its title and every section with its heading, `anchors.whole_judge_texts`),
+  and a quotation is verified against exactly that text. A quotation of a heading binds to the
+  first block of its section (a heading belongs to the block that follows it). The prompt version
+  is 2 since then.
 * **Whole flow.** A `cely_tok` fact is judged only on a document that has bound
   blocks for *all* places of the flow; blocks of different documents are never
   joined.
@@ -47,7 +53,10 @@ Decisions this module implements (the plan's R6-R9, KTD3-KTD5):
 `measurement.json` (`write_measurement`) records the plan, every unit with its
 verdicts and, once complete, the results; an interrupted or failed measurement
 is saved with the status `nedokonceno` and continues from the judge's cache on
-the next run.
+the next run. Its id is a hash of the corpus identity (revision, the canonical path of the
+corpus and, with a receipt, the corpus fingerprint), the items (with the text of each
+question), the judge, the agent family and the prompt version, so two corpora of one revision
+are two measurements.
 
 The same machinery judges an agent's answer to a question (KTD10,
 `build_answer_plan`, `run_answer_check`): the answer of one run is a document
@@ -72,18 +81,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Protocol, Sequence
 
 from agents.judge_cli import JudgeInfrastructureError
 from anchors import (LEVEL_ANSWER, PRESELECT_THRESHOLD_BYTES, BoundBlock, ParsedDocument,
-                     bound_blocks, citation_binds, needs_preselection, parse_answer,
-                     parse_document)
-from catalog import Catalog, Fact, ForbiddenClaim, Place, Question
-from corpus import IDENTITY_FROM_RECEIPT, CorpusDoc, CorpusIndex, check_commit
+                     bound_blocks, citation_binds, judge_text, needs_preselection, parse_answer,
+                     parse_document, whole_judge_texts)
+from catalog import ROLE_FRAMEWORK, ROLE_PLACE, Catalog, Fact, ForbiddenClaim, Place, Question
+from corpus import IDENTITY_FROM_RECEIPT, CorpusDoc, CorpusIndex, PlaceDocuments, check_commit
 from prepare import receipt_path
+from report import ROLE_DEVELOPER, ROLE_SUPPORT, write_text_atomic
 from judge import (KIND_FACT, KIND_FORBIDDEN, PROMPT_VERSION, Assessment, JudgeCache,
                    JudgeCacheError, JudgeRunner, JudgeSelection, JudgeUnit, assess)
 
@@ -94,10 +103,9 @@ JUDGE_CACHE_DIR = "judge-cache"
 STATUS_DONE = "hotovo"
 STATUS_INCOMPLETE = "nedokonceno"
 
-ROLE_SUPPORT = "podpora"
-ROLE_DEVELOPER = "vyvojar"
 # Whom a fact of each catalog role is checked for.
-FACT_ROLE_AUDIENCES = {"ramcova": (ROLE_SUPPORT, ROLE_DEVELOPER), "misto": (ROLE_DEVELOPER,)}
+FACT_ROLE_AUDIENCES = {ROLE_FRAMEWORK: (ROLE_SUPPORT, ROLE_DEVELOPER),
+                       ROLE_PLACE: (ROLE_DEVELOPER,)}
 
 MODE_BOUND = "vázané bloky"
 MODE_WHOLE = "celý dokument"
@@ -439,23 +447,53 @@ def _merge_in_order(parsed: ParsedDocument, lists: Sequence[Sequence[BoundBlock]
     return out
 
 
-def _block_json(block: BoundBlock) -> dict[str, Any]:
-    return {"text": block.text, "section": block.section, "anchor": block.anchor,
-            "via": block.via}
+def _block_json(block: BoundBlock, title: str) -> dict[str, Any]:
+    """A bound block as the measurement keeps it: `title` is the one the judge read ('' for none)."""
+    return {"text": block.text, "section": block.section, "title": title,
+            "anchor": block.anchor, "via": block.via}
 
 
 def _unique(items: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(items))
 
 
-class _Planner:
+def _is_whole_flow(fact: Fact) -> bool:
+    """Whether the fact is a whole flow (`cely_tok`), judged only where every place is bound."""
+    return fact.tok is not None and fact.tok.whole
+
+
+class _UnitSource(Protocol):
+    """What planning a unit needs of the documents: their blocks, texts and sizes.
+
+    A corpus (`_CorpusSource`) and an agent's answers (`_AnswerSource`) are the two sources;
+    `_plan_unit` is the only user of this interface.
+    """
+
+    def parsed(self, doc: CorpusDoc) -> ParsedDocument: ...
+
+    def text(self, doc: CorpusDoc) -> str | None:
+        """The whole text of the document (what a whole-document unit records)."""
+
+    def preselects(self, parsed: ParsedDocument) -> bool:
+        """Whether the document goes to the judge as bound blocks."""
+
+    def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
+        """The size of the document's file in bytes (what the report counts), None if unknown."""
+
+    def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
+        """Whether `doc` is the card that owns one of the places."""
+
+
+class _CorpusSource:
+    """The documents of a corpus, read through its index."""
+
     def __init__(self, index: CorpusIndex) -> None:
         self.index = index
-        self._located: dict[Place, Any] = {}
+        self._located: dict[Place, PlaceDocuments] = {}
         self._parsed: dict[str, ParsedDocument] = {}
         self._texts: dict[str, str] = {}
 
-    def locate(self, place: Place):
+    def locate(self, place: Place) -> PlaceDocuments:
         found = self._located.get(place)
         if found is None:
             found = self._located[place] = self.index.locate(place)
@@ -470,59 +508,97 @@ class _Planner:
                 known_files=self.index.files)
         return found
 
+    def text(self, doc: CorpusDoc) -> str | None:
+        return self._texts.get(doc.id)
+
     def preselects(self, parsed: ParsedDocument) -> bool:
         """Whether the document goes to the judge as bound blocks (`anchors.needs_preselection`)."""
         return needs_preselection(parsed.level, parsed.size_bytes)
 
     def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
-        """The size of the document's file in bytes (what the report counts), None if unknown."""
         try:
             return (self.index.corpus / doc.path).stat().st_size
         except OSError:
             return parsed.size_bytes
 
     def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
-        """Whether `doc` is the card that owns one of the places."""
         return any(self.locate(p).owner_card == doc.id for p in places)
 
-    def unit(self, question: Question, kind: str, claim_id: str, claim_text: str,
-             role: str | None, doc: CorpusDoc, places: Sequence[Place],
-             whole_flow: bool) -> PlannedUnit:
-        parsed = self.parsed(doc)
-        per_place = [bound_blocks(parsed, p) for p in places]
-        uncovered = [p for p, found in zip(places, per_place) if not found]
-        preselect = self.preselects(parsed)
-        mode = MODE_BOUND if preselect else MODE_WHOLE
-        blocks: tuple[str, ...] = ()
-        shown: tuple[dict[str, Any], ...] | None = None
-        count = 0
-        note: str | None = None
-        if whole_flow and uncovered:
-            note = f"{FLOW_NOTE} (bez vazby: {_place_label(uncovered[0])})"
-        elif preselect:
-            bound = _merge_in_order(parsed, per_place)
-            if bound:
-                blocks = tuple(b.text for b in bound)
-                shown = tuple(_block_json(b) for b in bound)
-                count = len(bound)
-            else:
-                note = "dokument nemá žádný blok vázaný k místu"
-        elif parsed.blocks:
-            blocks = tuple(b.text for b in parsed.blocks)
-            count = len(blocks)
+
+class _AnswerSource:
+    """The answers of the runs: no corpus, an answer is read as a map (`parse_answer`)."""
+
+    def __init__(self) -> None:
+        self._parsed: dict[str, ParsedDocument] = {}
+        self._texts: dict[str, str] = {}
+
+    def add(self, doc: CorpusDoc, text: str) -> None:
+        self._texts[doc.id] = text
+        self._parsed[doc.id] = parse_answer(text, doc_id=doc.id, title=doc.title)
+
+    def parsed(self, doc: CorpusDoc) -> ParsedDocument:
+        return self._parsed[doc.id]
+
+    def text(self, doc: CorpusDoc) -> str | None:
+        return self._texts.get(doc.id)
+
+    def preselects(self, parsed: ParsedDocument) -> bool:
+        # An answer is small and goes whole, like a map; an oversized one as bound blocks.
+        return parsed.size_bytes > PRESELECT_THRESHOLD_BYTES
+
+    def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
+        return None  # an answer is not a corpus document
+
+    def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
+        return None
+
+
+def _plan_unit(source: _UnitSource, question: Question, kind: str, claim_id: str,
+               claim_text: str, role: str | None, doc: CorpusDoc, places: Sequence[Place],
+               whole_flow: bool) -> PlannedUnit:
+    """The unit of one fact (claim), role and document: its mode, the texts the judge reads.
+
+    A bound block is read with its document title and section heading, a document that goes
+    whole with its title and the headings that open its sections (`anchors.judge_text`,
+    `anchors.whole_judge_texts`); an answer has no title. What a unit records as `blocks` is
+    what the owner's review shows and keys its decision by.
+    """
+    parsed = source.parsed(doc)
+    per_place = [bound_blocks(parsed, p) for p in places]
+    uncovered = [p for p, found in zip(places, per_place) if not found]
+    preselect = source.preselects(parsed)
+    mode = MODE_BOUND if preselect else MODE_WHOLE
+    blocks: tuple[str, ...] = ()
+    shown: tuple[dict[str, Any], ...] | None = None
+    count = 0
+    note: str | None = None
+    if whole_flow and uncovered:
+        note = f"{FLOW_NOTE} (bez vazby: {_place_label(uncovered[0])})"
+    elif preselect:
+        bound = _merge_in_order(parsed, per_place)
+        if bound:
+            titles = ["" if parsed.answer else b.title for b in bound]
+            blocks = tuple(judge_text(t, b.section, b.text) for t, b in zip(titles, bound))
+            shown = tuple(_block_json(b, t) for t, b in zip(titles, bound))
+            count = len(bound)
         else:
-            note = "dokument nemá žádný blok"
-        record = UnitResult(
-            id=unit_id(question.id, claim_id, role, doc.id), question_id=question.id, kind=kind,
-            claim_id=claim_id, role=role, document=doc.id, slot=doc.slot, title=doc.title,
-            mode=mode, blocks=shown, block_count=count,
-            state=STATE_PENDING if blocks else STATE_NO_BOUND_BLOCK, note=note,
-            question_text=question.dotaz, claim_text=claim_text, document_path=doc.path,
-            document_text=None if preselect else self._texts.get(doc.id),
-            places=tuple(_place_json(p) for p in places),
-            document_bytes=self.file_bytes(doc, parsed), owner_card=self.owns(doc, places))
-        return PlannedUnit(record=record, claim_text=claim_text, question_text=question.dotaz,
-                           blocks=blocks, places=tuple(places), parsed=parsed)
+            note = "dokument nemá žádný blok vázaný k místu"
+    elif parsed.blocks:
+        blocks = tuple(whole_judge_texts(parsed))
+        count = len(blocks)
+    else:
+        note = "dokument nemá žádný blok"
+    record = UnitResult(
+        id=unit_id(question.id, claim_id, role, doc.id), question_id=question.id, kind=kind,
+        claim_id=claim_id, role=role, document=doc.id, slot=doc.slot, title=doc.title,
+        mode=mode, blocks=shown, block_count=count,
+        state=STATE_PENDING if blocks else STATE_NO_BOUND_BLOCK, note=note,
+        question_text=question.dotaz, claim_text=claim_text, document_path=doc.path,
+        document_text=None if preselect else source.text(doc),
+        places=tuple(_place_json(p) for p in places),
+        document_bytes=source.file_bytes(doc, parsed), owner_card=source.owns(doc, places))
+    return PlannedUnit(record=record, claim_text=claim_text, question_text=question.dotaz,
+                       blocks=blocks, places=tuple(places), parsed=parsed)
 
 
 def _place_json(place: Place) -> dict[str, Any]:
@@ -542,57 +618,57 @@ def build_plan(catalog: Catalog, index: CorpusIndex) -> Plan:
     """
     for question in catalog.questions:
         check_commit(index.identity, question.commit)
-    planner = _Planner(index)
+    source = _CorpusSource(index)
     facts: list[FactPlan] = []
     claims: list[ClaimPlan] = []
     units: list[PlannedUnit] = []
     for question in catalog.questions:
         for fact in question.fakta:
             for role in FACT_ROLE_AUDIENCES[fact.role]:
-                plan, planned = _plan_fact(planner, question, fact, role)
+                plan, planned = _plan_fact(source, question, fact, role)
                 facts.append(plan)
                 units.extend(planned)
     for question in catalog.questions:
         for claim in question.zakazana_tvrzeni:
-            plan, planned = _plan_claim(planner, question, claim)
+            plan, planned = _plan_claim(source, question, claim)
             claims.append(plan)
             units.extend(planned)
     return Plan(questions=tuple(catalog.questions), facts=tuple(facts), claims=tuple(claims),
                 units=tuple(units))
 
 
-def _unverified(planner: _Planner, places: Sequence[Place]) -> tuple[list[Any], list[str]]:
-    located = [planner.locate(p) for p in places]
+def _unverified(source: _CorpusSource, places: Sequence[Place]
+                ) -> tuple[list[PlaceDocuments], list[str]]:
+    located = [source.locate(p) for p in places]
     return located, [pd.reason or "místo nenalezeno v korpusu" for pd in located if not pd.found]
 
 
-def _plan_fact(planner: _Planner, question: Question, fact: Fact, role: str
+def _plan_fact(source: _CorpusSource, question: Question, fact: Fact, role: str
                ) -> tuple[FactPlan, list[PlannedUnit]]:
-    located, problems = _unverified(planner, fact.mista)
+    located, problems = _unverified(source, fact.mista)
     if problems:
         return FactPlan(question.id, fact.id, role, tuple(problems), (), ()), []
     docs: dict[str, CorpusDoc] = {}
     for pd in located:
         for hit in pd.for_role(fact.role):
             docs.setdefault(hit.doc.id, hit.doc)
-    whole_flow = fact.tok is not None and fact.tok.whole
-    planned = [planner.unit(question, KIND_FACT, fact.id, fact.text, role, doc, fact.mista,
-                            whole_flow) for doc in docs.values()]
+    planned = [_plan_unit(source, question, KIND_FACT, fact.id, fact.text, role, doc, fact.mista,
+                          _is_whole_flow(fact)) for doc in docs.values()]
     return (FactPlan(question.id, fact.id, role, (), tuple(docs),
                      tuple(p.record.id for p in planned)), planned)
 
 
-def _plan_claim(planner: _Planner, question: Question, claim: ForbiddenClaim
+def _plan_claim(source: _CorpusSource, question: Question, claim: ForbiddenClaim
                 ) -> tuple[ClaimPlan, list[PlannedUnit]]:
-    located, problems = _unverified(planner, claim.mista)
+    located, problems = _unverified(source, claim.mista)
     if problems:
         return ClaimPlan(question.id, claim.id, claim.fakty, tuple(problems), (), ()), []
     docs: dict[str, CorpusDoc] = {}
     for pd in located:
         for hit in pd.hits:
             docs.setdefault(hit.doc.id, hit.doc)
-    planned = [planner.unit(question, KIND_FORBIDDEN, claim.id, claim.text, None, doc,
-                            claim.mista, False) for doc in docs.values()]
+    planned = [_plan_unit(source, question, KIND_FORBIDDEN, claim.id, claim.text, None, doc,
+                          claim.mista, False) for doc in docs.values()]
     return (ClaimPlan(question.id, claim.id, claim.fakty, (), tuple(docs),
                       tuple(p.record.id for p in planned)), planned)
 
@@ -616,30 +692,6 @@ def answer_doc_id(run: int) -> str:
     return f"odpoved:{run:03d}"
 
 
-class _AnswerPlanner(_Planner):
-    """The planner over answers: no corpus, an answer is read as a map (`parse_answer`)."""
-
-    def __init__(self) -> None:
-        super().__init__(None)  # type: ignore[arg-type]  # no index: documents are the answers
-
-    def add(self, doc: CorpusDoc, text: str) -> None:
-        self._texts[doc.id] = text
-        self._parsed[doc.id] = parse_answer(text, doc_id=doc.id, title=doc.title)
-
-    def parsed(self, doc: CorpusDoc) -> ParsedDocument:
-        return self._parsed[doc.id]
-
-    def preselects(self, parsed: ParsedDocument) -> bool:
-        # An answer is small and goes whole, like a map; an oversized one as bound blocks.
-        return parsed.size_bytes > PRESELECT_THRESHOLD_BYTES
-
-    def file_bytes(self, doc: CorpusDoc, parsed: ParsedDocument) -> int | None:
-        return None  # an answer is not a corpus document
-
-    def owns(self, doc: CorpusDoc, places: Sequence[Place]) -> bool | None:
-        return None
-
-
 def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) -> Plan:
     """Lay out every unit for the stored runs of the questions, for the experiment's `role`.
 
@@ -647,7 +699,7 @@ def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) ->
     planned. A run without an answer gets plans without units (`no_answer`). Nothing is judged.
     """
     questions = {q.id: q for q in catalog.questions}
-    planner = _AnswerPlanner()
+    source = _AnswerSource()
     facts: list[FactPlan] = []
     claims: list[ClaimPlan] = []
     units: list[PlannedUnit] = []
@@ -659,14 +711,14 @@ def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) ->
                         title=ANSWER_TITLE, path=ANSWER_PATH, header_path=None)
         answered = item.text is not None
         if answered:
-            planner.add(doc, item.text)
+            source.add(doc, item.text)
         reason = None if answered else (item.reason or "bez odpovědi")
         origin = dict(variant=item.variant, run=item.run, no_answer=reason)
 
         def planned_unit(kind: str, claim_id: str, text: str, unit_role: str | None,
                          places: Sequence[Place], whole_flow: bool) -> PlannedUnit:
-            planned = planner.unit(question, kind, claim_id, text, unit_role, doc, places,
-                                   whole_flow)
+            planned = _plan_unit(source, question, kind, claim_id, text, unit_role, doc, places,
+                                 whole_flow)
             record = replace(planned.record, slot=ANSWER_SLOT, variant=item.variant, run=item.run)
             return replace(planned, record=record)
 
@@ -676,8 +728,8 @@ def build_answer_plan(catalog: Catalog, runs: Sequence[AnswerRun], role: str) ->
             if not answered:
                 facts.append(FactPlan(question.id, fact.id, role, (), (), (), **origin))
                 continue
-            whole_flow = fact.tok is not None and fact.tok.whole
-            planned = planned_unit(KIND_FACT, fact.id, fact.text, role, fact.mista, whole_flow)
+            planned = planned_unit(KIND_FACT, fact.id, fact.text, role, fact.mista,
+                                   _is_whole_flow(fact))
             facts.append(FactPlan(question.id, fact.id, role, (), (doc.id,), (planned.record.id,),
                                   **origin))
             units.append(planned)
@@ -810,9 +862,22 @@ def _claim_result(cp: ClaimPlan, by_id: dict[str, UnitResult]) -> ClaimResult:
 # --- running and saving ----------------------------------------------------------------
 
 def corpus_identity_json(index: CorpusIndex) -> dict[str, Any]:
+    """What identifies the measured corpus: its revision and the canonical path of the corpus,
+    and the receipt's fingerprint of the corpus when there is one.
+
+    Two corpora of one revision (the same card check over two builds) are two measurements:
+    the revision alone would give them one id and the second would overwrite the first. The
+    manifest's stat key is not part of it: it changes with a file's mtime and would break the
+    resumption of a measurement.
+    """
     identity = index.identity
-    return {"revision": identity.revision, "source": identity.source, "label": identity.label,
-            "tree_fingerprint": identity.tree_fingerprint}
+    out: dict[str, Any] = {
+        "revision": identity.revision, "source": identity.source, "label": identity.label,
+        "tree_fingerprint": identity.tree_fingerprint,
+        "corpus_path": os.path.realpath(index.corpus)}
+    if identity.corpus_fingerprint is not None:
+        out["corpus_fingerprint"] = identity.corpus_fingerprint
+    return out
 
 
 def _receipt_extra(index: CorpusIndex) -> dict[str, Any]:
@@ -835,7 +900,7 @@ def _receipt_extra(index: CorpusIndex) -> dict[str, Any]:
 
 def _items_json(plan: Plan) -> tuple[dict[str, Any], ...]:
     return tuple({"id": q.id, "commit": q.commit, "otisk_potvrzeni": q.otisk_potvrzeni,
-                  "kontrolni": q.kontrolni} for q in plan.questions)
+                  "kontrolni": q.kontrolni, "dotaz": q.dotaz} for q in plan.questions)
 
 
 def measurement_id(corpus: dict[str, Any], items: Sequence[dict[str, Any]],
@@ -853,17 +918,7 @@ def measurement_path(state_dir: str | os.PathLike[str]) -> Path:
 
 def write_measurement(path: Path, measurement: Measurement) -> None:
     """Atomic write (temp file + `os.replace`); `format_version` is the first key."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(measurement.to_json(), handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
+    write_text_atomic(path, json.dumps(measurement.to_json(), ensure_ascii=False, indent=2) + "\n")
 
 
 def archive_foreign_measurement(path: Path, new_id: str) -> Path | None:

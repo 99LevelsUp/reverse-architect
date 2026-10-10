@@ -46,7 +46,7 @@ import calibration
 import card_check
 import review
 from corpus import same_revision
-from report import write_text_atomic
+from report import ROLE_DEVELOPER, ROLE_SUPPORT, write_text_atomic
 
 REPORT_FORMAT_VERSION = 1
 REPORT_KIND = "odpovedi"
@@ -56,7 +56,7 @@ MARKDOWN_FILE = "answers-report.md"
 PATH_CARDS = review.PATH_CARD_CHECK  # "kontrola karet"
 PATH_AGENT = "běh s agentem"
 _PATH_ORDER = {PATH_CARDS: 0, PATH_AGENT: 1}
-_ROLE_ORDER = {card_check.ROLE_SUPPORT: 0, card_check.ROLE_DEVELOPER: 1}
+_ROLE_ORDER = {ROLE_SUPPORT: 0, ROLE_DEVELOPER: 1}
 
 SECTION_ACCEPTANCE = "akceptacni_polozka"
 SECTION_CONTROL = "kontrolni_otazky"
@@ -190,13 +190,15 @@ def load_sources(paths: Sequence[str | os.PathLike[str]], state_dir: str | os.Pa
     return sources
 
 
-def _judge_key(source: Source) -> tuple[Any, Any, Any]:
+def _judge_key(source: Source) -> tuple[Any, Any, Any, Any]:
+    """Who judged: the judge's id, its family, the model it reported and the prompt version."""
     judge = source.header.get("judge") or {}
-    return judge.get("id"), judge.get("model"), source.header.get("prompt_version")
+    return (judge.get("id"), judge.get("rodina"), judge.get("model"),
+            source.header.get("prompt_version"))
 
 
-def _judge_text(key: tuple[Any, Any, Any]) -> str:
-    return f"hodnotitel {key[0]}, model {key[1]}, verze promptu {key[2]}"
+def _judge_text(key: tuple[Any, Any, Any, Any]) -> str:
+    return f"hodnotitel {key[0]} (rodina {key[1]}), model {key[2]}, verze promptu {key[3]}"
 
 
 def _refuse_incomparable(sources: Sequence[Source]) -> None:
@@ -213,13 +215,14 @@ def _refuse_incomparable(sources: Sequence[Source]) -> None:
             revisions.append((f"korpus {corpus['id']} ({name})", revision))
         for item in source.header.get("items") or ():
             revisions.append((f"položka {item.get('id')} ({name})", str(item.get("commit"))))
-            fingerprint = (item.get("commit"), item.get("otisk_potvrzeni"), item.get("kontrolni"))
+            fingerprint = (item.get("commit"), item.get("otisk_potvrzeni"), item.get("kontrolni"),
+                           item.get("dotaz"))
             known = items.setdefault(item.get("id"), (fingerprint, name))
             if known[0] != fingerprint and changed is None:
                 changed = (
                     f"Položka {item.get('id')} má v měřeních {known[1]} a {name} různý otisk "
-                    "(commit, otisk potvrzení nebo příznak kontrolní); katalog se mezi měřeními "
-                    "změnil, porovnání by měřilo různé položky.")
+                    "(commit, otisk potvrzení, příznak kontrolní nebo text otázky); katalog se "
+                    "mezi měřeními změnil, porovnání by měřilo různé položky.")
     first_what, first = revisions[0]
     for what, revision in revisions[1:]:
         if not same_revision(first, revision):

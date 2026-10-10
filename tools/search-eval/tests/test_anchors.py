@@ -316,6 +316,73 @@ class PreselectionTest(unittest.TestCase):
         self.assertTrue(needs_preselection("card", len(big.encode("utf-8"))))
 
 
+class JudgeTextTest(unittest.TestCase):
+    """What the judge reads of a block: its document title and the heading of its section (KTD4)."""
+
+    TEXT = ("# Title\n\n**class** · `a.cs:1-9`\n\n## Alpha\n\n- First — `a.cs:2`\n"
+            "- Second — `a.cs:3`\n\n## Beta\n\n- Third — `a.cs:5`\n")
+
+    def doc(self):
+        return parse_document(self.TEXT, doc_id="d", title="Title", level="card")
+
+    def test_a_block_carries_a_line_with_title_and_section(self):
+        self.assertEqual(anchors.judge_text("Title", "Alpha", "First"), "Title > Alpha\nFirst")
+        self.assertEqual(anchors.judge_text("Title", "", "First"), "Title\nFirst")
+        self.assertEqual(anchors.judge_text("", "Alpha", "First"), "Alpha\nFirst")
+        self.assertEqual(anchors.judge_text("", "", "First"), "First")
+
+    def test_a_document_that_goes_whole_opens_with_its_title_and_every_section_with_its_heading(self):
+        self.assertEqual(anchors.whole_judge_texts(self.doc()), [
+            "Title\n**class** · `a.cs:1-9`", "Alpha\nFirst — `a.cs:2`", "Second — `a.cs:3`",
+            "Beta\nThird — `a.cs:5`"])
+
+    def test_an_answer_has_neither_title_nor_headings(self):
+        answer = parse_answer("První věta `a.cs:2`.\n\nDruhá věta.\n")
+        self.assertEqual(anchors.whole_judge_texts(answer), [b.text for b in answer.blocks])
+
+    def test_a_heading_belongs_to_the_block_that_follows_it(self):
+        doc = self.doc()
+        first_of_alpha = next(b for b in doc.blocks if b.text.startswith("First"))
+        self.assertEqual(anchors.citation_blocks(doc, "Alpha"), [first_of_alpha])
+        self.assertEqual(anchors.citation_blocks(doc, "alpha"), [first_of_alpha])
+        self.assertEqual(anchors.citation_blocks(doc, "Title"), [doc.blocks[0]])
+        place = member("a.cs", "T.M()", 2)
+        self.assertEqual(citation_binds(doc, place, "Alpha").anchor, "a.cs:2")
+        self.assertIsNone(citation_binds(doc, member("a.cs", "T.M()", 5), "Alpha"))
+        self.assertEqual(citation_binds(doc, member("a.cs", "T.M()", 5), "Beta").anchor, "a.cs:5")
+
+    def test_a_quotation_that_runs_from_the_heading_into_the_text_finds_the_block(self):
+        doc = self.doc()
+        found = anchors.citation_blocks(doc, "Alpha\nFirst")
+        self.assertEqual([b.text for b in found], ["First — `a.cs:2`"])
+        both = anchors.citation_blocks(doc, "Title > Alpha\nFirst")
+        self.assertEqual([b.text for b in both], ["First — `a.cs:2`"])
+
+    NESTED = ("# Title\n\n**class** · `a.cs:1-9`\n\n## Dynamic access\n\n### Context\n\n"
+              "#### caller: X.Save\n\n- enters the check — `a.cs:2`\n- calls it — `a.cs:3`\n\n"
+              "## Next\n\n- last — `a.cs:5`\n")
+
+    def test_headings_without_a_block_of_their_own_open_the_next_block(self):
+        doc = parse_document(self.NESTED, doc_id="d", title="Title", level="card")
+        self.assertEqual(anchors.whole_judge_texts(doc), [
+            "Title\n**class** · `a.cs:1-9`",
+            "Dynamic access > Context > caller: X.Save\nenters the check — `a.cs:2`",
+            "calls it — `a.cs:3`", "Next\nlast — `a.cs:5`"])
+        entering = doc.blocks[1]
+        for quoted in ("Dynamic access", "Context", "caller: X.Save", "Dynamic access > Context"):
+            self.assertEqual(anchors.citation_blocks(doc, quoted), [entering], quoted)
+        self.assertEqual(citation_binds(doc, member("a.cs", "T.M()", 2), "Context").anchor, "a.cs:2")
+
+    def test_an_answer_keeps_no_headings(self):
+        self.assertEqual(parse_answer("Text `a.cs:2`.\n").headings, ())
+
+    def test_a_text_that_is_in_a_block_still_wins_over_a_heading(self):
+        doc = parse_document("# T\n\n## Run\n\n- Run the check `a.cs:2`\n\n## Other\n\n"
+                             "- Something else `a.cs:3`\n", doc_id="d", title="T", level="card")
+        self.assertEqual([b.text for b in anchors.citation_blocks(doc, "Run the check")],
+                         ["Run the check `a.cs:2`"])
+
+
 class AudienceTest(unittest.TestCase):
     def test_a_block_only_in_a_detail_serves_the_developer_not_support(self):
         self.assertEqual(anchors.audiences(["detail"]), ("vyvojar",))

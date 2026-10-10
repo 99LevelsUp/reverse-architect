@@ -430,5 +430,37 @@ class MemberNameTest(unittest.TestCase):
         self.assertEqual(catalog.member_simple_name("Map<K, List<V>>.Put<T>(int)"), "Put")
 
 
+class SharedConstantsTest(unittest.TestCase):
+    """Reader roles and item kinds are defined once; the other modules import them."""
+
+    def test_reader_roles_come_from_report(self):
+        import anchors
+        import card_check
+        import report
+        self.assertEqual(report.ROLES, (report.ROLE_SUPPORT, report.ROLE_DEVELOPER))
+        self.assertIs(card_check.ROLE_SUPPORT, report.ROLE_SUPPORT)
+        self.assertIs(card_check.ROLE_DEVELOPER, report.ROLE_DEVELOPER)
+        self.assertEqual(anchors.audiences(["karta"]), (report.ROLE_DEVELOPER, report.ROLE_SUPPORT))
+        self.assertFalse(hasattr(anchors, "AUDIENCE_SUPPORT"))
+
+    def test_fact_roles_and_item_kinds_come_from_catalog(self):
+        import card_check
+        import corpus
+        self.assertEqual(catalog.ROLES, (catalog.ROLE_FRAMEWORK, catalog.ROLE_PLACE))
+        self.assertEqual(set(card_check.FACT_ROLE_AUDIENCES), set(catalog.ROLES))
+        self.assertIs(corpus.ROLE_FRAMEWORK, catalog.ROLE_FRAMEWORK)
+        self.assertEqual((catalog.KIND_QUESTION, catalog.KIND_BUG), ("otazka", "chyba"))
+
+    def test_no_module_compares_a_bare_role_or_kind_literal(self):
+        tool = Path(__file__).resolve().parent.parent
+        for name in ("report.py", "corpus.py", "card_check.py", "anchors.py"):
+            source = (tool / name).read_text(encoding="utf-8")
+            for literal in ('== "otazka"', '== "chyba"', '== "ramcova"', '== "misto"',
+                            '= "podpora"', '= "vyvojar"'):
+                if name == "report.py" and literal in ('= "podpora"', '= "vyvojar"'):
+                    continue  # report.py is where the reader roles are defined
+                self.assertNotIn(literal, source, f"{name}: {literal}")
+
+
 if __name__ == "__main__":
     unittest.main()

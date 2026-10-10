@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from agents.base import (AgentRunError, Cap, build_isolated_env, isolated_config_dir,
-                         remove_tree, run_watched)
+                         remove_tree, resolve_executable, run_watched)
 
 SHAPE_CLAUDE = "claude-json"
 SHAPE_CODEX = "codex-jsonl"
@@ -101,16 +101,8 @@ def family_environment(family: str, config_dir: Path) -> dict[str, str]:
     return {}
 
 
-def _resolve_executable(command: Sequence[str]) -> list[str]:
-    if not command:
-        raise JudgeInfrastructureError("Příkaz hodnotitele je prázdný.")
-    first = command[0]
-    if os.path.dirname(first):
-        return list(command)
-    found = shutil.which(first)
-    if found is None:
-        raise JudgeInfrastructureError(f"Spustitelný soubor hodnotitele {first} nebyl nalezen v PATH.")
-    return [found, *command[1:]]
+def _os_detail(exc: OSError) -> str:
+    return f"{exc.strerror or exc}" + (f" ({exc.filename})" if exc.filename else "")
 
 
 def _tail(text: str) -> str:
@@ -133,7 +125,7 @@ def run_judge_cli(*, command: Sequence[str], family: str, output_shape: str,
     """
     if output_shape not in OUTPUT_SHAPES:
         raise JudgeInfrastructureError(f"Neznámý tvar výstupu hodnotitele {output_shape}.")
-    argv = _resolve_executable(command)
+    argv = resolve_executable(command, who="hodnotitele", error=JudgeInfrastructureError)
     sources = []
     for source, target in credentials:
         path = Path(source).expanduser()
@@ -142,9 +134,12 @@ def run_judge_cli(*, command: Sequence[str], family: str, output_shape: str,
         sources.append((path, target))
     environment = dict(os.environ if parent_env is None else parent_env)
 
-    root = Path(isolation_root)
-    root.mkdir(parents=True, exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix="judge-run-", dir=root))
+    try:
+        root = Path(isolation_root)
+        root.mkdir(parents=True, exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix="judge-run-", dir=root))
+    except OSError as exc:
+        raise JudgeInfrastructureError(f"Hodnotitele nejde spustit: {_os_detail(exc)}") from exc
     try:
         workdir = scratch / "work"
         sibling = scratch / "sibling"
@@ -167,6 +162,8 @@ def run_judge_cli(*, command: Sequence[str], family: str, output_shape: str,
             raw = stdout_file.read_text(encoding="utf-8", errors="replace") \
                 if stdout_file.is_file() else ""
             session_model = _codex_session_model(cfg) if output_shape == SHAPE_CODEX else None
+    except OSError as exc:  # the CLI cannot be started, a file cannot be written or copied
+        raise JudgeInfrastructureError(f"Hodnotitele nejde spustit: {_os_detail(exc)}") from exc
     finally:
         remove_tree(scratch)
 
