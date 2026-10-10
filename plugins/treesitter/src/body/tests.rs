@@ -1021,3 +1021,173 @@ fn a_file_that_is_not_utf8_is_refused_with_the_reason() {
     assert_eq!(read(bom).members.len(), 1);
     assert_eq!(read("class C { void M() { N( } }\n").members.len(), 1);
 }
+
+/// Every branch of a `#if` region is in the model — `#elif` and `#else`
+/// too — so no configuration's return reads as the member's only one.
+#[test]
+fn every_branch_of_a_preprocessor_region_is_in_the_model() {
+    let src = "class C {\n    bool M() {\n#if DEMO\n        return false;\n#elif TRIAL\n        return Trial();\n#else\n        return _dirty;\n#endif\n    }\n}\n";
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    let returns: Vec<(Option<Constant>, Option<Vec<Expr>>)> = m
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Return)
+        .map(|n| {
+            (
+                n.returns.clone(),
+                n.condition.as_ref().map(|c| c.expr.clone()),
+            )
+        })
+        .collect();
+    assert_eq!(returns.len(), 3, "{returns:?}");
+    assert_eq!(returns[0], (Some(Constant::Boolean(false)), None));
+    assert_eq!(
+        returns[2],
+        (
+            None,
+            Some(vec![Expr::Path(path(PathRoot::Name, &["_dirty"]))])
+        )
+    );
+    assert_eq!(call(m, "Trial").kind, CallKind::Call);
+}
+
+/// `await` keeps the call it waits for: a statement, a value given to a
+/// local, a lambda's expression body (a statement, not a return), and a
+/// catch that only awaits a log call swallows the exception.
+#[test]
+fn an_awaited_call_is_read_as_the_call() {
+    let src = r#"class C {
+    async Task M(int x, string k) {
+        await Save(x);
+        var r = await Load(k);
+        Func<int, Task> f = async y => await Notify(y);
+        try { Run(); } catch { await Log(r); }
+        try { Run(); } catch { await Retry(r); }
+    }
+}
+"#;
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    let save = call(m, "Save");
+    assert_eq!(
+        m.nodes[save.node.expect("its node") as usize].kind,
+        NodeKind::Statement
+    );
+    assert_eq!(call(m, "Load").flow, Some(FlowTarget::Local("r".into())));
+    let notify = call(m, "Notify");
+    let lambda = m.lambdas.first().expect("the lambda");
+    let statement = &m.nodes[notify.node.expect("its node") as usize];
+    assert_eq!(statement.kind, NodeKind::Statement);
+    assert_eq!(statement.parent, Some(lambda.body));
+    assert!(!m
+        .nodes
+        .iter()
+        .any(|n| n.parent == Some(lambda.body) && n.kind == NodeKind::Return));
+    call(m, "Log");
+    call(m, "Retry");
+    let catches: Vec<bool> = m
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Catch)
+        .map(|n| n.tags.iter().any(|t| t.name == "swallow-exception"))
+        .collect();
+    assert_eq!(catches, [true, false]);
+}
+
+/// A `while` reads its condition before its body, a `do … while` after it,
+/// and a `using` resource is a local of the region it opens.
+#[test]
+fn while_do_and_using_keep_the_order_and_the_scope_of_the_source() {
+    let src = r#"class C {
+    void M() {
+        while (More()) Step();
+        do { Advance(); } while (Again());
+        using (var s = Open()) { s.Read(); }
+    }
+}
+"#;
+    let file = read(src);
+    let m = member(&file, at(src, 2, "M("), BodyKind::Method);
+    let order: Vec<&str> = m
+        .invocations
+        .iter()
+        .map(|i| i.callee.segments.last().map(String::as_str).unwrap_or(""))
+        .collect();
+    assert_eq!(order, ["More", "Step", "Advance", "Again", "Open", "Read"]);
+    let loops: Vec<bool> = m
+        .nodes
+        .iter()
+        .filter(|n| n.kind == NodeKind::Loop)
+        .map(|n| n.condition.is_some())
+        .collect();
+    assert_eq!(loops, [true, true]);
+    let using = m
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Other("using".into()))
+        .expect("the using region");
+    assert_eq!(call(m, "Open").flow, Some(FlowTarget::Local("s".into())));
+    let read_call = call(m, "Read");
+    assert_eq!(read_call.callee, path(PathRoot::Local, &["s", "Read"]));
+    let mut at_node = read_call.node;
+    while let Some(id) = at_node.filter(|&id| id != using.id) {
+        at_node = m.nodes[id as usize].parent;
+    }
+    assert_eq!(at_node, Some(using.id), "the call is inside the region");
+}
+
+/// An event's `add` and `remove` accessors are bodies of their own kinds.
+#[test]
+fn event_accessors_are_adder_and_remover_bodies() {
+    let src = "class C {\n    EventHandler h;\n    public event EventHandler Changed { add { h += value; } remove { h -= value; } }\n}\n";
+    let file = read(src);
+    for kind in [BodyKind::Adder, BodyKind::Remover] {
+        let m = member(&file, at(src, 3, "Changed"), kind);
+        assert!(
+            m.accesses
+                .iter()
+                .any(|a| a.target == path(PathRoot::Name, &["h"])),
+            "{kind:?}: {:?}",
+            m.accesses
+        );
+    }
+}
+
+/// A member declared without a body — `abstract`, `extern`, the declaring
+/// half of a `partial` method, an auto-property's accessors — has no body
+/// in the model, only its meta.
+#[test]
+fn a_member_without_a_body_has_none_in_the_model() {
+    let src = "abstract partial class C {\n    public abstract bool CanSave();\n    static extern int Native();\n    partial void OnSaved();\n    public bool Ready { get; set; }\n}\n";
+    let file = read(src);
+    assert!(file.members.is_empty(), "{:?}", file.members);
+    for (line, name) in [(2, "CanSave"), (3, "Native"), (4, "OnSaved")] {
+        assert!(
+            file.metas
+                .iter()
+                .any(|m| m.name_position == at(src, line, name)),
+            "no meta of {name}"
+        );
+    }
+}
+
+/// A parameter stored behind a null guard (`p ?? throw …`) is written from
+/// the parameter; a fallback (`p ?? q`) is not.
+#[test]
+fn a_parameter_guarded_by_a_throw_is_still_the_value_written() {
+    let src = "class Cmd {\n    Cmd(Action<object> execute, Func<object, bool> can) {\n        _execute = execute ?? throw new ArgumentNullException(nameof(execute));\n        _can = (can ?? throw new ArgumentNullException());\n        _other = execute ?? fallback;\n    }\n}\n";
+    let file = read(src);
+    let ctor = member(&file, at(src, 2, "Cmd("), BodyKind::Constructor);
+    let written = |field: &str| {
+        ctor.accesses
+            .iter()
+            .find(|a| a.mode == AccessMode::Write && a.target == path(PathRoot::Name, &[field]))
+            .unwrap_or_else(|| panic!("no write of {field}: {:?}", ctor.accesses))
+            .rhs
+            .clone()
+    };
+    assert_eq!(written("_execute"), Some(ValueRef::Param(0)));
+    assert_eq!(written("_can"), Some(ValueRef::Param(1)));
+    assert_eq!(written("_other"), Some(ValueRef::Other));
+}

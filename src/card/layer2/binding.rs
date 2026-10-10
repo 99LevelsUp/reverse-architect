@@ -28,10 +28,15 @@
 //!   Being called proves it is a delegate; no list of delegate type names is
 //!   read.
 //!
-//! Limits: a field written from a parameter through anything but a plain
-//! assignment (`_execute = execute ?? throw …`) is not seen as written from
-//! it, so its calls are taken for raised events and the construction does
-//! not bind it.
+//! A parameter stored behind a null guard (`_execute = execute ?? throw …`)
+//! is written from that parameter: the body model gives the write the
+//! parameter as its value, so the field is bound and its calls are no
+//! raised events.
+//!
+//! Limits: a field written from a parameter through anything else — a
+//! fallback (`execute ?? Noop`), a conversion, a call — is not seen as
+//! written from it, so its calls are taken for raised events and the
+//! construction does not bind it.
 
 use super::entry::{
     bodies, construction_class, delegate_sites, field_named, field_writes, flows_out_of, invokers,

@@ -1544,6 +1544,16 @@ impl<'t> Builder<'t> {
                 .invocation_of
                 .get(&e.id())
                 .map_or(ValueRef::Other, |&i| ValueRef::Construction(i)),
+            // `p ?? throw …` is `p` or no value at all: the guard of a
+            // constructor that stores its parameter.
+            "binary_expression"
+                if has_token(e, "??")
+                    && e.child_by_field_name("right")
+                        .is_some_and(|r| unparen(r).kind() == "throw_expression") =>
+            {
+                e.child_by_field_name("left")
+                    .map_or(ValueRef::Other, |l| self.value_ref(l))
+            }
             _ => constant_of(e, self.src).map_or(ValueRef::Other, ValueRef::Constant),
         }
     }
@@ -1756,10 +1766,14 @@ impl<'t> Builder<'t> {
                 self.add_at(NodeKind::Other("goto".into()), node, parent);
             }
             // A label or a preprocessor region is not a node: what it holds
-            // is.
+            // is. Every branch of a `#if` is held — the `#elif` and `#else`
+            // in its `alternative` too — so the model carries every
+            // configuration and no branch reads as the only path.
             kind if kind == "labeled_statement" || kind.starts_with("preproc") => {
                 for child in named_children(node) {
-                    if is_statement_kind(child.kind()) {
+                    if is_statement_kind(child.kind())
+                        || matches!(child.kind(), "preproc_elif" | "preproc_else")
+                    {
                         self.stmt(child, parent);
                     }
                 }
