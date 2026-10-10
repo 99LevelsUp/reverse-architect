@@ -216,15 +216,11 @@ pub fn generate_reporting(
     };
     // The second layer's analysis, once per run and only for a run with it
     // (plan 2a, U6): the keywords of the analyzed types' cards first, so
-    // every count read off the cards below sees them.
-    let analysis = bodies.as_ref().map(|layer| {
-        card::layer2::analyze_with(
-            &graph,
-            layer,
-            config.ambiguity_ceiling,
-            &card::layer2::NoMarks,
-        )
-    });
+    // every count read off the cards below sees them. The dynamic-call
+    // markers of step 2c are built in it, before the triggers that read them.
+    let analysis = bodies
+        .as_ref()
+        .map(|layer| card::layer2::analyze_run(&graph, layer, config.ambiguity_ceiling));
     if let Some(analysis) = &analysis {
         card::add_layer2_keywords(&mut card_set, &insight, analysis);
     }

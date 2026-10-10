@@ -354,6 +354,28 @@ impl<'a> Index<'a> {
         }
     }
 
+    /// The one C# type of the repository whose full name — namespace,
+    /// enclosing types and name, dotted — is exactly `full` (plan 2c, KTD8:
+    /// a type another language names fully qualified, `Acme.Views.ViewA`).
+    /// Unlike [`Index::type_named`], whose qualifier may be any trailing part
+    /// of the namespace, this is equality: a name the other language wrote
+    /// fully qualified is backed only by the type of exactly that name.
+    pub fn type_exactly(&self, full: &str) -> Result<NodeKey, Unresolved> {
+        let last = full.rsplit_once('.').map_or(full, |(_, last)| last);
+        let named: Vec<&NodeKey> = self
+            .types_named
+            .get(last)
+            .into_iter()
+            .flatten()
+            .filter(|key| full_name(key).as_deref() == Some(full))
+            .collect();
+        match named.as_slice() {
+            [] => Err(Unresolved::ExternalType(full.to_string())),
+            [one] => Ok((*one).clone()),
+            _ => Err(Unresolved::AmbiguousType(full.to_string())),
+        }
+    }
+
     /// Why a name no type of `ty`'s line of bases declares cannot be said
     /// to be no member: `ty`'s base is ambiguous, or the first entry of a
     /// base list of it — the base class, when it has one — names a type the
@@ -858,6 +880,21 @@ fn qualified_by(key: &NodeKey, qualifier: &str) -> bool {
     container == qualifier || container.ends_with(&format!(".{qualifier}"))
 }
 
+/// The full name of the C# type `key` — its namespace, enclosing types and
+/// name, dotted (`Acme.Views#Outer.Inner` is `Acme.Views.Outer.Inner`) — a
+/// generic arity or a duplicate's suffix left out, as [`qualified_by`] reads
+/// them. `None` for a key of no C# type.
+pub fn full_name(key: &NodeKey) -> Option<String> {
+    let (namespace, path) = key.as_str().strip_prefix(CSHARP_KEYS)?.split_once('#')?;
+    let parts: Vec<&str> = namespace
+        .split('.')
+        .chain(path.split('.'))
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| segment.split(['<', '`', '~']).next().unwrap_or(segment))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("."))
+}
+
 /// Whether a type's parts are C#: a part the second layer read from a `.cs`
 /// file (KTD6: the analyses read only C# bodies).
 pub fn is_csharp(layer: &BodyLayer, ty: &NodeKey) -> bool {
@@ -963,6 +1000,22 @@ mod tests {
             returns: None,
             tags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_full_name_is_the_namespace_and_the_type_path_dotted() {
+        let full = |k: &str| full_name(&NodeKey::new(k));
+        assert_eq!(
+            full("sym:csharp:Acme.Views#ViewA").as_deref(),
+            Some("Acme.Views.ViewA")
+        );
+        assert_eq!(
+            full("sym:csharp:Acme.Views#Outer.Inner").as_deref(),
+            Some("Acme.Views.Outer.Inner")
+        );
+        assert_eq!(full("sym:csharp:#Global").as_deref(), Some("Global"));
+        assert_eq!(full("sym:csharp:Acme#Base~2").as_deref(), Some("Acme.Base"));
+        assert_eq!(full("sym:xaml:a.xaml#K"), None);
     }
 
     #[test]

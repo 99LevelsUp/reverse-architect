@@ -1,0 +1,11 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:s="clr-namespace:Acme.Screens">
+  <ControlTemplate TargetType="s:ViewA">
+    <DockPanel>
+      <TextBlock Text="{Binding P}" FontWeight="Bold" />
+      <ListBox x:Name="PART_List" />
+    </DockPanel>
+  </ControlTemplate>
+</ResourceDictionary>

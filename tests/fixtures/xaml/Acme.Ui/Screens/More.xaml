@@ -1,0 +1,15 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:s="clr-namespace:Acme.Screens"
+    xmlns:b="clr-namespace:Acme.B">
+  <ControlTemplate TargetType="s:PanelD">
+    <TextBlock Text="{Binding Q}" />
+  </ControlTemplate>
+  <ControlTemplate TargetType="s:Bare">
+    <TextBlock Text="{Binding Q}" />
+  </ControlTemplate>
+  <ControlTemplate TargetType="b:ViewA">
+    <TextBlock Text="{Binding R}" />
+  </ControlTemplate>
+</ResourceDictionary>

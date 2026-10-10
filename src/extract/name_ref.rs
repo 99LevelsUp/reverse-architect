@@ -200,7 +200,7 @@ fn parent(path: &str) -> &str {
 /// itself alone. See the module documentation for why the table exists and
 /// what would retire it.
 const BROADER: &[(&str, &[&str])] = &[(
-    "xaml:resource",
+    RESOURCE_KIND,
     &["xaml:resource", "xaml:template", "xaml:style"],
 )];
 
@@ -294,55 +294,12 @@ pub(super) fn resolve(
         .map(|r| r.target_kind.as_str())
         .chain(BROADER.iter().flat_map(|(_, kinds)| kinds.iter().copied()))
         .collect();
-    let mut by_name: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
-    let mut top_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for node in graph.nodes_sorted() {
-        let NodeKind::Declared(id) = node.kind else {
-            continue;
-        };
-        let Some(kind) = graph.vocabulary().node_name(id) else {
-            continue;
-        };
-        if !targets.iter().any(|t| answers(t, &kind)) {
-            continue;
-        }
-        let Some(name) = text_fact(node, FactKind::SymbolName) else {
-            continue;
-        };
-        let Some(file) = file_of(graph, &node.key) else {
-            continue;
-        };
-        let line = node
-            .facts
-            .iter()
-            .find(|f| f.kind == FactKind::SymbolName)
-            .and_then(|f| f.provenance.span.start())
-            .unwrap_or(0);
-        let at = names
-            .get(&(file.clone(), node.key.clone()))
-            .copied()
-            .unwrap_or((line, 0));
-        let block = symbol_blocks.get(&node.key).copied();
-        if block.is_none() {
-            top_names
-                .entry(file.clone())
-                .or_default()
-                .insert(name.to_string());
-        }
-        by_name
-            .entry(name.to_string())
-            .or_default()
-            .push(Candidate {
-                key: node.key.clone(),
-                kind,
-                file,
-                at,
-                block,
-            });
-    }
-    for list in by_name.values_mut() {
-        list.sort_by(|a, b| (&a.file, a.at, &a.key).cmp(&(&b.file, b.at, &b.key)));
-    }
+    let (by_name, top_names) = collect_candidates(
+        graph,
+        &targets,
+        &|file, key| names.get(&(file.to_string(), key.clone())).copied(),
+        &symbol_blocks,
+    );
 
     let mut imports: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in graph.edges_unordered() {
@@ -497,6 +454,166 @@ pub(super) fn resolve(
             &p.target,
             Edge::new(p.kind, p.prov).at_sites(p.sites),
         );
+    }
+}
+
+/// Where a candidate's name is written in its file, when the run knows it.
+type NameAt<'f> = &'f dyn Fn(&str, &NodeKey) -> Option<(u32, u32)>;
+
+/// The candidates by name, and every file's names outside every block.
+type Collected = (
+    BTreeMap<String, Vec<Candidate>>,
+    BTreeMap<String, BTreeSet<String>>,
+);
+
+/// Every candidate of a kind one of `targets` answers, by name — each list
+/// by file, then the position of its name, then key — and every file's names
+/// outside every block. `at_of` gives a candidate's name position in its file
+/// when the run still knows it (the line of its name fact otherwise, column
+/// 0); `symbol_blocks` the block each declaration is written in.
+fn collect_candidates(
+    graph: &Graph,
+    targets: &BTreeSet<&str>,
+    at_of: NameAt<'_>,
+    symbol_blocks: &HashMap<&NodeKey, u32>,
+) -> Collected {
+    let mut by_name: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
+    let mut top_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for node in graph.nodes_sorted() {
+        let NodeKind::Declared(id) = node.kind else {
+            continue;
+        };
+        let Some(kind) = graph.vocabulary().node_name(id) else {
+            continue;
+        };
+        if !targets.iter().any(|t| answers(t, &kind)) {
+            continue;
+        }
+        let Some(name) = text_fact(node, FactKind::SymbolName) else {
+            continue;
+        };
+        let Some(file) = file_of(graph, &node.key) else {
+            continue;
+        };
+        let line = node
+            .facts
+            .iter()
+            .find(|f| f.kind == FactKind::SymbolName)
+            .and_then(|f| f.provenance.span.start())
+            .unwrap_or(0);
+        let at = at_of(&file, &node.key).unwrap_or((line, 0));
+        let block = symbol_blocks.get(&node.key).copied();
+        if block.is_none() {
+            top_names
+                .entry(file.clone())
+                .or_default()
+                .insert(name.to_string());
+        }
+        by_name
+            .entry(name.to_string())
+            .or_default()
+            .push(Candidate {
+                key: node.key.clone(),
+                kind,
+                file,
+                at,
+                block,
+            });
+    }
+    for list in by_name.values_mut() {
+        list.sort_by(|a, b| (&a.file, a.at, &a.key).cmp(&(&b.file, b.at, &b.key)));
+    }
+    (by_name, top_names)
+}
+
+/// The kind a reference to a resource names (the plugin for XAML's
+/// `xaml:resource`, answered by [`BROADER`]).
+pub(crate) const RESOURCE_KIND: &str = "xaml:resource";
+
+/// The candidates one name found in the scope that decided, with that
+/// scope's rung and rule (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScopedHits {
+    /// By file, then the position of the name, then key.
+    pub(crate) keys: Vec<NodeKey>,
+    pub(crate) confidence: Confidence,
+    pub(crate) rule: Rule,
+}
+
+/// The scopes of a reference by name as a resolved run's graph still holds
+/// them, for a reference read after the extraction — a literal in another
+/// language's code (plan 2c, U7: R22). The lookup blocks and the names of a
+/// file outside every block are the declaration pass's and are gone by then,
+/// so only two scopes are left: every file of the same project (the nearest
+/// directory above the file holding a `.csproj` File node), then the whole
+/// repository; and two candidates are variants only by their paths under
+/// sibling project roots. Built once, looked up per name.
+pub(crate) struct GraphScopes {
+    target: String,
+    by_name: BTreeMap<String, Vec<Candidate>>,
+    scopes: Scopes<'static>,
+}
+
+impl GraphScopes {
+    /// The candidates of the kinds that answer `target` (a node kind,
+    /// `namespace:name`) over `graph`.
+    pub(crate) fn of_graph(graph: &Graph, target: &str) -> GraphScopes {
+        let targets = BTreeSet::from([target]);
+        let (by_name, _) = collect_candidates(graph, &targets, &|_, _| None, &HashMap::new());
+        let projects: BTreeSet<String> = graph
+            .nodes_sorted()
+            .into_iter()
+            .filter(|n| {
+                n.kind == NodeKind::File && n.key.as_str().to_ascii_lowercase().ends_with(".csproj")
+            })
+            .map(|n| parent(n.key.as_str()).to_string())
+            .collect();
+        GraphScopes {
+            target: target.to_string(),
+            by_name,
+            scopes: Scopes {
+                blocks: BTreeMap::new(),
+                imports: BTreeMap::new(),
+                projects,
+                top_names: BTreeMap::new(),
+            },
+        }
+    }
+
+    /// What `name`, read in `file`, finds: the candidates of `file`'s project
+    /// ([`Rule::ScopeProject`], [`Confidence::RulesBacked`]), else those of
+    /// the repository ([`Rule::NameMatch`], [`Confidence::NameOnly`]); more
+    /// than one that are not variants is [`Confidence::Ambiguous`]. `None`
+    /// when nothing declares the name, or when more than `ceiling` are
+    /// ambiguous (no edge, as for a reference of the markup itself).
+    pub(crate) fn lookup(&self, file: &str, name: &str, ceiling: usize) -> Option<ScopedHits> {
+        let candidates: Vec<&Candidate> = self
+            .by_name
+            .get(name)
+            .into_iter()
+            .flatten()
+            .filter(|c| answers(&self.target, &c.kind))
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+        let mut reach_of = |f: &str| BTreeSet::from([f.to_string()]);
+        let (hits, rung, rule) = decide(&self.scopes, &mut reach_of, file, None, &candidates);
+        let count = hits.len();
+        let varied = count > 1 && are_variants(&self.scopes, &mut reach_of, &hits);
+        let confidence = if count > 1 && !varied {
+            Confidence::Ambiguous
+        } else {
+            rung
+        };
+        if confidence == Confidence::Ambiguous && count > ceiling {
+            return None;
+        }
+        Some(ScopedHits {
+            keys: hits.into_iter().map(|c| c.key.clone()).collect(),
+            confidence,
+            rule,
+        })
     }
 }
 

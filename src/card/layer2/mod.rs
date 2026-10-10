@@ -31,6 +31,12 @@
 //!   it leads to, the part every flow entering at the same members shares
 //!   written once, the command class's one flow (KTD7, R1, R2, R7, R9),
 //!   [`TypeAnalysis::context`].
+//! - [`dynamic`] — step 2c, U6 and U7: the dynamic-call markers of the run —
+//!   every member a binding, a static member, an attached property, a setter
+//!   or a handler of markup, a literal or a `nameof` of C# reads, writes,
+//!   calls or names, with place and grade, the matches by name alone, and the
+//!   references from C# to markup (KTD7, KTD8, KTD10), [`Analysis::dynamic`];
+//!   [`literal_refs`] reads the C# half.
 //! - [`cluster`] — clusters, hubs, the representative and the name (KTD11,
 //!   KTD12, R16).
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
@@ -49,10 +55,12 @@ pub mod binding;
 pub mod callers;
 pub mod cluster;
 pub mod context;
+pub mod dynamic;
 pub mod effects;
 pub mod entry;
 pub mod flow;
 pub mod link;
+pub mod literal_refs;
 pub mod resolve;
 pub mod triggers;
 
@@ -64,6 +72,10 @@ pub use callers::{BodySite, Caller, CallerClass, Callers, Evidence, Subscriber, 
 pub use context::{
     CommandClass, CommonPart, ContextPrecondition, FlowStep, FlowStepKind, FunctionalityContext,
     TriggerCondition, TriggerFlow, TypeContext,
+};
+pub use dynamic::{
+    DynamicAccess, Mark, MarkKind, MarkUse, MarkupSite, MemberMarks, SiteOutcome, Unpaired,
+    XamlRef, XamlRefKind, VIEW_MODEL_FIELD,
 };
 pub use effects::{
     FlowResult, FlowResults, FunctionalityResults, ResultKind, StateContext, StopCause,
@@ -150,6 +162,11 @@ pub struct Analysis {
     /// `cards/triggers.md` lists (U7). A [`TriggerFlow::row`] is an index
     /// into it.
     pub triggers: Vec<TriggerRow>,
+    /// Step 2c: the dynamic-call markers of the run (U6, U7) — what the
+    /// `## Dynamic access` of a card (U8) and the registry's rows from markup
+    /// (U9) read. Empty from [`analyze`] and [`analyze_with`]; [`analyze_run`]
+    /// builds it.
+    pub dynamic: DynamicAccess,
 }
 
 impl Analysis {
@@ -196,6 +213,40 @@ pub fn analyze_with(
     // One walk for 2a's entry points and 2b's links: the external index's
     // relation at an access first (R-25).
     let links = Links::new(&ix, ceiling);
+    let (types, triggers) = analyze_in(graph, layer, &links, marks);
+    Analysis {
+        types,
+        triggers,
+        dynamic: DynamicAccess::default(),
+    }
+}
+
+/// The analysis of a run with step 2c: the dynamic-call markers
+/// ([`DynamicAccess`]) are built first over the same index and walk as the
+/// rest, and are the markers the walk of triggers reads (a member marked
+/// from markup is no entry from another component) — then kept on the
+/// analysis for the card and the registry. What the run renders from.
+pub fn analyze_run(graph: &Graph, layer: &BodyLayer, ceiling: usize) -> Analysis {
+    let ix = Index::new(graph, layer);
+    let links = Links::new(&ix, ceiling);
+    let dynamic = DynamicAccess::build(graph, &links);
+    let (types, triggers) = analyze_in(graph, layer, &links, &dynamic);
+    Analysis {
+        types,
+        triggers,
+        dynamic,
+    }
+}
+
+/// Step 2a's analyses of every type, then step 2b's once over the run, over
+/// one index and walk.
+fn analyze_in(
+    graph: &Graph,
+    layer: &BodyLayer,
+    links: &Links<'_, '_>,
+    marks: &dyn DynamicMarks,
+) -> (Vec<TypeAnalysis>, Vec<TriggerRow>) {
+    let ix = links.index();
     // Over the whole graph, every language's types: a comment is copied from
     // wherever it was written first.
     let copied = copied_comments(graph);
@@ -208,10 +259,10 @@ pub fn analyze_with(
                 && layer.layer_of(ty) == SecondLayer::Present
         })
         .map(|ty| {
-            let mut seeds = entry::seeds(&links, ty);
+            let mut seeds = entry::seeds(links, ty);
             let unbound_commands = std::mem::take(&mut seeds.unbound);
-            let (functionalities, hubs) = cluster::cluster(&ix, ty, seeds);
-            let flow = flow::analyze(&ix, ty, &functionalities);
+            let (functionalities, hubs) = cluster::cluster(ix, ty, seeds);
+            let flow = flow::analyze(ix, ty, &functionalities);
             let purpose = CodePurpose::of(&functionalities, &flow.states, copied.contains(ty));
             TypeAnalysis {
                 key: ty.clone(),
@@ -226,13 +277,13 @@ pub fn analyze_with(
         .collect();
 
     // Step 2b, once a run.
-    let callers = Callers::new(graph, &links);
-    let flow_results = FlowResults::new(graph, &links, &callers);
+    let callers = Callers::new(graph, links);
+    let flow_results = FlowResults::new(graph, links, &callers);
     let results: Vec<TypeResults> = types.iter().map(|t| flow_results.of_type(t)).collect();
-    let mut triggers = triggers::find(&types, &links, &callers, marks);
-    let contexts = context::compose(&types, results, &mut triggers, &links, &callers);
+    let mut triggers = triggers::find(&types, links, &callers, marks);
+    let contexts = context::compose(&types, results, &mut triggers, links, &callers);
     for (t, c) in types.iter_mut().zip(contexts) {
         t.context = c;
     }
-    Analysis { types, triggers }
+    (types, triggers)
 }
