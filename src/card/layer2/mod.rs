@@ -3,8 +3,8 @@
 //! U5 builds the first: the **core functionalities** of every C# type the
 //! second layer read in full ([`SecondLayer::Present`]) — each with its key,
 //! its name and its entry points, the targets of commands and of members
-//! inherited from a generic base included. Nothing here renders; a later
-//! unit puts it on the card.
+//! inherited from a generic base included. Nothing here renders; the type's
+//! card draws it (`card::layer2_render`, U6).
 //!
 //! - [`resolve`] — the type of an access by its receiver chain (R17, KTD4),
 //!   [`Index::resolve`]; one implementation step 2b generalizes.

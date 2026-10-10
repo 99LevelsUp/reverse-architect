@@ -154,16 +154,83 @@ fn without(mut value: serde_json::Value, keys: &[&str]) -> serde_json::Value {
     value
 }
 
-fn assert_same_first_layer(plain: &Generated, layered: &Generated) {
-    assert_eq!(plain.corpus, layered.corpus, "the views differ");
-    assert_eq!(plain.cards, layered.cards, "the cards differ");
-    assert_eq!(plain.details, layered.details, "the details differ");
-    assert_eq!(plain.maps, layered.maps, "the maps differ");
+/// A card's front matter, without its fences, and the rest of it.
+fn front_matter(card: &str) -> (&str, &str) {
+    let rest = card.strip_prefix("---\n").expect("front matter");
+    let end = rest.find("\n---\n\n").expect("the end of the front matter");
+    (&rest[..end], &rest[end + "\n---\n\n".len()..])
 }
 
-/// With `--detail-level` every view, card, detail and map is what a plain run
-/// writes; the manifest gains the level and the body component and nothing
-/// else, and coverage the `bodies` section and the component's contract.
+/// The parts of a card the second layer leaves as they are: everything but
+/// the purpose and the keywords, which it rewrites, and the functionalities
+/// and states, which it adds (plan 2a, U6: KTD10).
+fn first_layer_sections(body: &str) -> String {
+    let mut out = String::new();
+    let mut keep = true;
+    for line in body.split_inclusive('\n') {
+        if let Some(heading) = line.strip_prefix("## ") {
+            keep = !["Purpose", "Keywords", "Functionality: ", "State: "]
+                .iter()
+                .any(|h| heading.starts_with(h));
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// KTD9: with the second layer every view, detail and map is what a plain
+/// run writes, and so is every card but a type's. A type's card says
+/// `schema: 7`, the level and its `layer2:` word in its front matter; with
+/// its analysis (`present`) it rewrites its purpose and keywords and adds its
+/// functionalities and states, every other part as it was, and without one
+/// (`failed`, `none`) the rest of it is the plain run's byte for byte.
+fn assert_same_first_layer(plain: &Generated, layered: &Generated) {
+    assert_eq!(plain.corpus, layered.corpus, "the views differ");
+    assert_eq!(plain.details, layered.details, "the details differ");
+    assert_eq!(plain.maps, layered.maps, "the maps differ");
+    assert_eq!(plain.cards.len(), layered.cards.len());
+    let level = layered.bodies.as_ref().expect("the second layer").level();
+    for (p, l) in plain.cards.iter().zip(&layered.cards) {
+        assert_eq!(p.path, l.path);
+        if !p.path.starts_with("cards/type/") {
+            assert_eq!(p.contents, l.contents, "{}", p.path);
+            continue;
+        }
+        let (plain_front, plain_body) = front_matter(&p.contents);
+        let (front, body) = front_matter(&l.contents);
+        let (_, word) = front
+            .rsplit_once("\nlayer2: ")
+            .unwrap_or_else(|| panic!("{}: no layer2 word: {front}", p.path));
+        assert!(["present", "failed", "none"].contains(&word), "{word}");
+        assert_eq!(
+            front,
+            format!(
+                "{}\ndetail_level: {level}\nlayer2: {word}",
+                plain_front.replace("schema: 6\n", "schema: 7\n")
+            ),
+            "{}",
+            p.path
+        );
+        if word == "present" {
+            assert_eq!(
+                first_layer_sections(body),
+                first_layer_sections(plain_body),
+                "{}",
+                p.path
+            );
+        } else {
+            assert_eq!(body, plain_body, "{}", p.path);
+        }
+    }
+}
+
+/// With `--detail-level` every view, detail and map is what a plain run
+/// writes, and every card as [`assert_same_first_layer`] allows; the manifest
+/// gains the level and the body component, and a type card's document the
+/// chunks of its new sections, and nothing else; coverage gains the `bodies`
+/// section and the component's contract, and the type cards' own counts.
 #[test]
 fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
@@ -204,9 +271,44 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
         .clone();
     assert_eq!(component["origin"], "bundled");
     assert_eq!(component["languages"], serde_json::json!(["csharp"]));
+    // A type card's document keeps every chunk it had and gains those of
+    // its functionalities and states; nothing else of any document changes.
+    let chunks = |d: &serde_json::Value| -> Vec<String> {
+        d["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let plain_docs = plain_manifest["documents"].as_array().unwrap();
+    let docs = manifest["documents"].as_array().unwrap();
+    assert_eq!(plain_docs.len(), docs.len());
+    for (p, d) in plain_docs.iter().zip(docs) {
+        if d["kind"] == "card:type" {
+            let have = chunks(d);
+            assert!(
+                chunks(p).iter().all(|c| have.contains(c)),
+                "{}: {:?} lost a chunk of {:?}",
+                d["id"],
+                have,
+                chunks(p)
+            );
+        } else {
+            assert_eq!(p, d);
+        }
+    }
+    let unchunked = |mut m: serde_json::Value| {
+        for d in m["documents"].as_array_mut().unwrap() {
+            if d["kind"] == "card:type" {
+                d.as_object_mut().unwrap().remove("chunks");
+            }
+        }
+        m
+    };
     assert_eq!(
-        without(plain_manifest, &["plugins"]),
-        without(manifest, &["plugins", "detail_level"])
+        unchunked(without(plain_manifest, &["plugins"])),
+        unchunked(without(manifest, &["plugins", "detail_level"]))
     );
 
     let plain_coverage = serde_json::to_value(&plain.coverage).unwrap();
@@ -221,9 +323,19 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
     let mut more = contracts(&plain_coverage);
     more["0.3"] = serde_json::json!(more["0.3"].as_u64().unwrap_or(0) + 1);
     assert_eq!(contracts(&coverage), more);
+    // The type cards are measured as they were written: their sizes, and
+    // how many carry no keyword, are the second layer's; every other level
+    // is the plain run's.
+    let other_levels = |c: &serde_json::Value| {
+        let mut cards = c["cards"].clone();
+        cards["sizes"].as_object_mut().unwrap().remove("type_card");
+        cards.as_object_mut().unwrap().remove("without_keywords");
+        cards
+    };
+    assert_eq!(other_levels(&plain_coverage), other_levels(&coverage));
     assert_eq!(
-        without(plain_coverage, &["noise.plugins_by_contract"]),
-        without(coverage, &["bodies", "noise.plugins_by_contract"])
+        without(plain_coverage, &["noise.plugins_by_contract", "cards"]),
+        without(coverage, &["bodies", "noise.plugins_by_contract", "cards"])
     );
 }
 
@@ -391,16 +503,22 @@ fn another_languages_bodies_pair_fail_and_are_counted() {
 
     let looping = NodeKey::new("sym:probe3:loop.probe3#Thing");
     assert_eq!(layer.layer_of(&looping), SecondLayer::Failed);
-    // The type whose bodies failed has its first-layer card, the same in
-    // both runs (compared above with every other card).
+    // The type whose bodies failed has its first-layer card: its front
+    // matter says the second layer failed, and the rest of it is the plain
+    // run's (compared above with every other card).
     let card = |g: &Generated| {
         g.cards
             .iter()
             .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("loop.probe3"))
             .map(|c| c.contents.clone())
     };
-    assert!(card(&layered).is_some(), "the failed type has a card");
-    assert_eq!(card(&plain), card(&layered));
+    let failed_card = card(&layered).expect("the failed type has a card");
+    let plain_card = card(&plain).unwrap();
+    assert!(
+        front_matter(&failed_card).0.ends_with("\nlayer2: failed"),
+        "{failed_card}"
+    );
+    assert_eq!(front_matter(&failed_card).1, front_matter(&plain_card).1);
     assert!(layer.bodies_of(&looping).is_empty());
     let file = layered.graph.node(&NodeKey::new("loop.probe3")).unwrap();
     let failed: Vec<_> = file
@@ -2049,6 +2167,7 @@ fn the_flow_is_the_same_bytes_on_one_thread_and_on_many() {
 
 // ---- The purpose from the code, the quote and the copied comment (2a, U7) ----
 
+use reverse_architect::card::layer2_render::Layer2;
 use reverse_architect::card::links::CardIndex;
 use reverse_architect::card::purpose::{
     layered, Origin, Quote, COPIED_COMMENT_CS, COPIED_COMMENT_EN, QUOTED_COMMENT_CS,
@@ -2233,7 +2352,7 @@ fn the_purpose_is_the_codes_and_the_comment_a_quote_or_the_copied_mark() {
             lang,
             LinkStyle::Portable,
             &index,
-            Some(type_of(&analysis, &k)),
+            Some(Layer2::present(2, type_of(&analysis, &k))),
         )
     };
 
@@ -2307,7 +2426,8 @@ fn the_purpose_is_the_codes_and_the_comment_a_quote_or_the_copied_mark() {
 
 /// KTD9: without the second layer every card, detail and purpose is what it
 /// was — a copied comment's detail included — and with it a card differs in
-/// its `## Purpose` alone.
+/// its front matter, its `## Purpose` and the sections it adds after
+/// `## Keywords` alone.
 #[test]
 fn only_the_purpose_of_the_card_changes_and_only_with_the_second_layer() {
     let dir = tempfile::tempdir().unwrap();
@@ -2336,19 +2456,26 @@ fn only_the_purpose_of_the_card_changes_and_only_with_the_second_layer() {
         let Some(analyzed) = analysis.of(&NodeKey::new(card.identity.as_str())) else {
             continue;
         };
-        let layered_card =
-            render_card_layered(card, Lang::En, LinkStyle::Portable, &index, Some(analyzed));
-        let around = |s: &str| {
-            let section = purpose_section(s);
-            let at = s.find(section).unwrap();
-            (s[..at].to_string(), s[at + section.len()..].to_string())
-        };
+        let layered_card = render_card_layered(
+            card,
+            Lang::En,
+            LinkStyle::Portable,
+            &index,
+            Some(Layer2::present(2, analyzed)),
+        );
         assert_eq!(
-            around(&layered_card),
-            around(&plain_card),
+            first_layer_sections(front_matter(&layered_card).1),
+            first_layer_sections(front_matter(&plain_card).1),
             "{}",
             card.identity
         );
+        // The cards built here have the first layer's keywords: the
+        // section is the plain card's.
+        let keywords = |s: &str| {
+            s.find("\n## Keywords\n")
+                .map(|at| s[at..].lines().nth(3).map(str::to_string))
+        };
+        assert_eq!(keywords(&layered_card), keywords(&plain_card));
     }
 }
 
@@ -2451,4 +2578,562 @@ fn a_label_comment_is_redacted_and_one_after_a_comma_is_not_read() {
     assert_eq!(quote("f5"), None);
     let serialized = serde_json::to_string(&analysis).unwrap();
     assert!(!serialized.contains("quillfrond"));
+}
+
+// ---- The card with the second layer (plan 2a, U6) ----
+
+/// The editor views of [`EDITOR_VIEWS`] with the comments that spell the
+/// labels of the menu item and of its submenu (R18).
+fn quoted_views() -> String {
+    EDITOR_VIEWS
+        .replace(
+            "GetResourceString(\"EditorView_checkErrors\");",
+            "GetResourceString(\"EditorView_checkErrors\") /*\"Kontrola chyb\"*/;",
+        )
+        .replace(
+            "GetResourceString(\"EditorView_settings\");",
+            "GetResourceString(\"EditorView_settings\") /*\"Možnosti editoru\"*/;",
+        )
+}
+
+/// A run over `files` at `level` in `lang`, written to `dir/<out>`.
+fn layered_run(
+    dir: &Path,
+    out: &str,
+    files: &[(&str, &str)],
+    level: Option<u8>,
+    lang: &str,
+) -> Generated {
+    let repo = dir.join(format!("{out}-repo"));
+    common::init_repo_with_files(&repo, "Alice", files);
+    generate(&Config {
+        lang: lang.to_string(),
+        ..config(&repo, &dir.join(out), level)
+    })
+    .unwrap()
+}
+
+/// The rendered card of the type `key`.
+fn rendered<'g>(g: &'g Generated, key: &NodeKey) -> &'g str {
+    let cards = build_cards(&g.graph);
+    let path = card_of(&cards, key).path.clone();
+    g.cards
+        .iter()
+        .find(|c| c.path == path)
+        .map(|c| c.contents.as_str())
+        .unwrap_or_else(|| panic!("no card at {path}"))
+}
+
+/// The section of `card` under `heading` (`## …` or `### …`), through the
+/// line before the next heading of its level or above.
+fn section<'c>(card: &'c str, heading: &str) -> &'c str {
+    let start = card
+        .find(&format!("\n{heading}\n"))
+        .unwrap_or_else(|| panic!("no {heading:?} in:\n{card}"))
+        + 1;
+    let rest = &card[start..];
+    let sub = heading.starts_with("### ");
+    let mut end = rest.len();
+    let mut at = 0;
+    for (i, line) in rest.split_inclusive('\n').enumerate() {
+        if i > 0 && (line.starts_with("## ") || (sub && line.starts_with("### "))) {
+            end = at;
+            break;
+        }
+        at += line.len();
+    }
+    &rest[..end]
+}
+
+/// The bullets of a section, the nested ones included.
+fn bullets(section: &str) -> Vec<&str> {
+    section
+        .lines()
+        .filter(|l| l.trim_start().starts_with("- "))
+        .collect()
+}
+
+/// A line ends in its anchors: `` — `path:N` `` or `` `path:N-M` ``, several
+/// separated by commas, never with a column.
+fn ends_with_anchor(line: &str) -> bool {
+    let Some((_, anchors)) = line.rsplit_once(" — ") else {
+        return false;
+    };
+    anchors.split(", ").all(|a| {
+        let Some(inner) = a.strip_prefix('`').and_then(|a| a.strip_suffix('`')) else {
+            return false;
+        };
+        let Some((path, lines)) = inner.rsplit_once(':') else {
+            return false;
+        };
+        let number = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+        !path.is_empty()
+            && !path.contains(':')
+            && match lines.split_once('-') {
+                Some((a, b)) => number(a) && number(b),
+                None => number(lines),
+            }
+    })
+}
+
+/// The `## Keywords` line of a card.
+fn keywords_line(card: &str) -> &str {
+    section(card, "## Keywords").lines().nth(2).unwrap_or("")
+}
+
+/// Every mermaid block of a card.
+fn mermaid_blocks(card: &str) -> Vec<&str> {
+    card.split("```mermaid\n")
+        .skip(1)
+        .map(|b| b.split("```").next().unwrap())
+        .collect()
+}
+
+/// AE2, R17, R18: the view's card holds the check as one functionality with
+/// two entry points — F4 with its condition and the menu item with its
+/// resource key, the quote of its label and its submenu — both leading to
+/// the command of the view model; its detail is the plain run's byte for
+/// byte (KTD9 point 3).
+#[test]
+fn the_view_card_has_one_check_with_the_key_and_the_menu_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let views = quoted_views();
+    let files = [
+        ("src/Views.cs", views.as_str()),
+        ("src/ViewModels.cs", EDITOR_MODELS),
+    ];
+    let plain = layered_run(dir.path(), "plain", &files, None, "en");
+    let with = layered_run(dir.path(), "with", &files, Some(2), "en");
+    assert_same_first_layer(&plain, &with);
+    let view = key(VIEWS_NS, "EditorView");
+    let card = rendered(&with, &view);
+    let (front, _) = front_matter(card);
+    assert!(front.starts_with("schema: 7\n"), "{front}");
+    assert!(
+        front.ends_with("\ndetail_level: 2\nlayer2: present"),
+        "{front}"
+    );
+
+    let check = section(card, "## Functionality: EditorView.BuildMenu()#f4");
+    assert!(
+        check.contains("\n- Key: `sym:csharp:Acme.Views#EditorView.BuildMenu()#f4`\n"),
+        "{check}"
+    );
+    assert!(check.contains("\n- Words: check, command\n"), "{check}");
+    let entries = bullets(section(check, "### Entry points"));
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let menu = entries[0];
+    assert!(
+        menu.starts_with("- Menu item `f4` (`ContextMenuItem`)"),
+        "{menu}"
+    );
+    for part in [
+        "label resource key `EditorView_checkErrors`",
+        "quoted “Kontrola chyb”",
+        "in the submenu `hotKeys` (label resource key `EditorView_settings`, quoted “Možnosti \
+         editoru”",
+        "leads to `EditorViewModel.CheckCommand` (through `ViewBase.viewModel`)",
+    ] {
+        assert!(menu.contains(part), "{part}: {menu}");
+    }
+    let f4 = entries[1];
+    assert!(
+        f4.starts_with(
+            "- Key `Key.F4` in `Editor_PreviewKeyDown(object,KeyEventArgs)` when \
+             `viewModel.ShowErrors || viewModel.CanErrors`: leads to \
+             `EditorViewModel.CheckCommand` (through `ViewBase.viewModel`)"
+        ),
+        "{f4}"
+    );
+    assert!(entries.iter().all(|e| ends_with_anchor(e)), "{entries:?}");
+    // The other branches are functionalities of their own.
+    assert!(card.contains(
+        "\n## Functionality: EditorView.Editor_PreviewKeyDown(object,KeyEventArgs)#Key.F3\n"
+    ));
+    assert!(!card.contains("### Context"), "reserved for step 2b");
+
+    // The detail does not know the second layer.
+    let cards = build_cards(&with.graph);
+    let detail = card_of(&cards, &view).detail.clone().expect("a detail");
+    let of = |g: &Generated| g.details.iter().find(|d| d.path == detail).cloned();
+    assert!(of(&plain).is_some());
+    assert_eq!(of(&plain), of(&with));
+}
+
+/// AE6, R11: on level 1 a type has its functionalities and states with their
+/// preconditions and dead paths and its members by name, and no step and no
+/// diagram; on level 2 steps and diagrams; on level 3 every member has its
+/// sentence. The keywords are the same on every level.
+#[test]
+fn the_levels_add_steps_diagrams_and_sentences_and_keep_the_keywords() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("src/Flow.cs", FLOW)];
+    let runs: Vec<Generated> = (1..=3)
+        .map(|level| layered_run(dir.path(), &format!("l{level}"), &files, Some(level), "en"))
+        .collect();
+    let model = key(FLOW_NS, "EditorViewModel");
+    let screen = key(FLOW_NS, "AcmeScreen");
+    let cards: Vec<(&str, &str)> = runs
+        .iter()
+        .map(|g| (rendered(g, &model), rendered(g, &screen)))
+        .collect();
+    let check = "## Functionality: EditorViewModel.CheckCommand";
+
+    let (one, one_screen) = cards[0];
+    for heading in ["### Entry points", "### Preconditions", "### Members"] {
+        section(section(one, check), heading);
+    }
+    for absent in [
+        "### Steps",
+        "### Flowchart",
+        "### State diagram",
+        "```mermaid",
+    ] {
+        assert!(!one.contains(absent), "{absent} on level 1:\n{one}");
+        assert!(
+            !one_screen.contains(absent),
+            "{absent} on level 1:\n{one_screen}"
+        );
+    }
+    // The state, its values, reads and changes are on level 1 too.
+    let state = section(one_screen, "## State: AcmeScreen.IsFullscreen");
+    for heading in ["### Values", "### Read in conditions", "### Changed by"] {
+        section(state, heading);
+    }
+    // Members by name: one line of names, no sentence.
+    let members = section(section(one, check), "### Members");
+    let names: Vec<&str> = members.lines().skip(2).filter(|l| !l.is_empty()).collect();
+    assert_eq!(names.len(), 1, "{members}");
+    assert!(
+        names[0].starts_with('`') && !names[0].contains(": "),
+        "{members}"
+    );
+
+    let (two, two_screen) = cards[1];
+    section(section(two, check), "### Steps");
+    let chart = section(section(two, check), "### Flowchart");
+    assert!(chart.contains("```mermaid\nflowchart TD\n"), "{chart}");
+    let diagram = section(
+        section(two_screen, "## State: AcmeScreen.IsFullscreen"),
+        "### State diagram",
+    );
+    assert!(diagram.contains("stateDiagram-v2"), "{diagram}");
+
+    let (three, _) = cards[2];
+    let members = bullets(section(section(three, check), "### Members"));
+    let own: Vec<&&str> = members.iter().filter(|l| l.starts_with("- ")).collect();
+    assert!(own.len() >= 5, "{members:?}");
+    for m in &own {
+        assert!(m.contains(": "), "every member has its sentence: {m}");
+        assert!(ends_with_anchor(m), "{m}");
+    }
+    // Fields and properties too.
+    assert!(own.iter().any(|m| m.contains("(field)")), "{own:?}");
+    assert!(own.iter().any(|m| m.contains("(property)")), "{own:?}");
+    // Their steps under them, each with its anchor.
+    assert!(members.iter().any(|m| m.starts_with("  - ")), "{members:?}");
+
+    for (card, screen) in &cards {
+        assert_eq!(keywords_line(card), keywords_line(one));
+        assert_eq!(keywords_line(screen), keywords_line(one_screen));
+    }
+}
+
+/// Every step, precondition, dead path and entry point ends in its anchor,
+/// `path:N` or `path:N-M`, never a column.
+#[test]
+fn every_fact_of_the_second_layer_ends_in_its_line_anchor() {
+    let dir = tempfile::tempdir().unwrap();
+    let g = layered_run(dir.path(), "flow", &[("src/Flow.cs", FLOW)], Some(3), "en");
+    let cards = build_cards(&g.graph);
+    let mut seen = 0;
+    for card in cards.iter().filter(|c| c.identity.starts_with(FLOW_NS)) {
+        let Some(file) = g.cards.iter().find(|f| f.path == card.path) else {
+            continue;
+        };
+        let mut sub: Option<&str> = None;
+        for line in file.contents.lines() {
+            if let Some(h) = line.strip_prefix("### ") {
+                sub = Some(h);
+                continue;
+            }
+            if line.starts_with("## ") {
+                sub = None;
+                continue;
+            }
+            let anchored = matches!(
+                sub,
+                Some(
+                    "Entry points"
+                        | "Preconditions"
+                        | "Dead paths"
+                        | "Steps"
+                        | "Values"
+                        | "Changed by"
+                )
+            );
+            if anchored && line.trim_start().starts_with("- ") {
+                assert!(ends_with_anchor(line), "{}: {line}", card.identity);
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen > 20, "not vacuous: {seen} lines");
+}
+
+/// KTD10, KTD11: a functionality's heading is its representative's whole
+/// key and stays when the words of R16 change and when another branch of
+/// the dispatcher comes along.
+#[test]
+fn a_heading_is_the_representatives_key_and_survives_new_words_and_branches() {
+    let dir = tempfile::tempdir().unwrap();
+    let base_views = quoted_views();
+    let more_views = base_views.replace(
+        "else if (e.Key == Key.F11) { viewModel.FullscreenCommand.Execute(null); }",
+        "else if (e.Key == Key.F11) { viewModel.FullscreenCommand.Execute(null); }\n            \
+         else if (e.Key == Key.F12) { viewModel.Print(); }",
+    );
+    assert_ne!(more_views, base_views);
+    let more_models = EDITOR_MODELS.replace(
+        "void Parse(int s) { }",
+        "void Parse(int s) { ValidateSyntax(); }\n        void ValidateSyntax() { \
+         ValidateSyntaxAgain(); }\n        void ValidateSyntaxAgain() { }\n        public void \
+         Print() { }",
+    );
+    assert_ne!(more_models, EDITOR_MODELS);
+    let base = layered_run(
+        dir.path(),
+        "base",
+        &[
+            ("src/Views.cs", &base_views),
+            ("src/ViewModels.cs", EDITOR_MODELS),
+        ],
+        Some(2),
+        "en",
+    );
+    let more = layered_run(
+        dir.path(),
+        "more",
+        &[
+            ("src/Views.cs", &more_views),
+            ("src/ViewModels.cs", &more_models),
+        ],
+        Some(2),
+        "en",
+    );
+    let headings = |card: &str| -> Vec<String> {
+        card.lines()
+            .filter(|l| l.starts_with("## Functionality: "))
+            .map(str::to_string)
+            .collect()
+    };
+    let view = key(VIEWS_NS, "EditorView");
+    let (before, after) = (
+        headings(rendered(&base, &view)),
+        headings(rendered(&more, &view)),
+    );
+    assert!(
+        before.iter().all(|h| after.contains(h)),
+        "{before:?}\n{after:?}"
+    );
+    assert_eq!(after.len(), before.len() + 1, "{after:?}");
+
+    let model = key(MODELS_NS, "EditorViewModel");
+    let check = "## Functionality: EditorViewModel.CheckCommand";
+    let words = |g: &Generated| {
+        section(rendered(g, &model), check)
+            .lines()
+            .find(|l| l.starts_with("- Words: "))
+            .map(str::to_string)
+    };
+    assert_ne!(words(&base), words(&more), "the words changed");
+    assert!(headings(rendered(&more, &model)).contains(&check.to_string()));
+}
+
+/// R8: a flowchart with more nodes than `SPLIT_THRESHOLD` draws that many
+/// and says how many there are; every edge it draws joins two drawn nodes.
+#[test]
+fn a_flowchart_over_the_cap_draws_the_cap_and_says_so() {
+    let choices: String = (1..=12)
+        .map(|i| format!("            if (mode == {i}) {{ helper.A(); }} else {{ helper.B(); }}\n"))
+        .collect();
+    let source = format!(
+        "namespace Acme.Big\n{{\n    public class Helper\n    {{\n        public void A() {{ }}\n        \
+         public void B() {{ }}\n    }}\n\n    public class BigView\n    {{\n        private Helper \
+         helper;\n        private int mode;\n        public void Run()\n        {{\n{choices}        \
+         }}\n    }}\n}}\n"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let g = layered_run(dir.path(), "big", &[("src/Big.cs", &source)], Some(2), "en");
+    let card = rendered(&g, &NodeKey::new("sym:csharp:Acme.Big#BigView"));
+    let chart = section(
+        section(card, "## Functionality: BigView.Run()"),
+        "### Flowchart",
+    );
+    let block = mermaid_blocks(chart)[0];
+    let nodes: Vec<&str> = block
+        .lines()
+        .filter(|l| l.starts_with("    n") && !l.contains("-->") && !l.contains("-.->"))
+        .collect();
+    let cap = 30;
+    assert_eq!(nodes.len(), cap, "{block}");
+    for edge in block
+        .lines()
+        .filter(|l| l.contains("-->") || l.contains("-.->"))
+    {
+        for end in edge.split_whitespace().filter(|w| w.starts_with('n')) {
+            let n: usize = end[1..].parse().unwrap();
+            assert!(n < cap, "{edge}");
+        }
+    }
+    let lead = format!("The flowchart draws {cap} of ");
+    let sentence = chart
+        .lines()
+        .find(|l| l.starts_with(&lead))
+        .unwrap_or_else(|| panic!("no sentence: {chart}"));
+    let total: usize = sentence[lead.len()..]
+        .split(' ')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(total > cap, "{sentence}");
+    assert!(
+        sentence.ends_with(" nodes; the steps above list the rest."),
+        "{sentence}"
+    );
+}
+
+/// R15: a card in Czech has Czech sentences under English headings.
+#[test]
+fn a_czech_card_has_czech_sentences_and_english_headings() {
+    let dir = tempfile::tempdir().unwrap();
+    let g = layered_run(dir.path(), "cs", &[("src/Flow.cs", FLOW)], Some(2), "cs");
+    let card = rendered(&g, &key(FLOW_NS, "EditorViewModel"));
+    let check = section(card, "## Functionality: EditorViewModel.CheckCommand");
+    for heading in [
+        "### Entry points",
+        "### Preconditions",
+        "### Steps",
+        "### Flowchart",
+        "### Members",
+    ] {
+        section(check, heading);
+    }
+    for czech in [
+        "3 vstupní body.",
+        "Nespustí se, když",
+        "Příkaz `CheckCommand`",
+        "parametr `syntaxOnly` volí",
+    ] {
+        assert!(check.contains(czech), "{czech}:\n{check}");
+    }
+    for english in [
+        "entry point",
+        "Does not run when",
+        "Command `",
+        "the parameter",
+        "leads to",
+    ] {
+        assert!(!check.contains(english), "{english}:\n{check}");
+    }
+    let screen = rendered(&g, &key(FLOW_NS, "AcmeScreen"));
+    let state = section(screen, "## State: AcmeScreen.IsFullscreen");
+    assert!(state.contains("Čte se v 1 podmínce"), "{state}");
+    assert!(state.contains("ho přepne"), "{state}");
+}
+
+/// KTD9 point 2: a type of another language in a run with the second layer
+/// says `layer2: none`, and the rest of its card — keywords included — is
+/// the plain run's.
+#[test]
+fn another_languages_type_card_says_none_and_is_otherwise_the_plain_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let java = "package acme.shop;\n\npublic class Basket {\n    private int items;\n    \
+                public void add() { if (items > 9) { return; } items = items + 1; }\n}\n";
+    let files = [("src/Flow.cs", FLOW), ("src/Basket.java", java)];
+    let plain = layered_run(dir.path(), "plain", &files, None, "en");
+    let with = layered_run(dir.path(), "with", &files, Some(2), "en");
+    assert_same_first_layer(&plain, &with);
+    let card = |g: &Generated| {
+        g.cards
+            .iter()
+            .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("\n# Basket\n"))
+            .map(|c| c.contents.clone())
+            .expect("the Java type's card")
+    };
+    let (plain_card, with_card) = (card(&plain), card(&with));
+    let (front, body) = front_matter(&with_card);
+    assert!(
+        front.ends_with("\ndetail_level: 2\nlayer2: none"),
+        "{front}"
+    );
+    assert_eq!(body, front_matter(&plain_card).1);
+    assert!(
+        !keywords_line(&with_card).is_empty(),
+        "not vacuous: {with_card}"
+    );
+}
+
+/// KTD9 point 4: the words the second layer brings join the keywords of the
+/// analyzed type, weighed by the first layer's document frequencies — a word
+/// only it brings (`parser`, a type the check constructs) as one in a single
+/// document — and a card of a type it did not analyze keeps its keywords.
+#[test]
+fn the_second_layers_words_join_the_keywords_of_its_type_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("src/Flow.cs", FLOW)];
+    let plain = layered_run(dir.path(), "plain", &files, None, "en");
+    let with = layered_run(dir.path(), "with", &files, Some(2), "en");
+    let model = key(FLOW_NS, "EditorViewModel");
+    let words = |g: &Generated, k: &NodeKey| -> Vec<String> {
+        keywords_line(rendered(g, k))
+            .split(", ")
+            .map(|w| w.split(' ').next().unwrap().to_string())
+            .collect()
+    };
+    assert!(!words(&plain, &model).contains(&"parser".to_string()));
+    assert!(
+        words(&with, &model).contains(&"parser".to_string()),
+        "{:?}",
+        words(&with, &model)
+    );
+    // An enum is not analyzed: its keywords are the plain run's.
+    let kind = key(FLOW_NS, "SyntaxKind");
+    assert_eq!(
+        keywords_line(rendered(&plain, &kind)),
+        keywords_line(rendered(&with, &kind))
+    );
+    assert!(front_matter(rendered(&with, &kind))
+        .0
+        .ends_with("\nlayer2: present"));
+}
+
+/// R3: the diagrams are the same bytes in two runs from two places.
+#[test]
+fn the_diagrams_are_the_same_bytes_in_two_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let files = [("src/Flow.cs", FLOW)];
+    let one = layered_run(dir.path(), "one", &files, Some(2), "en");
+    let two = layered_run(dir.path(), "two", &files, Some(2), "en");
+    let blocks = |g: &Generated| -> Vec<String> {
+        g.cards
+            .iter()
+            .filter(|c| c.path.starts_with("cards/type/"))
+            .flat_map(|c| {
+                mermaid_blocks(&c.contents)
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let a = blocks(&one);
+    assert!(a.iter().any(|b| b.starts_with("flowchart TD\n")), "{a:?}");
+    assert!(
+        a.iter().any(|b| b.starts_with("stateDiagram-v2\n")),
+        "{a:?}"
+    );
+    assert_eq!(a, blocks(&two));
+    assert_eq!(one.cards, two.cards);
 }

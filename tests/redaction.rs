@@ -305,10 +305,37 @@ fn without(mut value: serde_json::Value, keys: &[&str]) -> serde_json::Value {
     value
 }
 
+/// A card's front matter, without its fences, and the rest of it.
+fn front_matter(card: &str) -> (&str, &str) {
+    let rest = card.strip_prefix("---\n").expect("front matter");
+    let end = rest.find("\n---\n\n").expect("the end of the front matter");
+    (&rest[..end], &rest[end + "\n---\n\n".len()..])
+}
+
+/// The parts of a card the second layer leaves as they are: everything but
+/// the purpose and the keywords, which it rewrites, and the functionalities
+/// and states, which it adds (plan 2a, U6: KTD10).
+fn first_layer_sections(body: &str) -> String {
+    let mut out = String::new();
+    let mut keep = true;
+    for line in body.split_inclusive('\n') {
+        if let Some(heading) = line.strip_prefix("## ") {
+            keep = !["Purpose", "Keywords", "Functionality: ", "State: "]
+                .iter()
+                .any(|h| heading.starts_with(h));
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 /// The first layer's bytes do not move with the second layer: over every
-/// fixture of this file, every view, card, detail and map, every manifest
-/// form and the sites are what a run without the layer writes, and the
-/// manifest and coverage differ only by what the layer adds to them.
+/// fixture of this file, every view, detail and map, every card but a type's,
+/// the first-layer sections of a type's card, the manifest forms and the sites
+/// are what a run without the layer writes, and the manifest and coverage
+/// differ only by what the layer adds to them.
 #[test]
 fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
     for (name, plant) in FIXTURES {
@@ -325,16 +352,67 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
         let plain = run(None, "plain");
         let layered = run(Some(2), "layered");
         assert_eq!(plain.corpus, layered.corpus, "{name}: the views differ");
-        assert_eq!(plain.cards, layered.cards, "{name}: the cards differ");
+        // Plan 2a, U6 (KTD9 point 2): a type's card names the second layer in
+        // its front matter and, with the type's analysis, rewrites its purpose
+        // and keywords and adds what the layer read; every other part of it,
+        // and every other card, is the plain run's. The secrets of the cards
+        // are checked with every other file of the corpus.
+        assert_eq!(plain.cards.len(), layered.cards.len(), "{name}");
+        for (p, l) in plain.cards.iter().zip(&layered.cards) {
+            assert_eq!(p.path, l.path, "{name}");
+            if !p.path.starts_with("cards/type/") {
+                assert_eq!(p, l, "{name}: {}", p.path);
+                continue;
+            }
+            let (plain_front, plain_body) = front_matter(&p.contents);
+            let (front, body) = front_matter(&l.contents);
+            let (_, word) = front.rsplit_once("\nlayer2: ").expect("a layer2 word");
+            assert_eq!(
+                front,
+                format!(
+                    "{}\ndetail_level: 2\nlayer2: {word}",
+                    plain_front.replace("schema: 6\n", "schema: 7\n")
+                ),
+                "{name}: {}",
+                p.path
+            );
+            if word == "present" {
+                assert_eq!(
+                    first_layer_sections(body),
+                    first_layer_sections(plain_body),
+                    "{name}: {}",
+                    p.path
+                );
+            } else {
+                assert_eq!(body, plain_body, "{name}: {}", p.path);
+            }
+        }
         assert_eq!(plain.details, layered.details, "{name}: the details differ");
         assert_eq!(plain.maps, layered.maps, "{name}: the maps differ");
         for form in [
             manifest::to_nodes_jsonl as fn(&manifest::Manifest) -> String,
             manifest::to_edges_jsonl,
-            manifest::to_documents_jsonl,
         ] {
             assert_eq!(form(&plain.manifest), form(&layered.manifest), "{name}");
         }
+        // A type card's document gains the chunks of its new sections.
+        let unchunked = |m: &manifest::Manifest| -> Vec<serde_json::Value> {
+            manifest::to_documents_jsonl(m)
+                .lines()
+                .map(|l| {
+                    let mut d: serde_json::Value = serde_json::from_str(l).unwrap();
+                    if d["kind"] == "card:type" {
+                        d.as_object_mut().unwrap().remove("chunks");
+                    }
+                    d
+                })
+                .collect()
+        };
+        assert_eq!(
+            unchunked(&plain.manifest),
+            unchunked(&layered.manifest),
+            "{name}"
+        );
         // The strings form carries the manifest's head, the plugins with it.
         let strings = |g: &Generated, keys: &[&str]| {
             without(
@@ -352,23 +430,36 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
             manifest::to_sites_jsonl(&layered.graph),
             "{name}"
         );
+        let manifest_value = |g: &Generated, keys: &[&str]| {
+            let mut v = without(serde_json::to_value(&g.manifest).unwrap(), keys);
+            for d in v["documents"].as_array_mut().unwrap() {
+                if d["kind"] == "card:type" {
+                    d.as_object_mut().unwrap().remove("chunks");
+                }
+            }
+            v
+        };
         assert_eq!(
-            without(serde_json::to_value(&plain.manifest).unwrap(), &["plugins"]),
-            without(
-                serde_json::to_value(&layered.manifest).unwrap(),
-                &["plugins", "detail_level"]
-            ),
+            manifest_value(&plain, &["plugins"]),
+            manifest_value(&layered, &["plugins", "detail_level"]),
             "{name}: the manifest differs beyond the layer's own rows"
         );
+        // The sizes of the type cards and the count of cards without keywords
+        // are the second layer's; every other level of the cards is not.
+        let other_levels = |c: &serde_json::Value| {
+            let mut cards = c["cards"].clone();
+            cards["sizes"].as_object_mut().unwrap().remove("type_card");
+            cards.as_object_mut().unwrap().remove("without_keywords");
+            cards
+        };
+        let (pc, lc) = (
+            serde_json::to_value(&plain.coverage).unwrap(),
+            serde_json::to_value(&layered.coverage).unwrap(),
+        );
+        assert_eq!(other_levels(&pc), other_levels(&lc), "{name}");
         assert_eq!(
-            without(
-                serde_json::to_value(&plain.coverage).unwrap(),
-                &["noise.plugins_by_contract"]
-            ),
-            without(
-                serde_json::to_value(&layered.coverage).unwrap(),
-                &["bodies", "noise.plugins_by_contract"]
-            ),
+            without(pc, &["noise.plugins_by_contract", "cards"]),
+            without(lc, &["bodies", "noise.plugins_by_contract", "cards"]),
             "{name}: coverage differs beyond the layer's own rows"
         );
     }

@@ -63,8 +63,8 @@ pub struct Generated {
     pub coverage: coverage::Coverage,
     /// The second layer (plan 2a, U4): the model of the members' bodies,
     /// paired with the graph's declarations — for a run with
-    /// `--detail-level`, `None` otherwise. Nothing renders it yet; the
-    /// analyses and cards of later units read it from here.
+    /// `--detail-level`, `None` otherwise. The run analyzed it and put it on
+    /// the C# type cards (U6); the analyses of later steps read it from here.
     pub bodies: Option<extract::bodies::BodyLayer>,
 }
 
@@ -201,11 +201,29 @@ pub fn generate_reporting(
     } else {
         None
     };
+    // The second layer's analysis, once per run and only for a run with it
+    // (plan 2a, U6): the keywords of the analyzed types' cards first, so
+    // every count read off the cards below sees them.
+    let analysis = bodies
+        .as_ref()
+        .map(|layer| card::layer2::analyze(&graph, layer));
+    if let Some(analysis) = &analysis {
+        card::add_layer2_keywords(&mut card_set, &insight, analysis);
+    }
     // Built once and shared: the card renderer and the signpost (below) both
     // need a CardIndex, and building it is an O(n) clone-into-a-map over the
     // full card set — not free to repeat at real-repository scale.
     let card_index = card::links::CardIndex::build(&card_set);
-    let cards = card::render_card_files(&card_set, &card_index, lang, config.links);
+    let run = match (&bodies, &analysis) {
+        (Some(layer), Some(analysis)) => Some(card::Layer2Run {
+            level: layer.level(),
+            bodies: layer,
+            analysis,
+        }),
+        _ => None,
+    };
+    let cards =
+        card::render_card_files_layered(&card_set, &card_index, lang, config.links, run.as_ref());
     let details = card::detail::render_detail_files(&card_set, &card_index, lang, config.links);
     let maps = card::map::render_map_files(&card_set, &card_index, lang, config.links);
     // Appends the corpus signpost (U10/R12) to index.md's own RenderedFile —

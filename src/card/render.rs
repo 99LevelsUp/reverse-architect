@@ -124,6 +124,26 @@ use std::borrow::Cow;
 /// carries it.
 pub const CARD_SCHEMA_VERSION: u32 = 6;
 
+/// The version of a type's card in a run with the second layer
+/// (`--detail-level`, plan 2a, U6: KTD9 point 2, KTD10). Every other card of
+/// such a run, every detail and every card of a run without it stays at
+/// [`CARD_SCHEMA_VERSION`].
+///
+/// v7: the front matter adds `detail_level: N` and `layer2: present`,
+/// `failed` or `none` under `kind:`. With the type's analysis, `## Purpose`
+/// is the purpose from the code with the doc comment as a quote (U7), and
+/// after `## Keywords` — whose words include the ones the second layer
+/// brings, weighed by the first layer's document frequencies — come a
+/// `## Functionality: <key without its sym: prefix>` per core functionality
+/// (`- Key:`, `- Words:`, one sentence from the code, `### Entry points`,
+/// `### Preconditions`, `### Dead paths`, `### Steps`, `### Flowchart`,
+/// `### Members`) and a `## State: <member>` per state (`- Key:`, `- Field:`,
+/// `### Values`, `### Read in conditions`, `### Changed by`,
+/// `### State diagram`), as deep as the level asks
+/// ([`super::layer2_render`]). A type card with `layer2: none` or `failed`
+/// is otherwise the card of a run without the second layer.
+pub const CARD_SCHEMA_VERSION_LAYER2: u32 = 7;
+
 /// The languages the deterministic prose is authored in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Lang {
@@ -348,17 +368,21 @@ pub fn render_card(card: &Card, lang: Lang, links: LinkStyle, index: &CardIndex)
     render_card_layered(card, lang, links, index, None)
 }
 
-/// [`render_card`] with the second layer's analysis of the card's type (plan
-/// 2a, U7): with one, a type's `## Purpose` is the purpose from the code with
-/// the doc comment as a quote ([`super::purpose::layered`]). Every other byte
-/// is the first layer's, and with `None` the card is exactly
-/// [`render_card`]'s. The detail never reads the analysis (KTD9).
+/// [`render_card`] with the run's second layer (plan 2a, U6, U7: KTD9,
+/// KTD10), which only a type's card carries ([`CARD_SCHEMA_VERSION_LAYER2`]):
+/// its front matter names the level and whether the type has its second
+/// layer, and with the type's analysis `## Purpose` is the purpose from the
+/// code with the doc comment as a quote ([`super::purpose::layered`]) and the
+/// functionalities and states follow `## Keywords`
+/// ([`super::layer2_render::sections`]). With `None`, and on any other card,
+/// the card is exactly [`render_card`]'s. The detail never reads the
+/// analysis (KTD9).
 pub fn render_card_layered(
     card: &Card,
     lang: Lang,
     links: LinkStyle,
     index: &CardIndex,
-    layer2: Option<&super::layer2::TypeAnalysis>,
+    layer2: Option<super::layer2_render::Layer2<'_>>,
 ) -> String {
     use super::explain;
     let mut s = String::new();
@@ -370,15 +394,29 @@ pub fn render_card_layered(
         lang,
     };
     let story = &card.story;
+    let layer2 = layer2.filter(|_| card.kind == CardKind::Type);
+    let analysis = layer2.and_then(|l| l.analysis);
 
     // YAML front matter, before anything else: the one part of a card addressed
     // to a machine rather than a reader. The `--links obsidian` layout renders it
     // as properties, every other reader hides it, and a parser can read it
     // without understanding a word of Markdown.
+    let schema = match layer2 {
+        Some(_) => CARD_SCHEMA_VERSION_LAYER2,
+        None => CARD_SCHEMA_VERSION,
+    };
     s.push_str(&format!(
-        "---\nschema: {CARD_SCHEMA_VERSION}\ntool: reverse-architect\nkind: {}\n---\n\n",
+        "---\nschema: {schema}\ntool: reverse-architect\nkind: {}\n",
         yaml_word(&card.kind_word)
     ));
+    if let Some(l) = &layer2 {
+        s.push_str(&format!(
+            "detail_level: {}\nlayer2: {}\n",
+            l.level,
+            l.word()
+        ));
+    }
+    s.push_str("---\n\n");
 
     // A type's card is the short card (plan B, U9: R2, R17): its header line,
     // its purpose, the role sentences and its keywords, with everything it
@@ -453,7 +491,7 @@ pub fn render_card_layered(
         // The short card's body. The collaboration diagram, the API and the
         // peer tables are the detail's (R17).
         CardKind::Type => {
-            match layer2 {
+            match analysis {
                 Some(analysis) => s.push_str(&explain::purpose_layered(
                     &out,
                     story,
@@ -463,6 +501,13 @@ pub fn render_card_layered(
             }
             s.push_str(&explain::role(&out, story));
             s.push_str(&explain::keywords(story));
+            // KTD10: the second layer's sections after the keywords, before
+            // the notes.
+            if let (Some(l), Some(analysis)) = (&layer2, analysis) {
+                s.push_str(&super::layer2_render::sections(
+                    card, lang, l.level, analysis,
+                ));
+            }
         }
         CardKind::File => {
             s.push_str(&explain::role(&out, story));

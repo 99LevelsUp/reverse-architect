@@ -2733,7 +2733,10 @@ fn a_type_with_a_hundred_relations_has_every_one_in_its_detail_in_stable_parts()
 
 /// The byte budget of an ordinary short type card (plan B, Success Criteria:
 /// median at most 1.2 kB on the reference C# repository; KTD13 guards it in bytes, because no
-/// tokenizer is at hand and Czech tokenizes worse than English).
+/// tokenizer is at hand and Czech tokenizes worse than English). It holds for
+/// a run without the second layer, which every test here is: a C# type's card
+/// with the second layer carries what its code does and has no byte budget
+/// (plan 2a, Key Decisions; the measurement of step 0 watches its size).
 const SHORT_CARD_BYTES: usize = 1200;
 /// The budget of the `GeoSolver`-shaped card: 40 kB before plan B, under 4 kB
 /// after it (Success Criteria).
