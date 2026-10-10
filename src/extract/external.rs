@@ -3035,6 +3035,88 @@ impl SourceSecrets {
     }
 }
 
+/// A block comment written right after a string literal, or right after the
+/// call the literal closes the arguments of —
+/// `GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/` — as the
+/// lexer split it (plan 2a, U7: R18). One lexer segment as it is: never
+/// joined with the comments around it and never under the anchors' merging or
+/// their cap ([`crate::graph::ANCHOR_CAP`]), which a type with many comments
+/// reaches long before its menu is read.
+pub(crate) struct CommentAfterLiteral {
+    /// Where the literal's content starts: 1-based line, 1-based column in
+    /// characters — the point [`SourceSecrets::literal`] pairs a model's
+    /// literal by.
+    pub(crate) literal: (u32, u32),
+    /// Where the comment's `/*` is, in the same units.
+    pub(crate) start: (u32, u32),
+    /// Where the comment's last character is.
+    pub(crate) end: (u32, u32),
+    /// The comment without `/*` and `*/`, its whitespace collapsed, and
+    /// without the quotes around it when it is quoted whole. Unredacted: the
+    /// caller filters it.
+    pub(crate) text: String,
+}
+
+/// Every [`CommentAfterLiteral`] of the file at `path`, in source order, or
+/// `None` when the host has no lexer for its language.
+///
+/// Only what stands between the literal and the comment decides: the
+/// literal's closing quotes, closing parentheses and spaces, on one line. A
+/// comma, an operator or a line break between them makes the comment
+/// something else, and so does a doc comment, a line comment or an empty
+/// one. No other comment of the file is read.
+pub(crate) fn comments_after_literals(path: &str, src: &str) -> Option<Vec<CommentAfterLiteral>> {
+    let lang = Lang::from_path(path)?;
+    let segs = segments(lang, src);
+    let lines = LineIndex::new(src);
+    let at = |offset: usize| {
+        let line = lines.line(offset);
+        let column = 1 + src[lines.start(line)..offset].chars().count() as u32;
+        (line, column)
+    };
+    let mut out = Vec::new();
+    for (i, seg) in segs.iter().enumerate() {
+        if !matches!(seg.kind, SegKind::Str { .. }) {
+            continue;
+        }
+        let Some(comment) = segs[i + 1..]
+            .iter()
+            .take(2)
+            .take_while(|s| !matches!(s.kind, SegKind::Str { .. }))
+            .find(|s| s.kind == SegKind::Comment)
+        else {
+            continue;
+        };
+        let text = &src[comment.start..comment.end];
+        let gap = &src[seg.end..comment.start];
+        if !text.starts_with("/*")
+            || is_doc_comment(lang, text)
+            || !gap
+                .chars()
+                .all(|c| matches!(c, '"' | '\'' | ')' | ' ' | '\t'))
+        {
+            continue;
+        }
+        let inner = text.strip_prefix("/*").unwrap_or(text);
+        let inner = inner.strip_suffix("*/").unwrap_or(inner);
+        let inner = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+        let inner = match inner.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            Some(quoted) => quoted.trim().to_string(),
+            None => inner,
+        };
+        if inner.is_empty() {
+            continue;
+        }
+        out.push(CommentAfterLiteral {
+            literal: at(seg.start),
+            start: at(comment.start),
+            end: at(comment.end - 1),
+            text: inner,
+        });
+    }
+    Some(out)
+}
+
 /// The name a literal is compared with by `==` or `!=`: the path written
 /// right before the operator, or right after it when the literal comes
 /// first — not a call's name, which names no value.
@@ -5608,5 +5690,32 @@ mod tests {
             "a long line is read once per literal again: {:?}",
             started.elapsed()
         );
+    }
+
+    /// Plan 2a, U7 (R18): a block comment right after a literal or after the
+    /// call it closes is handed out as the lexer split it, by the literal's
+    /// content start; a comma between them, a line comment, a doc comment or
+    /// a line break makes it no comment of the literal.
+    #[test]
+    fn a_block_comment_right_after_a_call_argument_is_the_literals() {
+        let src = "x = Get(\"a\") /*\"Label A\"*/;\n\
+                   y = Get(\"b\", \"c\") /* Label  C */;\n\
+                   z = Get(\"d\"), /* no */ w;\n\
+                   v = Get(\"e\"); // no\n\
+                   u = Get(\"f\") /** no */;\n\
+                   t = Get(\"g\")\n    /* no */;\n";
+        let found = comments_after_literals("src/A.cs", src).expect("a C# lexer");
+        let got: Vec<String> = found
+            .iter()
+            .map(|c| format!("{:?} {:?} {:?} {}", c.literal, c.start, c.end, c.text))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "(1, 10) (1, 14) (1, 26) Label A",
+                "(2, 15) (2, 19) (2, 32) Label C",
+            ]
+        );
+        assert!(comments_after_literals("src/A.xaml", src).is_none());
     }
 }

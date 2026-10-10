@@ -16,6 +16,9 @@
 //! - [`flow`] — U11: the preconditions and their effects, the dead paths,
 //!   the steps and the mentions of every functionality, and the states of the
 //!   type (KTD13, KTD5, R6, R7, R9), [`TypeAnalysis::flow`].
+//! - U7: what the code says the type is for, and whether its doc comment is
+//!   probably another type's (R12, R13, KTD15), [`TypeAnalysis::purpose`] —
+//!   see [`crate::card::purpose`].
 //!
 //! The analysis is deterministic (R3): it reads the graph and the model in
 //! key and path order, keeps every collection ordered, and never iterates a
@@ -39,6 +42,7 @@ pub use flow::{
 };
 pub use resolve::{Chain, Index, Link, Scope, Unresolved};
 
+use crate::card::purpose::{copied_comments, CodePurpose};
 use crate::extract::bodies::{BodyLayer, SecondLayer};
 use crate::graph::{Graph, NodeKey};
 use serde::Serialize;
@@ -60,6 +64,9 @@ pub struct TypeAnalysis {
     /// The preconditions, dead paths, steps and mentions of each
     /// functionality, and the type's states (U11).
     pub flow: TypeFlow,
+    /// What the code says the type is for (U7) — read only by the card with
+    /// the second layer, never by the first layer's purpose (KTD9).
+    pub purpose: CodePurpose,
 }
 
 impl TypeAnalysis {
@@ -105,6 +112,9 @@ impl Analysis {
 /// Analyze every C# type of `graph` whose second layer `layer` holds in full.
 pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
     let ix = Index::new(graph, layer);
+    // Over the whole graph, every language's types: a comment is copied from
+    // wherever it was written first.
+    let copied = copied_comments(graph);
     let types = ix
         .csharp_types()
         .into_iter()
@@ -118,12 +128,14 @@ pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
             let unbound_commands = std::mem::take(&mut seeds.unbound);
             let (functionalities, hubs) = cluster::cluster(&ix, ty, seeds);
             let flow = flow::analyze(&ix, ty, &functionalities);
+            let purpose = CodePurpose::of(&functionalities, &flow.states, copied.contains(ty));
             TypeAnalysis {
                 key: ty.clone(),
                 functionalities,
                 hubs,
                 unbound_commands,
                 flow,
+                purpose,
             }
         })
         .collect();

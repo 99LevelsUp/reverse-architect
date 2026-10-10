@@ -36,7 +36,7 @@
 use super::resolve::{within, Chain, Index, Scope, Unresolved};
 use crate::extract::bodies::{
     AccessMode, AccessPath, Argument, BodyKind, CallKind, Condition, FlowTarget, Handler,
-    Invocation, MemberBody, PathRoot, Range, SubscriptionMode, ValueRef,
+    Invocation, LiteralComment, MemberBody, PathRoot, Range, SubscriptionMode, ValueRef,
 };
 use crate::graph::NodeKey;
 use serde::Serialize;
@@ -117,13 +117,14 @@ impl Target {
 pub enum Label {
     /// A string literal passed to the call the label is assigned from
     /// (`GetResourceString("EditorView_checkErrors")`): a resource key.
-    /// `quote` is for the adjacent comment that spells the text, which U7
-    /// supplies.
+    /// `quote` is the block comment written right after the call that spells
+    /// the text (`/*"Kontrola chyb"*/`), redacted, with where it is written —
+    /// a quote of a comment, never the card's claim (U7: R18).
     ResourceKey {
         key: String,
         callee: AccessPath,
         place: Range,
-        quote: Option<String>,
+        quote: Option<LiteralComment>,
     },
     /// A string literal assigned as it is.
     Literal {
@@ -700,7 +701,7 @@ fn label_of(body: &MemberBody, v: &str) -> Option<Label> {
                             key: l.value.clone(),
                             callee: call.callee.clone(),
                             place: l.place,
-                            quote: None,
+                            quote: l.comment.clone(),
                         },
                         None => Label::Call {
                             callee: call.callee.clone(),

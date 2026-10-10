@@ -10,6 +10,7 @@
 //! that nothing uses a type.
 
 use super::links::{mention, CardIndex};
+use super::purpose::{LayeredPurpose, Sentence};
 use super::render::Lang;
 use super::story::{kind_group, kind_rank, ApiRow, Peer, Story};
 use super::{Card, CardKind};
@@ -562,7 +563,29 @@ pub fn purpose(out: &Out, story: &Story) -> String {
         return String::new();
     }
     let mut s = String::from("\n## Purpose\n\n");
-    for sentence in &story.purpose {
+    purpose_sentences(out, &mut s, &story.purpose);
+    model_purpose(out, &mut s, story);
+    s
+}
+
+/// `## Purpose` on the card of a C# type with the second layer (plan 2a, U7:
+/// R12, R13): the sentences of [`LayeredPurpose`] with their origins — the
+/// code's first — then the doc comment as a labelled quote, or the fixed mark
+/// that it was probably copied, then the model's sentence as in [`purpose`].
+/// A layered purpose always has a sentence, so the section is never empty.
+pub fn purpose_layered(out: &Out, story: &Story, layered: &LayeredPurpose) -> String {
+    let mut s = String::from("\n## Purpose\n\n");
+    purpose_sentences(out, &mut s, &layered.sentences);
+    if let Some(quote) = &layered.quote {
+        let _ = writeln!(s, "{}", quote.text(out.lang));
+    }
+    model_purpose(out, &mut s, story);
+    s
+}
+
+/// One line per purpose sentence, each followed by where it came from.
+fn purpose_sentences(out: &Out, s: &mut String, sentences: &[Sentence]) {
+    for sentence in sentences {
         let _ = writeln!(
             s,
             "{} ({})",
@@ -570,10 +593,13 @@ pub fn purpose(out: &Out, story: &Story) -> String {
             sentence.origin.phrase(out.lang)
         );
     }
-    // The model's sentence (plan B, U13: R7), when the purpose layer was
-    // read: its own line under the sentences the code gave, labelled as the
-    // model's the way a "maybe also" line is marked model-verified, so a
-    // reader never takes it for something read off the code.
+}
+
+/// The model's sentence (plan B, U13: R7), when the purpose layer was read:
+/// its own line under the sentences the code gave, labelled as the model's
+/// the way a "maybe also" line is marked model-verified, so a reader never
+/// takes it for something read off the code.
+fn model_purpose(out: &Out, s: &mut String, story: &Story) {
     if let Some(sentence) = &story.model_purpose {
         let label = match out.lang {
             super::render::Lang::En => "written by a model, not read from the code",
@@ -581,7 +607,6 @@ pub fn purpose(out: &Out, story: &Story) -> String {
         };
         let _ = writeln!(s, "{sentence} ({label})");
     }
-    s
 }
 
 /// `## Keywords` (plan B, U9: R8): the words of [`Story::keywords`] on one

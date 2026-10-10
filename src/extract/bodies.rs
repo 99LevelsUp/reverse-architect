@@ -20,7 +20,9 @@
 //!    layer's decisions about the file's literals, carried to the model's
 //!    literals by place, and the run's secret prefixes over every text —
 //!    before anything else sees it, so no unredacted text reaches the cache
-//!    or an output (KTD16).
+//!    or an output (KTD16). The block comment written right after a call
+//!    argument is attached to its literal, filtered the same way
+//!    ([`quote_comments`], U7: R18).
 //! 4. **Stores** the redacted model per file in its own cache phase,
 //!    [`PHASE_BODIES`] (KTD8). Each record is tagged with the digest of the
 //!    component that made it and with [`BODY_REDACTION_VERSION`]
@@ -57,8 +59,8 @@
 
 use super::cache::CacheStore;
 use super::external::{
-    named_secret, redact_secret_block, secret_pattern, SecretPrefixes, SourceSecrets,
-    REDACTION_MARKER,
+    comments_after_literals, named_secret, redact_secret_block, secret_pattern, SecretPrefixes,
+    SourceSecrets, REDACTION_MARKER,
 };
 use super::resolve::table::NamePositions;
 use super::treesitter::{Lease, PathKeys, Pool};
@@ -79,9 +81,10 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 2 is the literal-aware filter (U8,
-/// KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 2;
+/// conversion of a model raises it: 3 adds the comments after call arguments
+/// ([`quote_comments`], U7), 2 is the literal-aware filter (U8, KTD16), 1 the
+/// first layer's filter alone.
+pub const BODY_REDACTION_VERSION: u32 = 3;
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
 /// rendering (KTD7): it decides what later units show, not what this pass
@@ -323,6 +326,21 @@ pub struct StringLiteral {
     pub place: Range,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<u32>,
+    /// The block comment written right after the literal or the call it
+    /// closes (plan 2a, U7: R18) — the host's, read from the lexer
+    /// ([`quote_comments`]); no plugin reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<LiteralComment>,
+}
+
+/// The block comment after a call argument
+/// (`GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/`): its
+/// text without the comment's framing and quotes, redacted, and where the
+/// comment is written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiteralComment {
+    pub text: String,
+    pub place: Range,
 }
 
 /// `nameof(x)` (`name-of`). `text` is redacted.
@@ -898,6 +916,7 @@ impl From<w::StringLiteral> for StringLiteral {
             context: l.context.into(),
             place: l.place.into(),
             node: l.node,
+            comment: None,
         }
     }
 }
@@ -1198,6 +1217,59 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
     }
 }
 
+/// The comment written right after each call argument of a model, attached
+/// to the literal (plan 2a, U7: R18) — the one ordinary comment the second
+/// layer reads: a menu item's label is a resource key, and the text it
+/// stands for is often spelled beside it
+/// (`GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/`).
+///
+/// The comments are the lexer's segments as they are
+/// ([`comments_after_literals`]), paired with a literal by place the way
+/// [`redact_bodies`] pairs the lexer's literals: the one whose content starts
+/// inside the model literal's place. A literal already withheld gets none,
+/// and every text goes through [`redact_secret_block`] with the run's
+/// prefixes. A file the host has no lexer for gets none.
+///
+/// What this adds to a stored model is part of [`BODY_REDACTION_VERSION`].
+pub fn quote_comments(
+    model: &mut FileBodies,
+    path: &str,
+    source: &[u8],
+    prefixes: &SecretPrefixes,
+) {
+    let Some(comments) = std::str::from_utf8(source)
+        .ok()
+        .and_then(|src| comments_after_literals(path, src))
+    else {
+        return;
+    };
+    if comments.is_empty() {
+        return;
+    }
+    for member in &mut model.members {
+        for literal in &mut member.literals {
+            if !matches!(literal.context, LiteralContext::CallArg(..))
+                || literal.value.contains(REDACTION_MARKER)
+            {
+                continue;
+            }
+            let start: (u32, u32) = literal.place.start.into();
+            let end: (u32, u32) = literal.place.end.into();
+            let first = comments.partition_point(|c| c.literal < start);
+            let Some(comment) = comments.get(first).filter(|c| c.literal <= end) else {
+                continue;
+            };
+            literal.comment = Some(LiteralComment {
+                text: redact_secret_block(&comment.text, prefixes).0,
+                place: Range {
+                    start: comment.start.into(),
+                    end: comment.end.into(),
+                },
+            });
+        }
+    }
+}
+
 // ---- The pass ----
 
 /// What a run with the second layer reads bodies with (KTD7): the run's own
@@ -1346,6 +1418,7 @@ fn read_file(
         Ok(file) => {
             let mut model = FileBodies::from(file);
             redact_bodies(&mut model, path, source, prefixes);
+            quote_comments(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
                 path: path.to_string(),
                 plugin: plugin.id().to_string(),
@@ -1958,6 +2031,7 @@ mod tests {
                     context: LiteralContext::CallArg(path(), 0),
                     place: range(),
                     node: Some(0),
+                    comment: None,
                 }],
                 name_ofs: vec![NameOf {
                     text: text.into(),
@@ -2332,6 +2406,7 @@ mod tests {
             context: LiteralContext::AttributeArg(attribute.into(), None, None),
             place: range(),
             node: Some(0),
+            comment: None,
         };
         member.literals = vec![
             literal(0, "quillfrond", "Password"),

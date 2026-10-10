@@ -909,7 +909,7 @@ fn a_menu_item_carries_its_resource_key_submenu_and_command_target() {
     assert_eq!(menu.type_name.as_deref(), Some("ContextMenuItem"));
     let resource = |label: &Option<Label>| match label {
         Some(Label::ResourceKey { key, quote, .. }) => {
-            assert!(quote.is_none(), "the quote is U7's");
+            assert!(quote.is_none(), "no comment follows the call");
             key.clone()
         }
         other => panic!("not a resource key: {other:?}"),
@@ -2045,4 +2045,410 @@ fn the_flow_is_the_same_bytes_on_one_thread_and_on_many() {
     let one = run(1);
     assert!(one.len() > 1000, "the flow holds something");
     assert_eq!(one, run(8));
+}
+
+// ---- The purpose from the code, the quote and the copied comment (2a, U7) ----
+
+use reverse_architect::card::links::CardIndex;
+use reverse_architect::card::purpose::{
+    layered, Origin, Quote, COPIED_COMMENT_CS, COPIED_COMMENT_EN, QUOTED_COMMENT_CS,
+    QUOTED_COMMENT_EN,
+};
+use reverse_architect::card::render::{render_card, render_card_layered, Lang};
+use reverse_architect::card::{build_cards, Card};
+use reverse_architect::cli::LinkStyle;
+use reverse_architect::graph::EdgeKind;
+
+/// Doc comments that share their first sentence: two unrelated types, a
+/// group of four, two of three words only, a base and its derived type, the
+/// two parts of a `partial` type (the second in [`COPIES_PART`]), and one
+/// type whose comment is its own.
+const COPIES: &str = r#"namespace Acme.Copies
+{
+    /// Opens the selected file in the editor.
+    public class PairA
+    {
+        private int mode;
+        public void Open() { mode = 1; }
+        public void Close() { mode = 0; }
+        public bool IsOpen() { if (mode == 1) { return true; } return false; }
+    }
+
+    /// Opens the selected file in the editor.
+    public class PairB
+    {
+        public void Show() { }
+    }
+
+    /// Represents one grid row.
+    public class ViewA { public void Show() { } }
+
+    /// Represents one grid row.
+    public class ViewB { public void Show() { } }
+
+    /// Represents one grid row.
+    public class ViewC { public void Show() { } }
+
+    /// Represents one grid row.
+    public class ViewD { public void Show() { } }
+
+    /// Shows the panel.
+    public class ShortA { public void Show() { } }
+
+    /// Shows the panel.
+    public class ShortB { public void Show() { } }
+
+    /// Holds the state every view shares.
+    public class BaseView { public void Show() { } }
+
+    /// Holds the state every view shares.
+    public class DerivedView : BaseView { public void Hide() { } }
+
+    /// Edits the text of one document.
+    public partial class PartView { public void Edit() { } }
+
+    /// Formats the rows of one report.
+    public class ReportView { public void Format() { } }
+
+    /// Keeps the work of one quiet helper.
+    public class QuietView { void Run() { } }
+}
+"#;
+
+const COPIES_PART: &str = r#"namespace Acme.Copies
+{
+    /// Edits the text of one document.
+    public partial class PartView { public void Save() { } }
+}
+"#;
+
+const COPIES_NS: &str = "sym:csharp:Acme.Copies#";
+
+fn copies_repo(dir: &Path) -> std::path::PathBuf {
+    let repo = dir.join("repo");
+    common::init_repo_with_files(
+        &repo,
+        "Alice",
+        &[
+            ("src/Copies.cs", COPIES),
+            ("src/CopiesPart.cs", COPIES_PART),
+        ],
+    );
+    repo
+}
+
+fn card_of<'a>(cards: &'a [Card], key: &NodeKey) -> &'a Card {
+    cards
+        .iter()
+        .find(|c| c.identity == key.as_str())
+        .unwrap_or_else(|| panic!("no card for {key:?}"))
+}
+
+/// The `## Purpose` section of a rendered card, through the line before the
+/// next heading.
+fn purpose_section(card: &str) -> &str {
+    let start = card.find("\n## Purpose\n").expect("a purpose section");
+    let rest = &card[start + 1..];
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |i| i + 4);
+    &rest[..end]
+}
+
+/// The marks are fixed strings the owner's check of step 0 recognizes.
+#[test]
+fn the_quote_label_and_the_copied_mark_are_fixed_strings() {
+    assert_eq!(
+        COPIED_COMMENT_EN,
+        "Doc comment probably copied from another type; not used as the purpose."
+    );
+    assert_eq!(
+        COPIED_COMMENT_CS,
+        "Doc komentář je pravděpodobně zkopírovaný z jiného typu; jako účel se nepoužije."
+    );
+    assert_eq!(
+        QUOTED_COMMENT_EN,
+        "quoted from the doc comment, not read from the code"
+    );
+    assert_eq!(
+        QUOTED_COMMENT_CS,
+        "citace doc komentáře, není přečteno z kódu"
+    );
+}
+
+/// AE3, KTD15: a first sentence of at least four words that an unrelated
+/// type's comment has too marks both, and every type of a group of four; a
+/// sentence of three words, a base with its derived type and the parts of a
+/// `partial` type are no copies.
+#[test]
+fn a_first_sentence_another_unrelated_type_shares_marks_every_type_of_the_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = copies_repo(dir.path());
+    let generated = generate(&config(&repo, &dir.path().join("out"), Some(2))).unwrap();
+    let analysis = layer2::analyze(&generated.graph, generated.bodies.as_ref().unwrap());
+    let copied = |name: &str| {
+        type_of(&analysis, &key(COPIES_NS, name))
+            .purpose
+            .copied_comment
+    };
+
+    for name in ["PairA", "PairB", "ViewA", "ViewB", "ViewC", "ViewD"] {
+        assert!(copied(name), "{name} shares its first sentence");
+    }
+    for name in [
+        "ShortA",
+        "ShortB",
+        "BaseView",
+        "DerivedView",
+        "PartView",
+        "ReportView",
+    ] {
+        assert!(!copied(name), "{name} is no copy");
+    }
+    // Not vacuous: the base and the derived type are joined by `Extends`,
+    // and the two parts are one analyzed type.
+    let (base, derived) = (key(COPIES_NS, "BaseView"), key(COPIES_NS, "DerivedView"));
+    assert!(generated
+        .graph
+        .edges_sorted()
+        .iter()
+        .any(|e| e.edge.kind == EdgeKind::Extends && *e.from == derived && *e.to == base));
+    let part = key(COPIES_NS, "PartView");
+    assert_eq!(analysis.types.iter().filter(|t| t.key == part).count(), 1);
+}
+
+/// R12, R13: with the second layer the purpose is the code's, and the doc
+/// comment is under it as a labelled quote — or, when it is copied, only the
+/// fixed mark; never a claim of the card.
+#[test]
+fn the_purpose_is_the_codes_and_the_comment_a_quote_or_the_copied_mark() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = copies_repo(dir.path());
+    let generated = generate(&config(&repo, &dir.path().join("out"), Some(2))).unwrap();
+    let analysis = layer2::analyze(&generated.graph, generated.bodies.as_ref().unwrap());
+    let cards = build_cards(&generated.graph);
+    let index = CardIndex::build(&cards);
+    let render = |name: &str, lang: Lang| {
+        let k = key(COPIES_NS, name);
+        render_card_layered(
+            card_of(&cards, &k),
+            lang,
+            LinkStyle::Portable,
+            &index,
+            Some(type_of(&analysis, &k)),
+        )
+    };
+
+    // A copied comment: the code says what the type is for, the comment is
+    // not quoted, the mark says why.
+    let pair = key(COPIES_NS, "PairA");
+    let purpose = layered(card_of(&cards, &pair), &type_of(&analysis, &pair).purpose);
+    assert_eq!(purpose.sentences[0].origin, Origin::Code);
+    assert!(purpose
+        .sentences
+        .iter()
+        .all(|s| s.origin != Origin::Comment));
+    assert_eq!(purpose.quote, Some(Quote::Copied));
+    for (lang, mark) in [(Lang::En, COPIED_COMMENT_EN), (Lang::Cs, COPIED_COMMENT_CS)] {
+        let card = render("PairA", lang);
+        let section = purpose_section(&card);
+        assert!(section.contains(mark), "{section}");
+        assert!(
+            !section.contains("Opens the selected file"),
+            "the copied comment is no purpose: {section}"
+        );
+    }
+    let card = render("PairA", Lang::En);
+    assert_eq!(
+        purpose_section(&card),
+        format!(
+            "## Purpose\n\n3 core functionalities: `Close` (close), `IsOpen` (open) and `Open` \
+             (open); 1 state: `mode`. (from the code)\n{COPIED_COMMENT_EN}\n\n"
+        )
+    );
+    let card = render("PairA", Lang::Cs);
+    assert!(
+        purpose_section(&card).contains(
+            "3 jádrové funkčnosti: `Close` (close), `IsOpen` (open) a `Open` (open); 1 stav: \
+             `mode`. (z kódu)\n"
+        ),
+        "{card}"
+    );
+
+    // The type's own comment: the code first, the comment quoted under it.
+    let card = render("ReportView", Lang::En);
+    let section = purpose_section(&card);
+    let lines: Vec<&str> = section.lines().skip(2).collect();
+    assert!(lines[0].ends_with(" (from the code)"), "{section}");
+    assert_eq!(
+        lines[1],
+        format!("Formats the rows of one report. ({QUOTED_COMMENT_EN})"),
+        "{section}"
+    );
+    let card = render("ReportView", Lang::Cs);
+    assert!(
+        purpose_section(&card).contains(&format!(
+            "Formats the rows of one report. ({QUOTED_COMMENT_CS})"
+        )),
+        "{card}"
+    );
+    assert!(purpose_section(&card).contains(" (z kódu)\n"), "{card}");
+
+    // Neither the code nor a stereotype says anything, and the comment is
+    // no claim: the kind and the shape, which the first layer left out
+    // because the comment spoke.
+    let card = render("QuietView", Lang::En);
+    assert_eq!(
+        purpose_section(&card),
+        format!(
+            "## Purpose\n\n`class`: 1 method. (from the structure)\nKeeps the work of one quiet \
+             helper. ({QUOTED_COMMENT_EN})\n\n"
+        )
+    );
+}
+
+/// KTD9: without the second layer every card, detail and purpose is what it
+/// was — a copied comment's detail included — and with it a card differs in
+/// its `## Purpose` alone.
+#[test]
+fn only_the_purpose_of_the_card_changes_and_only_with_the_second_layer() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = copies_repo(dir.path());
+    let plain = generate(&config(&repo, &dir.path().join("plain"), None)).unwrap();
+    let with = generate(&config(&repo, &dir.path().join("with"), Some(2))).unwrap();
+    assert_same_first_layer(&plain, &with);
+
+    let analysis = layer2::analyze(&with.graph, with.bodies.as_ref().unwrap());
+    let cards = build_cards(&with.graph);
+    let index = CardIndex::build(&cards);
+    let pair = key(COPIES_NS, "PairA");
+    let card = card_of(&cards, &pair);
+    // The detail of the type with the copied comment is the plain run's.
+    if let Some(detail) = &card.detail {
+        let of = |g: &Generated| g.details.iter().find(|d| &d.path == detail).cloned();
+        assert!(of(&plain).is_some());
+        assert_eq!(of(&plain), of(&with));
+    }
+    for card in &cards {
+        let plain_card = render_card(card, Lang::En, LinkStyle::Portable, &index);
+        assert_eq!(
+            render_card_layered(card, Lang::En, LinkStyle::Portable, &index, None),
+            plain_card
+        );
+        let Some(analyzed) = analysis.of(&NodeKey::new(card.identity.as_str())) else {
+            continue;
+        };
+        let layered_card =
+            render_card_layered(card, Lang::En, LinkStyle::Portable, &index, Some(analyzed));
+        let around = |s: &str| {
+            let section = purpose_section(s);
+            let at = s.find(section).unwrap();
+            (s[..at].to_string(), s[at + section.len()..].to_string())
+        };
+        assert_eq!(
+            around(&layered_card),
+            around(&plain_card),
+            "{}",
+            card.identity
+        );
+    }
+}
+
+/// R18, AE2: the label's comment right after the resource key's call is the
+/// menu item's quote, with where the comment is written — even past the cap
+/// of the type's comment anchors, which the label never goes through.
+#[test]
+fn a_menu_item_quotes_the_comment_after_its_resource_key_past_the_anchor_cap() {
+    let comments: String = (1..=60)
+        .map(|i| format!("            // Setup step number {i} of the context menu goes here.\n"))
+        .collect();
+    let view = format!(
+        r#"namespace Acme.Menus
+{{
+    public class MenuView
+    {{
+        private ContextMenu menu;
+        public string GetResourceString(string key) {{ return key; }}
+        void BuildMenu()
+        {{
+{comments}            ContextMenuItem f4 = new ContextMenuItem();
+            f4.Header = GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/;
+            f4.Command = CheckCommand;
+            menu.Items.Add(f4);
+        }}
+        public RelayCommand CheckCommand => new RelayCommand(p => Check());
+        public void Check() {{ }}
+    }}
+}}
+"#
+    );
+    let (generated, analysis) = analyzed(&[("src/Menus.cs", view.as_str())]);
+    let ns = "sym:csharp:Acme.Menus#";
+    // Not vacuous: the type's comments are past the cap.
+    assert!(
+        generated.graph.nodes_sorted().iter().any(|n| {
+            n.key.as_str().starts_with(&format!("{ns}MenuView"))
+                && n.facts.iter().any(|f| f.kind == FactKind::AnchorsDropped)
+        }),
+        "the comment anchors were capped"
+    );
+    let menu = type_of(&analysis, &key(ns, "MenuView"));
+    let f4 = entry(menu, &format!("{ns}MenuView.BuildMenu()#f4"));
+    match &f4.menu.as_ref().expect("a menu item").label {
+        Some(Label::ResourceKey { key, quote, .. }) => {
+            assert_eq!(key, "EditorView_checkErrors");
+            let quote = quote.as_ref().expect("the comment after the call");
+            assert_eq!(quote.text, "Kontrola chyb");
+            // The comment's own place: the line of the call, after it.
+            let line = 10 + 60;
+            let place: [u32; 4] = quote.place.into();
+            assert_eq!(place, [line, 69, line, 87]);
+        }
+        other => panic!("not a resource key: {other:?}"),
+    }
+}
+
+/// R18: the label's comment goes through the secret filter, and a comment
+/// separated from the call by a comma is no label's.
+#[test]
+fn a_label_comment_is_redacted_and_one_after_a_comma_is_not_read() {
+    let view = r#"namespace Acme.Menus
+{
+    public class MenuView
+    {
+        private ContextMenu menu;
+        public string GetResourceString(string key) { return key; }
+        public string Pick(string a, string b) { return a; }
+        void BuildMenu()
+        {
+            ContextMenuItem f4 = new ContextMenuItem();
+            f4.Header = GetResourceString("EditorView_checkErrors") /* password: quillfrond-7Hx */;
+            f4.Command = CheckCommand;
+            ContextMenuItem f5 = new ContextMenuItem();
+            f5.Header = Pick("EditorView_other", /* Ostatní */ "x");
+            f5.Command = CheckCommand;
+            menu.Items.Add(f4);
+            menu.Items.Add(f5);
+        }
+        public RelayCommand CheckCommand => new RelayCommand(p => Check());
+        public void Check() { }
+    }
+}
+"#;
+    let (_, analysis) = analyzed(&[("src/Menus.cs", view)]);
+    let ns = "sym:csharp:Acme.Menus#";
+    let menu = type_of(&analysis, &key(ns, "MenuView"));
+    let quote = |item: &str| match &entry(menu, &format!("{ns}MenuView.BuildMenu()#{item}"))
+        .menu
+        .as_ref()
+        .unwrap()
+        .label
+    {
+        Some(Label::ResourceKey { quote, .. }) => quote.clone(),
+        other => panic!("not a resource key: {other:?}"),
+    };
+    let redacted = quote("f4").expect("the comment, redacted");
+    assert!(!redacted.text.contains("quillfrond"), "{redacted:?}");
+    assert!(redacted.text.contains("[redacted"), "{redacted:?}");
+    assert_eq!(quote("f5"), None);
+    let serialized = serde_json::to_string(&analysis).unwrap();
+    assert!(!serialized.contains("quillfrond"));
 }

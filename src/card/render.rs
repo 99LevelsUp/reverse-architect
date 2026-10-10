@@ -345,6 +345,21 @@ pub(super) fn resolution_word(resolution: Resolution) -> &'static str {
 /// `index` decides which mentions become links (U9): a target that owns a card is
 /// linked in the configured style, everything else stays text with its anchor.
 pub fn render_card(card: &Card, lang: Lang, links: LinkStyle, index: &CardIndex) -> String {
+    render_card_layered(card, lang, links, index, None)
+}
+
+/// [`render_card`] with the second layer's analysis of the card's type (plan
+/// 2a, U7): with one, a type's `## Purpose` is the purpose from the code with
+/// the doc comment as a quote ([`super::purpose::layered`]). Every other byte
+/// is the first layer's, and with `None` the card is exactly
+/// [`render_card`]'s. The detail never reads the analysis (KTD9).
+pub fn render_card_layered(
+    card: &Card,
+    lang: Lang,
+    links: LinkStyle,
+    index: &CardIndex,
+    layer2: Option<&super::layer2::TypeAnalysis>,
+) -> String {
     use super::explain;
     let mut s = String::new();
     let out = explain::Out {
@@ -438,7 +453,14 @@ pub fn render_card(card: &Card, lang: Lang, links: LinkStyle, index: &CardIndex)
         // The short card's body. The collaboration diagram, the API and the
         // peer tables are the detail's (R17).
         CardKind::Type => {
-            s.push_str(&explain::purpose(&out, story));
+            match layer2 {
+                Some(analysis) => s.push_str(&explain::purpose_layered(
+                    &out,
+                    story,
+                    &super::purpose::layered(card, &analysis.purpose),
+                )),
+                None => s.push_str(&explain::purpose(&out, story)),
+            }
             s.push_str(&explain::role(&out, story));
             s.push_str(&explain::keywords(story));
         }
