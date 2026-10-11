@@ -360,6 +360,16 @@ class FormatTwoTest(unittest.TestCase):
         cat = parse_catalog(self.question_catalog(change))
         self.assertEqual(cat.questions[0].zakazana_tvrzeni[0].fakty, ())
 
+    def test_a_misspelled_facts_key_of_a_forbidden_claim_is_rejected(self):
+        def change(q):
+            q["zakazana_tvrzeni"][0]["fakta"] = q["zakazana_tvrzeni"][0].pop("fakty")
+        self.assertRejected(self.question_catalog(change), "q-1", "z1", "fakta")
+
+    def test_any_unknown_key_of_a_forbidden_claim_is_rejected(self):
+        def change(q):
+            q["zakazana_tvrzeni"][0]["facts"] = ["f1"]
+        self.assertRejected(self.question_catalog(change), "q-1", "z1", "facts")
+
     def test_duplicate_fact_ids_are_rejected(self):
         def change(q):
             q["fakta"][1]["id"] = "f1"
