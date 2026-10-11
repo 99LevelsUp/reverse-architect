@@ -11,11 +11,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from catalog import Case, Question
-from report import ROLE_DEVELOPER, ROLE_SUPPORT
+from experiment_config import ROLE_SPECS, role_of
 
 PROMPT_PLACEHOLDER = "{zadani_pripadu}"
-PATH_BASE = {ROLE_DEVELOPER: "relativně k pracovnímu adresáři",
-             ROLE_SUPPORT: "relativně ke kořeni zdrojáků systému, jak ji uvádí korpus"}
+PATH_BASE = {name: role.path_base for name, role in ROLE_SPECS.items()}
 
 PROMPT_TEMPLATE = """Řešíš případ, který přišel na podporu. Najdi v kódu místo, kde leží příčina \
 chyby: soubor a člen (metodu, vlastnost nebo jiný člen typu). Kód neopravuj a nic neměň.
@@ -55,10 +54,10 @@ def sources_paragraph(corpus: Path | None, role: str) -> str:
 
     The support role says the agent has no sources; the developer role is the
     wording of every earlier experiment."""
-    if role == ROLE_SUPPORT:
-        parts = ["Zdrojáky systému nemáš, pracovní adresář je prázdný."]
-    else:
+    if role_of(role).has_sources:
         parts = ["Zdrojáky systému jsou v pracovním adresáři (strom bez historie gitu)."]
+    else:
+        parts = ["Zdrojáky systému nemáš, pracovní adresář je prázdný."]
     if corpus is None:
         parts.append("Jiné zdroje nemáš.")
     else:
@@ -81,7 +80,7 @@ def prompt_template(sources: str, role: str, druh: str = Case.druh) -> str:
 
 def item_text(item: Case | Question) -> str:
     """What the agent is given to work on: a case's prompt or a question's `dotaz`."""
-    return (item.dotaz if isinstance(item, Question) else item.prompt).strip()
+    return item.prompt_text
 
 
 def build_prompt(template: str, item: Case | Question) -> str:

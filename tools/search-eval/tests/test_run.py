@@ -1078,6 +1078,49 @@ class PromptLayerTest(unittest.TestCase):
         self.assertEqual(case.count("{zadani_pripadu}"), 1)
 
 
+class RoleAndPromptTextTest(unittest.TestCase):
+    """The role facts live on one `Role`; a case and a question both give `prompt_text`."""
+
+    def items(self):
+        from catalog import Case, Question
+        case = Case("c1", "  Zadání případu.\n", (), True, True, False, False)
+        question = Question("q1", "\n  Jak to funguje?  ", "", "abc", True, True, "", False, (), ())
+        return case, question
+
+    def test_prompt_text_is_the_stripped_text_of_either_kind(self):
+        case, question = self.items()
+        self.assertEqual(case.prompt_text, "Zadání případu.")
+        self.assertEqual(question.prompt_text, "Jak to funguje?")
+        self.assertEqual([run.item_text(i) for i in (case, question)],
+                         [case.prompt_text, question.prompt_text])
+
+    def test_the_role_facts(self):
+        support, developer = run.role_of("podpora"), run.role_of("vyvojar")
+        self.assertEqual((support.has_sources, support.corpus_only, support.own_workdir,
+                          support.measures_bugs), (False, True, True, False))
+        self.assertEqual((developer.has_sources, developer.corpus_only, developer.own_workdir,
+                          developer.measures_bugs), (True, False, False, True))
+        self.assertEqual(run.PATH_BASE, {r.name: r.path_base for r in (support, developer)})
+        with self.assertRaises(ConfigError):
+            run.role_of("ctenar")
+
+    def test_the_role_decides_the_measured_items(self):
+        case, question = self.items()
+        catalog = mock.Mock(cases=(case,), questions=(question,))
+        self.assertEqual(run.measured_cases(catalog, "vyvojar"), (case, question))
+        self.assertEqual(run.measured_cases(catalog, "podpora"), (question,))
+        self.assertEqual(run.not_measured_cases(catalog, "vyvojar"), ())
+        self.assertEqual(run.not_measured_cases(catalog, "podpora"), (case,))
+
+    def test_the_config_names_are_importable_from_run(self):
+        import experiment_config
+        for name in ("ConfigError", "ExperimentConfig", "ResolvedPaths", "VariantSpec", "slugify",
+                     "parse_variants", "validate_variants", "default_variants", "resolve_paths",
+                     "support_workdir_path", "validate_role"):
+            with self.subTest(name):
+                self.assertIs(getattr(run, name), getattr(experiment_config, name))
+
+
 class VariantConfigTest(unittest.TestCase):
     def test_default_pair_and_validation(self):
         pair = run.default_variants(Path("c"), ["--x"])

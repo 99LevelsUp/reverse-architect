@@ -71,14 +71,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import random
-import re
 import sys
 import time
-import unicodedata
 from collections import Counter, deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -88,7 +85,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import prepare  # noqa: E402
 import report  # noqa: E402
-from agents.base import (CONFIG_DIR_NAME, AgentAdapter, AgentRunError, Cap,  # noqa: E402
+from agents.base import (AgentAdapter, AgentRunError, Cap,  # noqa: E402
                          RunRecord, RunRequest)
 from agents.claude_code import (CREDENTIALS_FILE, ClaudeCodeAdapter,  # noqa: E402
                                 ClaudeCodeSettings)
@@ -96,12 +93,14 @@ from audit import audit_run  # noqa: E402
 from catalog import Case, Catalog, CatalogError, Question, load_catalog  # noqa: E402
 from preflight import (InfrastructureError, PreflightResult, PreflightTarget,  # noqa: E402
                        require_ok, results_json, run_preflight)
-from prepare import (PrepareError, canonical_path, ensure_outside,  # noqa: E402
-                     protected_roots)
-from report import (INFRASTRUCTURE, ROLE_SUPPORT, ROLES,  # noqa: E402
-                    SPOILED, STATUS_COMPLETED, STATUS_INFRASTRUCTURE, STATUS_INTERRUPTED,
-                    CaseInfo, ExperimentInfo, PreparationCost, RunResult, Tariff, VariantInfo,
-                    write_text_atomic)
+from experiment_config import (DEFAULT_VARIANTS, ROLE_SPECS, VARIANTS_FORMAT_VERSION,  # noqa: E402,F401
+                               ConfigError, ExperimentConfig, ResolvedPaths, Role, VariantSpec,
+                               default_variants, parse_variants, protected_for, resolve_paths, role_of,
+                               slugify, support_workdir_path, validate_role, validate_variants)
+from prepare import PrepareError, ensure_outside  # noqa: E402
+from report import (INFRASTRUCTURE, ROLES, SPOILED, STATUS_COMPLETED,  # noqa: E402
+                    STATUS_INFRASTRUCTURE, STATUS_INTERRUPTED, CaseInfo, ExperimentInfo,
+                    PreparationCost, RunResult, Tariff, VariantInfo, write_text_atomic)
 from prompts import (PATH_BASE, PROMPT_PLACEHOLDER, PROMPT_TEMPLATE,  # noqa: E402,F401
                      QUESTION_PROMPT_TEMPLATE, build_prompt, item_text,
                      prompt_template, sources_paragraph)
@@ -109,241 +108,6 @@ from score import evaluate_run  # noqa: E402
 
 RUNS_PER_VARIANT = report.RUNS_PER_VARIANT
 MAX_REPLACEMENTS = 2
-VARIANTS_FORMAT_VERSION = 1
-DEFAULT_VARIANTS = ("bez karet", "s kartami")
-
-
-class ConfigError(Exception):
-    """The experiment's inputs are invalid (Czech message for the operator)."""
-
-
-# --- variants ----------------------------------------------------------------
-
-@dataclass(frozen=True)
-class VariantSpec:
-    """One variant: name and its corpus (or none).
-
-    `ra_command` is the command (binary and fixed arguments) that generates this
-    variant's corpus; None means the experiment's `ra_command`.
-    """
-
-    name: str
-    corpus_dir: Path | None = None
-    ra_options: tuple[str, ...] = ()
-    card_format: str | None = None
-    ra_command: tuple[str, ...] | None = None
-
-    @property
-    def slug(self) -> str:
-        return slugify(self.name)
-
-
-def slugify(text: str) -> str:
-    """ASCII file-name form of a name (`s kartami` -> `s-kartami`)."""
-    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-") or "x"
-
-
-def parse_variants(data: Any, base_dir: Path) -> tuple[VariantSpec, ...]:
-    """Variants file: `{"format_version": 1, "variants": [{name, corpus_dir, ra_options,
-    ra_command, card_format}, ...]}`; relative corpus paths are relative to the file.
-    `ra_command` is a non-empty list of texts (binary and arguments), taken as written."""
-    if not isinstance(data, dict) or data.get("format_version") != VARIANTS_FORMAT_VERSION:
-        raise ConfigError(f"Varianty: pole „format_version“ musí být {VARIANTS_FORMAT_VERSION}.")
-    raw = data.get("variants")
-    if not isinstance(raw, list):
-        raise ConfigError("Varianty: pole „variants“ musí být seznam.")
-    variants = []
-    for index, item in enumerate(raw):
-        where = f"Varianta č. {index + 1}"
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) \
-                or not item["name"].strip():
-            raise ConfigError(f"{where}: chybí pole „name“.")
-        corpus = item.get("corpus_dir")
-        if corpus is not None and (not isinstance(corpus, str) or not corpus):
-            raise ConfigError(f"{where}: pole „corpus_dir“ musí být cesta nebo null.")
-        options = item.get("ra_options", [])
-        if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
-            raise ConfigError(f"{where}: pole „ra_options“ musí být seznam textů.")
-        command = item.get("ra_command")
-        if command is not None and (not isinstance(command, list) or not command
-                                    or not all(isinstance(c, str) and c for c in command)):
-            raise ConfigError(f"{where}: pole „ra_command“ musí být neprázdný seznam textů "
-                              "(binárka a její argumenty) nebo null.")
-        card_format = item.get("card_format")
-        variants.append(VariantSpec(name=item["name"].strip(),
-                                    corpus_dir=base_dir / corpus if corpus is not None else None,
-                                    ra_options=tuple(options),
-                                    card_format=card_format if isinstance(card_format, str)
-                                    else None,
-                                    ra_command=tuple(command) if command is not None else None))
-    return validate_variants(variants)
-
-
-def validate_variants(variants: Sequence[VariantSpec],
-                      role: str | None = None) -> tuple[VariantSpec, ...]:
-    """Exactly two variants with distinct names; RA options and command only with a corpus.
-
-    With `role` the variants are also checked against it: the support role reads
-    nothing but corpora, so a variant without one has nothing to read."""
-    if len(variants) != 2:
-        raise ConfigError(f"Pokus porovnává právě dvě varianty (referenční a srovnávanou), "
-                          f"zadáno {len(variants)}.")
-    names = [v.name for v in variants]
-    if len(set(names)) != len(names) or len({v.slug for v in variants}) != len(names):
-        raise ConfigError(f"Varianty musí mít různá jména: {', '.join(names)}.")
-    for v in variants:
-        if v.ra_options and v.corpus_dir is None:
-            raise ConfigError(f"Varianta {v.name}: volby RA bez korpusu nedávají smysl.")
-        if v.ra_command is not None and v.corpus_dir is None:
-            raise ConfigError(f"Varianta {v.name}: příkaz RA bez korpusu nedává smysl.")
-        if role == ROLE_SUPPORT and v.corpus_dir is None:
-            raise ConfigError(f"Varianta {v.name} nemá korpus: v roli podpora agent nemá zdrojáky "
-                              "a bez korpusu by neměl co číst. Každá varianta potřebuje korpus.")
-    return tuple(variants)
-
-
-def default_variants(corpus_dir: Path | None, ra_options: Sequence[str] = ()
-                     ) -> tuple[VariantSpec, ...]:
-    """The default pair: sources only, and sources + corpus (R4)."""
-    if corpus_dir is None:
-        raise ConfigError("Bez souboru variant je potřeba --corpus-dir pro variantu "
-                          "„s kartami“.")
-    return validate_variants([
-        VariantSpec(DEFAULT_VARIANTS[0]),
-        VariantSpec(DEFAULT_VARIANTS[1], corpus_dir=corpus_dir, ra_options=tuple(ra_options)),
-    ])
-
-
-# --- configuration -----------------------------------------------------------
-
-@dataclass(frozen=True)
-class ExperimentConfig:
-    """Everything fixed for one experiment (R6)."""
-
-    catalog_path: Path
-    source_repo: Path
-    output_root: Path
-    export_dir: Path
-    isolation_root: Path
-    ra_command: tuple[str, ...]
-    model: str
-    cap: Cap
-    seed: int
-    variants: tuple[VariantSpec, ...]
-    role: str
-    tariff: Tariff | None = None
-    claude_executable: tuple[str, ...] = ("claude",)
-    credentials: Path | None = None
-    forbidden_dir_names: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class ResolvedPaths:
-    """Canonical paths after the checks of step 1 (module docstring)."""
-
-    output_root: Path
-    export_dir: Path
-    isolation_root: Path
-    corpora: dict[str, Path] = field(default_factory=dict)
-    support_workdir: Path | None = None
-
-
-def _within(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:  # different drives
-        return False
-
-
-def _overlap(a: str, b: str) -> bool:
-    return _within(a, b) or _within(b, a)
-
-
-def support_workdir_path(export_dir: str | os.PathLike[str]) -> Path:
-    """The empty work directory of the support role: a sibling of the export."""
-    export = Path(export_dir)
-    return export.with_name(export.name + "-podpora-prazdny")
-
-
-def validate_role(role: str) -> None:
-    if role not in ROLES:
-        raise ConfigError(f"Role musí být {' nebo '.join(ROLES)}, zadáno „{role}“.")
-
-
-def _protected(config: ExperimentConfig) -> list[str]:
-    """The roots no file of the experiment may lie under: the source repo, this repo, worktrees."""
-    try:
-        return protected_roots(prepare.repo_toplevel(config.source_repo))
-    except PrepareError as exc:
-        raise ConfigError(str(exc)) from None
-
-
-def resolve_paths(config: ExperimentConfig) -> ResolvedPaths:
-    """Canonicalize and check every location before anything is written (KTD9).
-
-    In the support role the agent's empty work directory is one more location
-    the agent reads, so it gets the same checks as the export."""
-    roots = _protected(config)
-    names = config.forbidden_dir_names
-    try:
-        ensure_outside(config.catalog_path, roots, "Katalog")
-        output = ensure_outside(config.output_root, roots, "Kořen výstupu", names)
-        export = ensure_outside(config.export_dir, roots, "Adresář exportu", names)
-        isolation = ensure_outside(config.isolation_root, roots, "Kořen izolace", names)
-        corpora = {v.name: ensure_outside(v.corpus_dir, roots, f"Korpus varianty {v.name}",
-                                          names)
-                   for v in config.variants if v.corpus_dir is not None}
-    except PrepareError as exc:
-        raise ConfigError(str(exc)) from None
-    support = None
-    if config.role == ROLE_SUPPORT:
-        try:
-            support = ensure_outside(support_workdir_path(config.export_dir), roots,
-                                     "Pracovní adresář role podpora", names)
-        except PrepareError as exc:
-            raise ConfigError(str(exc)) from None
-        if os.path.lexists(support) and (not os.path.isdir(support) or os.listdir(support)):
-            raise ConfigError(f"Pracovní adresář role podpora {support} už existuje a není "
-                              "prázdný; zbytek po předchozím běhu?")
-    agent_reads = {"adresář exportu": str(export),
-                   **({"pracovní adresář role podpora": str(support)} if support else {}),
-                   **{f"korpus varianty {n}": str(p) for n, p in corpora.items()}}
-    catalog = canonical_path(config.catalog_path)
-    for what, readable in agent_reads.items():
-        if _overlap(str(output), readable):
-            raise ConfigError(f"Kořen výstupu {output} se překrývá s {what} {readable}: agent by "
-                              "četl přepisy a výsledky jiných běhů.")
-        if _within(catalog, readable):
-            raise ConfigError(f"Katalog {catalog} leží v {what} {readable}: agent by četl "
-                              "odpovědi.")
-        if _overlap(str(isolation), readable):
-            raise ConfigError(f"Kořen izolace {isolation} se překrývá s {what} {readable}.")
-    if _overlap(str(isolation), str(output)):
-        raise ConfigError(f"Kořen izolace {isolation} se překrývá s kořenem výstupu {output}.")
-    for name, corpus in corpora.items():
-        if _overlap(str(corpus), str(export)):
-            raise ConfigError(f"Korpus varianty {name} se překrývá s adresářem exportu.")
-        if support is not None and _overlap(str(corpus), str(support)):
-            raise ConfigError(f"Korpus varianty {name} se překrývá s pracovním adresářem role "
-                              "podpora.")
-    if support is not None and _overlap(str(support), str(export)):
-        raise ConfigError("Pracovní adresář role podpora se překrývá s adresářem exportu: agent "
-                          "by četl zdrojáky.")
-    leftover = isolation / CONFIG_DIR_NAME
-    if os.path.lexists(leftover):
-        raise ConfigError(f"V {leftover} zůstal adresář nastavení z předchozího běhu (mohl "
-                          "obsahovat kopii přihlášení). Ověř, že žádný běh neběží, smaž ho ručně "
-                          "a spusť znovu.")
-    # Checked in canonical (case-folded) form; handed on case-preserving, since
-    # the corpus path is shown to the agent in the prompt.
-    def real(path: Path | None) -> Path:
-        return Path(os.path.realpath(path))
-    return ResolvedPaths(real(config.output_root), real(config.export_dir),
-                         real(config.isolation_root),
-                         {v.name: real(v.corpus_dir) for v in config.variants
-                          if v.corpus_dir is not None},
-                         real(support_workdir_path(config.export_dir)) if support else None)
 
 
 # --- schedule and prompt -----------------------------------------------------
@@ -436,14 +200,14 @@ def _load_catalog(config: ExperimentConfig) -> Catalog:
     customer data one commit from the public history. What is measured is decided by the
     role: questions in both, `chyba` items in the developer role only."""
     try:
-        ensure_outside(config.catalog_path, _protected(config), "Katalog")
+        ensure_outside(config.catalog_path, protected_for(config), "Katalog")
     except PrepareError as exc:
         raise ConfigError(str(exc)) from None
     try:
         catalog = load_catalog(config.catalog_path)
     except CatalogError as exc:
         raise ConfigError(str(exc)) from None
-    if config.role == ROLE_SUPPORT:
+    if not role_of(config.role).measures_bugs:
         if not catalog.questions:
             raise ConfigError("V roli podpora se položky druhu „chyba“ neměří a katalog nemá "
                               "žádnou jinou položku k měření: pokus nemá co měřit.")
@@ -456,13 +220,12 @@ def _load_catalog(config: ExperimentConfig) -> Catalog:
 def measured_cases(catalog: Catalog, role: str) -> tuple[Case | Question, ...]:
     """The items the experiment runs in this role: the `chyba` items (none in the support
     role) and then the questions."""
-    cases = () if role == ROLE_SUPPORT else tuple(catalog.cases)
-    return (*cases, *catalog.questions)
+    return role_of(role).measured(catalog)
 
 
 def not_measured_cases(catalog: Catalog, role: str) -> tuple[Case, ...]:
     """The `chyba` items set aside by the role: reported as "v roli podpora se neměří"."""
-    return tuple(catalog.cases) if role == ROLE_SUPPORT else ()
+    return role_of(role).not_measured(catalog)
 
 
 class _Experiment:
@@ -481,9 +244,12 @@ class _Experiment:
         self.preflight_results: list[PreflightResult] = []
         self.results: list[RunResult] = []
         self.export: prepare.ExportResult | None = None
+        self.role = role_of(config.role)
         self.measured = measured_cases(catalog, config.role)
         self.templates: dict[str, str] = {}
         self.question_templates: dict[str, str] = {}
+        self.templates_by_kind = {Case.druh: self.templates,
+                                  Question.druh: self.question_templates}
         self.adapter_name = ""
 
     # -- step 2: preparation ------------------------------------------------
@@ -538,7 +304,7 @@ class _Experiment:
         for variant in self.config.variants:
             target = PreflightTarget(name=variant.name, slug=variant.slug,
                                      with_corpus=variant.corpus_dir is not None,
-                                     with_sources=self.config.role != ROLE_SUPPORT)
+                                     with_sources=self.role.has_sources)
             result = run_preflight(adapter, target, base, self.config.cap, token)
             self.preflight_results.append(result)
             self.costs.append(PreparationCost(f"Kontrola nástroje ({variant.name})",
@@ -598,8 +364,7 @@ class _Experiment:
         return ExperimentOutcome(status, self.directory, data)
 
     def _template(self, variant: str, item: Case | Question) -> str:
-        return (self.question_templates if isinstance(item, Question)
-                else self.templates)[variant]
+        return self.templates_by_kind[item.druh][variant]
 
     def _run_one(self, adapter: AgentAdapter, case: Case | Question, entry: ScheduleEntry, attempt: int,
                  replaces: int | None) -> RunResult:
@@ -624,7 +389,7 @@ class _Experiment:
         if problem is not None:
             return RunResult(state=INFRASTRUCTURE, reason=problem, **measured)
         outcome = evaluate_run(record, case, audit_run(
-            record, corpus_only=self.config.role == ROLE_SUPPORT))
+            record, corpus_only=self.role.corpus_only))
         answer = None
         if outcome.answer is not None:
             answer = {"file": outcome.answer.file, "member": outcome.answer.member,
@@ -637,7 +402,7 @@ class _Experiment:
     def _workdir(self) -> Path:
         """The agent's work directory: the exported tree, or in the support role an empty one."""
         assert self.export is not None
-        if self.config.role == ROLE_SUPPORT:
+        if self.role.own_workdir:
             assert self.paths.support_workdir is not None
             return self.paths.support_workdir
         return self.export.tree_dir
@@ -716,7 +481,7 @@ class _Experiment:
             card_format=variant.card_format,
             prompt_template=template, question_prompt_template=question_template,
             prompt_sha256={c.id: hashlib.sha256(
-                build_prompt(question_template if isinstance(c, Question) else template, c)
+                build_prompt({Case.druh: template, Question.druh: question_template}[c.druh], c)
                 .encode("utf-8")).hexdigest() for c in self.measured})
 
     def _preparation_json(self, error: str | None) -> dict[str, Any]:
@@ -864,7 +629,7 @@ def load_tariff(path: Path) -> Tariff:
 
 def config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     validate_role(args.role)
-    if args.variants is None and args.role == ROLE_SUPPORT:
+    if args.variants is None and role_of(args.role).corpus_only:
         raise ConfigError("V roli podpora agent nemá zdrojáky, takže výchozí dvojice „bez karet“ "
                           "a „s kartami“ nedává smysl. Zadej dva korpusy výslovně souborem "
                           "--variants (každá varianta s polem corpus_dir).")
@@ -912,8 +677,7 @@ def dry_run(config: ExperimentConfig) -> str:
         f"tokeny {cap.tokens}.",
         f"Model: {config.model}; semínko: {config.seed}; souběh 1.",
         f"Role: {config.role}"
-        + (" (agent nemá zdrojáky, čte jen korpus)" if config.role == ROLE_SUPPORT
-           else " (agent má zdrojáky)") + ".",
+        + f" ({role_of(config.role).dry_run_note}).",
     ]
     skipped = not_measured_cases(catalog, config.role)
     if skipped:
