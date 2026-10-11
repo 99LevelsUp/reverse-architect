@@ -50,7 +50,8 @@
 //! passes through a functionality the same trigger's row into is dead is dead
 //! too, with that row's place: a command that never runs leads nowhere
 //! further. A trigger's own row that refers elsewhere is dead when every row
-//! it refers to is.
+//! it refers to is — and its death passes along the paths in turn, to a
+//! fixed point of both rules.
 
 use super::callers::{is_strong, Callers, Via};
 use super::cluster::Functionality;
@@ -770,44 +771,6 @@ pub(crate) fn compose(
     for (i, member, place) in dead {
         rows[i].state = PathState::Dead { member, place };
     }
-    pass_death_along_paths(types, rows, &by_trigger);
-    for (i, elsewhere) in referring {
-        if !matches!(rows[i].state, PathState::Active) {
-            continue;
-        }
-        let first = elsewhere.iter().find_map(|&j| match &rows[j].state {
-            PathState::Dead { member, place } => Some((member.clone(), place.clone())),
-            _ => None,
-        });
-        let all = elsewhere
-            .iter()
-            .all(|&j| matches!(rows[j].state, PathState::Dead { .. }));
-        if let (true, Some((member, place))) = (all, first) {
-            rows[i].state = PathState::Dead { member, place };
-        }
-    }
-    // Every flow carries its row's final state: the dead rows were told
-    // only now.
-    for flow in out
-        .iter_mut()
-        .flat_map(|t| &mut t.functionalities)
-        .flat_map(|f| &mut f.flows)
-    {
-        flow.state = rows[flow.row].state.clone();
-    }
-    out
-}
-
-/// A row whose way passes through a functionality its trigger's own row into
-/// is dead goes no further: it is dead too, at that row's place (R12). A key
-/// whose command can never run reaches nothing behind the command's target,
-/// whatever functionality of another type that target calls into. To a fixed
-/// point, so a chain of functionalities passes the death on.
-fn pass_death_along_paths(
-    types: &[TypeAnalysis],
-    rows: &mut [TriggerRow],
-    by_trigger: &BTreeMap<super::triggers::Identity, Vec<usize>>,
-) {
     let members: BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>> = types
         .iter()
         .flat_map(|t| {
@@ -820,6 +783,70 @@ fn pass_death_along_paths(
             })
         })
         .collect();
+    settle_deaths(&members, rows, &by_trigger, &referring);
+    // Every flow carries its row's final state: the dead rows were told
+    // only now.
+    for flow in out
+        .iter_mut()
+        .flat_map(|t| &mut t.functionalities)
+        .flat_map(|f| &mut f.flows)
+    {
+        flow.state = rows[flow.row].state.clone();
+    }
+    out
+}
+
+/// The two rules a row dies by besides its own dead path, together to a
+/// fixed point: the death passed along the paths ([`pass_death_along_paths`])
+/// and a trigger's own row that refers elsewhere dying when every row it
+/// refers to is dead (`referring`: the own row and the rows it refers to).
+/// An own row can die only after the paths have passed their deaths on, and
+/// its death in turn kills a row of the same trigger whose way crosses its
+/// functionality — so the paths are walked again after every own row that
+/// dies, until neither rule changes a row. The paths go first in every round,
+/// as they did when each rule ran once, so a row either rule killed before
+/// keeps the member and the place it was killed at.
+fn settle_deaths(
+    members: &BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>>,
+    rows: &mut [TriggerRow],
+    by_trigger: &BTreeMap<super::triggers::Identity, Vec<usize>>,
+    referring: &[(usize, Vec<usize>)],
+) {
+    loop {
+        pass_death_along_paths(members, rows, by_trigger);
+        let mut changed = false;
+        for (i, elsewhere) in referring {
+            if !matches!(rows[*i].state, PathState::Active) {
+                continue;
+            }
+            let first = elsewhere.iter().find_map(|&j| match &rows[j].state {
+                PathState::Dead { member, place } => Some((member.clone(), place.clone())),
+                _ => None,
+            });
+            let all = elsewhere
+                .iter()
+                .all(|&j| matches!(rows[j].state, PathState::Dead { .. }));
+            if let (true, Some((member, place))) = (all, first) {
+                rows[*i].state = PathState::Dead { member, place };
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// A row whose way passes through a functionality its trigger's own row into
+/// is dead goes no further: it is dead too, at that row's place (R12). A key
+/// whose command can never run reaches nothing behind the command's target,
+/// whatever functionality of another type that target calls into. To a fixed
+/// point, so a chain of functionalities passes the death on.
+fn pass_death_along_paths(
+    members: &BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>>,
+    rows: &mut [TriggerRow],
+    by_trigger: &BTreeMap<super::triggers::Identity, Vec<usize>>,
+) {
     loop {
         let mut changed = false;
         for i in 0..rows.len() {
@@ -860,4 +887,179 @@ fn body_place(ix: &super::Index<'_>, member: &NodeKey) -> Option<Place> {
             range: n.place,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::triggers::{Hop, TriggerKind};
+    use super::*;
+    use crate::extract::bodies::Range;
+
+    const NS: &str = "sym:csharp:Acme#";
+
+    fn key(local: &str) -> NodeKey {
+        NodeKey::new(format!("{NS}{local}"))
+    }
+
+    fn place(line: u32) -> Place {
+        Place {
+            path: "src/A.cs".into(),
+            range: Range::from([line, 1, line, 10]),
+        }
+    }
+
+    fn target(ty: &str, f: &str) -> FunctionalityRef {
+        FunctionalityRef {
+            ty: key(ty),
+            key: f.to_string(),
+        }
+    }
+
+    fn row(trigger: &Trigger, target: FunctionalityRef, path: &[&str], own: bool) -> TriggerRow {
+        TriggerRow {
+            trigger: trigger.clone(),
+            target,
+            state: PathState::Active,
+            path: path
+                .iter()
+                .map(|m| Hop {
+                    member: key(m),
+                    place: None,
+                    grade: None,
+                })
+                .collect(),
+            entries: Vec::new(),
+            grade: None,
+            own,
+        }
+    }
+
+    /// Review of the 2c fixes (R12): F4 of a view refers to the view model's
+    /// functionality, which is dead at its CanExecute, so the view's own row
+    /// dies only in the pass over the rows that refer elsewhere. A row of the
+    /// same F4 to a command class — not among the rows the own row refers
+    /// to — passes through the view's handler, a member of that own row's
+    /// functionality. It is dead too, at the same place: the paths are
+    /// walked again after the own row died. Before, the paths were walked
+    /// once, before it died, and the row stayed active.
+    #[test]
+    fn a_row_through_an_own_row_that_dies_late_is_dead_too() {
+        let trigger = Trigger {
+            kind: TriggerKind::Key,
+            key: "Key.F4".into(),
+            member: key("View.OnKey(object,KeyEventArgs)"),
+            place: Some(place(3)),
+            condition: None,
+            modifiers: Vec::new(),
+            source: None,
+            label: None,
+        };
+        let can_check = key("ViewModel.CanCheck()");
+        let at = place(9);
+        let mut rows = vec![
+            // The view's own row: it refers to row 1.
+            row(&trigger, target("View", "keys"), &[], true),
+            // The view model's functionality: dead at its CanExecute.
+            row(
+                &trigger,
+                target("ViewModel", "check"),
+                &["View.OnKey(object,KeyEventArgs)"],
+                false,
+            ),
+            // The command class, through the view's handler only.
+            row(
+                &trigger,
+                target("Command", "execute"),
+                &["View.OnKey(object,KeyEventArgs)", "View.Run()"],
+                false,
+            ),
+        ];
+        rows[1].state = PathState::Dead {
+            member: can_check.clone(),
+            place: at.clone(),
+        };
+        let handler = key("View.OnKey(object,KeyEventArgs)");
+        let run = key("View.Run()");
+        let check = key("ViewModel.Check()");
+        let execute = key("Command.Execute(object)");
+        let members: BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>> = [
+            (target("View", "keys"), BTreeSet::from([&handler, &run])),
+            (
+                target("ViewModel", "check"),
+                BTreeSet::from([&check, &can_check]),
+            ),
+            (target("Command", "execute"), BTreeSet::from([&execute])),
+        ]
+        .into_iter()
+        .collect();
+        let by_trigger = BTreeMap::from([(trigger.identity(), vec![0, 1, 2])]);
+        let referring = vec![(0, vec![1])];
+
+        // The paths walked before the own row dies leave the class row
+        // active: what the single walk used to leave.
+        let mut once = rows.clone();
+        pass_death_along_paths(&members, &mut once, &by_trigger);
+        assert_eq!(once[2].state, PathState::Active);
+
+        settle_deaths(&members, &mut rows, &by_trigger, &referring);
+        let dead_at_can_check = PathState::Dead {
+            member: can_check.clone(),
+            place: at.clone(),
+        };
+        assert_eq!(rows[0].state, dead_at_can_check, "the own row");
+        assert_eq!(rows[1].state, dead_at_can_check, "the row it refers to");
+        assert_eq!(rows[2].state, dead_at_can_check, "the row through it");
+    }
+
+    /// The fixed point leaves a row alone that neither rule reaches: an own
+    /// row whose rows elsewhere are not all dead stays active, and so does a
+    /// row through it.
+    #[test]
+    fn an_own_row_with_a_live_row_elsewhere_stays_active_and_so_does_a_row_through_it() {
+        let trigger = Trigger {
+            kind: TriggerKind::Key,
+            key: "Key.F5".into(),
+            member: key("View.OnKey(object,KeyEventArgs)"),
+            place: Some(place(4)),
+            condition: None,
+            modifiers: Vec::new(),
+            source: None,
+            label: None,
+        };
+        let mut rows = vec![
+            row(&trigger, target("View", "keys"), &[], true),
+            row(
+                &trigger,
+                target("ViewModel", "check"),
+                &["View.OnKey(object,KeyEventArgs)"],
+                false,
+            ),
+            row(
+                &trigger,
+                target("ViewModel", "save"),
+                &["View.OnKey(object,KeyEventArgs)"],
+                false,
+            ),
+            row(
+                &trigger,
+                target("Command", "execute"),
+                &["View.OnKey(object,KeyEventArgs)"],
+                false,
+            ),
+        ];
+        rows[1].state = PathState::Dead {
+            member: key("ViewModel.CanCheck()"),
+            place: place(9),
+        };
+        let handler = key("View.OnKey(object,KeyEventArgs)");
+        let members: BTreeMap<FunctionalityRef, BTreeSet<&NodeKey>> =
+            [(target("View", "keys"), BTreeSet::from([&handler]))]
+                .into_iter()
+                .collect();
+        let by_trigger = BTreeMap::from([(trigger.identity(), vec![0, 1, 2, 3])]);
+        settle_deaths(&members, &mut rows, &by_trigger, &[(0, vec![1, 2])]);
+        assert_eq!(rows[0].state, PathState::Active);
+        assert_eq!(rows[2].state, PathState::Active);
+        assert_eq!(rows[3].state, PathState::Active);
+    }
 }
