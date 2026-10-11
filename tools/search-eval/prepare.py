@@ -13,7 +13,8 @@ report that measures something else.
    the check, so a link cannot smuggle the export back inside.
 2. `check_cases` refuses a case whose fix commit is not a strict descendant
    of the base revision, or whose acceptable member is not present by name in
-   the exported file (R1).
+   the exported file (R1). A question (kind `otazka`) is checked for its
+   places only: files present in the export, declaring members present by name.
 3. `generate_corpus` runs the RA binary on the export and writes a receipt;
    `load_corpus` refuses a corpus without a matching, still-valid receipt.
 
@@ -41,7 +42,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from catalog import Catalog
+from catalog import Case, Catalog, Question
 
 RECEIPT_FORMAT_VERSION = 1
 FINGERPRINT_ALGORITHM = "sha256-files-v1"
@@ -243,7 +244,9 @@ def find_case_problems(source_repo: str | os.PathLike[str], catalog: Catalog,
     A fix commit must be a strict descendant of the base revision (equal
     would mean the base already contains the fix), and each acceptable
     member must occur by name, as a whole case-sensitive identifier, in the
-    exported file.
+    exported file. A question has no fix commit: only its places are checked
+    (the file must be in the export and the declaring member, or the type of a
+    type place, must occur in it as a whole identifier).
     """
     base = resolve_commit(source_repo, catalog.base_revision)
     if base is None:
@@ -255,14 +258,34 @@ def find_case_problems(source_repo: str | os.PathLike[str], catalog: Catalog,
     problems: list[str] = []
     tree = Path(tree_dir)
     for case in catalog.cases:
-        for loc in case.acceptable_locations:
-            prefix = f"Případ „{case.id}“, {loc.file} {loc.member}"
-            commit_problem = _fix_commit_problem(source_repo, base, loc.fix_commit)
-            if commit_problem:
-                problems.append(f"{prefix}: {commit_problem}")
-            member_problem = _member_problem(tree, loc.file, loc.member_name)
-            if member_problem:
-                problems.append(f"{prefix}: {member_problem}")
+        problems += _bug_problems(source_repo, base, case, tree)
+    for question in catalog.questions:
+        problems += _question_problems(question, tree)
+    return problems
+
+
+def _bug_problems(source_repo: str | os.PathLike[str], base: str, case: Case,
+                  tree: Path) -> list[str]:
+    problems: list[str] = []
+    for loc in case.acceptable_locations:
+        prefix = f"Případ „{case.id}“, {loc.file} {loc.member}"
+        commit_problem = _fix_commit_problem(source_repo, base, loc.fix_commit)
+        if commit_problem:
+            problems.append(f"{prefix}: {commit_problem}")
+        member_problem = _member_problem(tree, loc.file, loc.member_name)
+        if member_problem:
+            problems.append(f"{prefix}: {member_problem}")
+    return problems
+
+
+def _question_problems(question: Question, tree: Path) -> list[str]:
+    """A question has no fix commit; its places must exist in the exported tree."""
+    problems: list[str] = []
+    for label, place in question.places():
+        problem = _member_problem(tree, place.soubor, place.name)
+        if problem:
+            problems.append(f"Otázka „{question.id}“, {label}, {place.soubor} "
+                            f"{place.clen or place.typ}: {problem}")
     return problems
 
 
@@ -361,7 +384,7 @@ def generate_corpus(ra_command: Sequence[str], export: ExportResult,
         corpus_fingerprint=fingerprint_dir(corpus),
         generation_seconds=elapsed,
     )
-    _write_json_atomic(receipt_file, {
+    write_json_atomic(receipt_file, {
         "format_version": RECEIPT_FORMAT_VERSION,
         "fingerprint_algorithm": FINGERPRINT_ALGORITHM,
         **asdict(receipt),
@@ -409,14 +432,21 @@ def _run_ra(argv: Sequence[str], what: str) -> str:
     return result.stdout
 
 
-def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace `path` in one step (temp file beside it + `os.replace`), so a crash never leaves
+    half a file behind. The directory is created when it is missing."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
+            handle.write(text)
         os.replace(tmp, path)
     except BaseException:
         if os.path.exists(tmp):
             os.unlink(tmp)
         raise
+
+
+def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    """`write_text_atomic` of the JSON (indented, keys sorted, trailing newline)."""
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")

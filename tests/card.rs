@@ -1923,6 +1923,201 @@ fn keywords_are_the_same_across_runs_and_thread_counts() {
     assert_eq!(one, all(&cards_with_threads(tmp.path(), 4)));
 }
 
+/// An editor with every shape the second layer draws: a key handler, a
+/// context menu whose label is quoted, a command, a parameter that chooses (a
+/// flowchart) and a toggled property (a state diagram).
+const EDITOR_LAYERED_CS: &str = r#"namespace Acme.Editor
+{
+    public class RelayCommand
+    {
+        private readonly Action<object> _execute;
+        public RelayCommand(Action<object> execute) { _execute = execute; }
+        public void Execute(object p) { _execute(p); }
+    }
+
+    public class EditorView
+    {
+        private ContextMenu menu;
+        private EditorViewModel viewModel;
+        public string GetResourceString(string key) { return key; }
+        void OnKey(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F4) { viewModel.CheckCommand.Execute(null); }
+            else if (e.Key == Key.F5) { viewModel.Toggle(); }
+        }
+        void BuildMenu()
+        {
+            ContextMenuItem f4 = new ContextMenuItem();
+            f4.Header = GetResourceString("EditorView_checkErrors") /*"Kontrola chyb"*/;
+            f4.Command = viewModel.CheckCommand;
+            menu.Items.Add(f4);
+        }
+    }
+
+    public class EditorViewModel
+    {
+        private bool isFullscreen;
+        public RelayCommand CheckCommand => new RelayCommand(p => Check());
+        public void Check() { Check(false); }
+        void Check(bool syntaxOnly)
+        {
+            if (syntaxOnly) { Parse(1); } else { Parse(2); }
+        }
+        void Parse(int kind) { }
+        public bool IsFullscreen
+        {
+            get { return isFullscreen; }
+            set { if (isFullscreen == value) return; isFullscreen = value; }
+        }
+        public void Toggle() { IsFullscreen = !IsFullscreen; }
+        public void Leave() { IsFullscreen = false; }
+        public void Draw() { if (IsFullscreen) { Parse(0); } }
+    }
+}
+"#;
+
+/// A run with the second layer at `level` over `repo`, written into `out`, on
+/// a pool of `threads` workers of its own.
+fn layered_with_threads(
+    repo: &std::path::Path,
+    out: &std::path::Path,
+    level: u8,
+    threads: usize,
+) -> reverse_architect::Generated {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .unwrap()
+        .install(|| {
+            reverse_architect::generate(&reverse_architect::config::Config {
+                detail_level: Some(level),
+                ..common::config_for(repo, out)
+            })
+            .expect("the pipeline runs")
+        })
+}
+
+/// R3, KTD9 (plan 2a, U9): the second layer's cards, details, maps, views,
+/// manifest and coverage are the same bytes run after run and whatever the
+/// thread count — one worker, one again, four, on every level — through a
+/// scoped pool for each run, as `tests/threads.rs` explains. The fixture has
+/// the sections and both diagrams the layer writes, so the bytes compared are
+/// the layer's.
+#[test]
+fn the_second_layer_is_the_same_bytes_across_runs_and_thread_counts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo_with_files(&repo, "Alice", &[("src/Editor.cs", EDITOR_LAYERED_CS)]);
+    for level in 1..=3u8 {
+        let run = |name: &str, threads: usize| {
+            layered_with_threads(
+                &repo,
+                &tmp.path().join(format!("{level}-{name}")),
+                level,
+                threads,
+            )
+        };
+        let one = run("one", 1);
+        let typed: String = one
+            .cards
+            .iter()
+            .filter(|c| c.path.starts_with("cards/type/"))
+            .map(|c| c.contents.as_str())
+            .collect();
+        for part in ["layer2: present", "## Functionality: ", "## State: "] {
+            assert!(typed.contains(part), "level {level}: no {part:?}");
+        }
+        // The diagrams are the layer's bytes from level 2.
+        assert_eq!(
+            typed.contains("flowchart TD\n"),
+            level >= 2,
+            "level {level}"
+        );
+        assert_eq!(
+            typed.contains("stateDiagram-v2\n"),
+            level >= 2,
+            "level {level}"
+        );
+        for (name, threads) in [("again", 1), ("four", 4)] {
+            let other = run(name, threads);
+            let label = format!("level {level}, {threads} threads ({name})");
+            assert_eq!(one.corpus, other.corpus, "{label}: the views differ");
+            assert_eq!(one.cards, other.cards, "{label}: the cards differ");
+            assert_eq!(one.details, other.details, "{label}: the details differ");
+            assert_eq!(one.maps, other.maps, "{label}: the maps differ");
+            assert_eq!(
+                one.manifest, other.manifest,
+                "{label}: the manifests differ"
+            );
+            assert_eq!(
+                one.coverage, other.coverage,
+                "{label}: the coverage differs"
+            );
+        }
+    }
+}
+
+/// Plan 2c, U8 (KTD11, KTD12, R19): with the second layer every analyzed
+/// type's card has `## Dynamic access` on level 1 and on level 3 alike —
+/// after the sections of 2a, before the notes — ending in the state of XAML
+/// coverage, which in a run over a corpus with no XAML file is "not read", as
+/// coverage says — and the sentence says why in words true of that corpus
+/// (no XAML file) as of a run no plugin of which reads XAML; without the
+/// second layer no card has it and coverage has no section of XAML, so those
+/// cards stay the bytes the golden snapshots pin.
+#[test]
+fn the_second_layer_puts_dynamic_access_on_every_level_and_nothing_without_it() {
+    use reverse_architect::coverage::MarkupState;
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    init_repo_with_files(&repo, "Alice", &[("src/Editor.cs", EDITOR_LAYERED_CS)]);
+    let not_read = "XAML was not read in this run — the corpus holds no XAML file, or no plugin \
+                    of the run reads it (coverage.json, `markup`: `files`, `plugins`) — so a \
+                    member without a marker from markup may still be bound, commanded or handled \
+                    from XAML.";
+    for level in [1u8, 3] {
+        let run = layered_with_threads(&repo, &tmp.path().join(format!("out-{level}")), level, 1);
+        let analyzed: Vec<&str> = run
+            .cards
+            .iter()
+            .filter(|c| c.contents.contains("\nlayer2: present\n"))
+            .filter(|c| c.contents.contains("\n## Functionality: "))
+            .map(|c| c.contents.as_str())
+            .collect();
+        assert!(!analyzed.is_empty(), "level {level}");
+        for card in analyzed {
+            let at = card
+                .find("\n## Dynamic access\n")
+                .unwrap_or_else(|| panic!("level {level}: no Dynamic access in\n{card}"));
+            let last_2a = ["\n## Functionality: ", "\n## State: "]
+                .iter()
+                .filter_map(|h| card.rfind(h))
+                .max()
+                .unwrap();
+            assert!(last_2a < at, "level {level}");
+            let end = card.find("\n## Notes\n").unwrap_or(card.len());
+            assert!(at < end, "level {level}");
+            assert!(
+                card[at..end].trim_end().ends_with(not_read),
+                "level {level}: {}",
+                &card[at..end]
+            );
+        }
+        let markup = run.coverage.markup.as_ref().expect("a markup section");
+        assert_eq!(markup.state, MarkupState::NotRead);
+        assert!(markup.plugins.is_empty() && markup.files == 0);
+    }
+    let plain = reverse_architect::generate(&common::config_for(&repo, &tmp.path().join("plain")))
+        .expect("the pipeline runs");
+    assert!(plain
+        .cards
+        .iter()
+        .all(|c| !c.contents.contains("## Dynamic access")));
+    assert_eq!(plain.coverage.markup, None);
+    let json = reverse_architect::coverage::to_json(&plain.coverage);
+    assert!(!json.contains("\"markup\""));
+}
+
 /// The plan's risk row, measured and not enforced: adding a type that shares
 /// no word with the others changes the corpus size every rarity is computed
 /// against, so it may reorder the keywords of cards it has nothing to do with.
@@ -2733,7 +2928,10 @@ fn a_type_with_a_hundred_relations_has_every_one_in_its_detail_in_stable_parts()
 
 /// The byte budget of an ordinary short type card (plan B, Success Criteria:
 /// median at most 1.2 kB on the reference C# repository; KTD13 guards it in bytes, because no
-/// tokenizer is at hand and Czech tokenizes worse than English).
+/// tokenizer is at hand and Czech tokenizes worse than English). It holds for
+/// a run without the second layer, which every test here is: a C# type's card
+/// with the second layer carries what its code does and has no byte budget
+/// (plan 2a, Key Decisions; the measurement of step 0 watches its size).
 const SHORT_CARD_BYTES: usize = 1200;
 /// The budget of the `GeoSolver`-shaped card: 40 kB before plan B, under 4 kB
 /// after it (Success Criteria).

@@ -394,7 +394,8 @@ expression: json
     "over_cap_sites": 0,
     "plugins_by_contract": {
       "0.1": 1,
-      "0.2": 6
+      "0.2": 6,
+      "0.3": 1
     }
   },
   "enum_decisions": {

@@ -16,6 +16,15 @@ Precedence, so every run gets exactly one state:
 5. `failure` with `wrong_location` — the answer matches no acceptable place.
 6. `success`.
 
+An item of kind `otazka` (a question, KTD10) has no score here: the agent
+answers in free text and `answers.py hodnot-odpovedi` judges the answer later.
+Its run gets one of two states without a score, after the audit (`spoiled`
+comes first, as for every run): `answered` with the whole last top-level
+message as `answer_text`, or `unanswered` (no final message, or a cap stopped
+the run; `failure_reason` then says which, and any text is not kept). The text
+is never read for an answer-shaped JSON block, so such a run is never
+`invalid_answer`.
+
 Matching against an acceptable location (R7, KTD6):
 
 * File: an absolute path inside the work tree is made relative to it (the
@@ -47,13 +56,15 @@ from typing import Any
 
 from agents.base import (CAP_STEPS, CAP_TIME, CAP_TOKENS, RunRecord, last_assistant_text)
 from audit import AuditFinding
-from catalog import (AcceptableLocation, Case, member_qualified_names, member_simple_name,
-                     normalize_repo_path)
+from catalog import (AcceptableLocation, Case, Question, member_qualified_names,
+                     member_simple_name, normalize_repo_path)
 from prepare import canonical_path
 
 SUCCESS = "success"
 FAILURE = "failure"
 SPOILED = "spoiled"
+ANSWERED = "answered"      # a question run with an answer text; no score (KTD10)
+UNANSWERED = "unanswered"  # a question run without one ("bez odpovědi")
 
 WRONG_LOCATION = "wrong_location"
 INVALID_ANSWER = "invalid_answer"
@@ -76,8 +87,9 @@ class Answer:
 class RunOutcome:
     """The single verdict of a run.
 
-    `failure_reason` is set only for `failure`, `spoil_reasons` only for
-    `spoiled`; `matched` is the acceptable location of a success.
+    `failure_reason` is set only for `failure` and `unanswered`, `spoil_reasons`
+    only for `spoiled`; `matched` is the acceptable location of a success and
+    `answer_text` the free answer of an `answered` question run.
     """
 
     state: str
@@ -85,13 +97,19 @@ class RunOutcome:
     spoil_reasons: tuple[AuditFinding, ...] = ()
     answer: Answer | None = None
     matched: AcceptableLocation | None = None
+    answer_text: str | None = None
 
 
-def evaluate_run(record: RunRecord, case: Case,
+def evaluate_run(record: RunRecord, item: Case | Question,
                  findings: tuple[AuditFinding, ...]) -> RunOutcome:
-    """Combine the audit findings, the cap and the answer into one outcome."""
+    """Combine the audit findings, the cap and the answer into one outcome.
+
+    `item` is a case (scored) or a question (stored, not scored)."""
     if findings:
         return RunOutcome(SPOILED, spoil_reasons=tuple(findings))
+    if isinstance(item, Question):
+        return _question_outcome(record)
+    case = item
     if record.cap_hit is not None:
         return RunOutcome(FAILURE, failure_reason=CAP_REASONS[record.cap_hit.kind])
     message = last_assistant_text(record.events)
@@ -104,6 +122,16 @@ def evaluate_run(record: RunRecord, case: Case,
         if location_matches(answer, location, record.workdir):
             return RunOutcome(SUCCESS, answer=answer, matched=location)
     return RunOutcome(FAILURE, failure_reason=WRONG_LOCATION, answer=answer)
+
+
+def _question_outcome(record: RunRecord) -> RunOutcome:
+    """A question run: the last top-level message as it is, or "bez odpovědi" (KTD10)."""
+    if record.cap_hit is not None:
+        return RunOutcome(UNANSWERED, failure_reason=CAP_REASONS[record.cap_hit.kind])
+    message = last_assistant_text(record.events)
+    if message is None:
+        return RunOutcome(UNANSWERED, failure_reason=NO_ANSWER)
+    return RunOutcome(ANSWERED, answer_text=message)
 
 
 def extract_answer(message: str) -> Answer | None:

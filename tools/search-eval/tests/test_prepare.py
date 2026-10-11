@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import prepare
-from catalog import parse_catalog
+from catalog import confirmation_fingerprint, parse_catalog
 from prepare import PrepareError
 
 FAKE_RA = [sys.executable, str(Path(__file__).resolve().parent / "fake_ra.py")]
@@ -282,6 +282,79 @@ class CaseCheckTest(GitRepoFixture):
         problems = prepare.find_case_problems(self.repo, cat, tree)
         self.assertEqual(len(problems), 2)
 
+    # -- questions: no fix commit, only the places are checked ------------------
+
+    def question(self, qid: str, *places: dict) -> dict:
+        facts = [{"id": f"f{i}", "text": "Ukázkový fakt.", "role": "misto", "mista": [p]}
+                 for i, p in enumerate(places, 1)]
+        question = {
+            "druh": "otazka", "id": qid, "dotaz": "Ukázková otázka?",
+            "ramcova_odpoved": "Ukázková odpověď.", "commit": self.base,
+            "fakta_potvrzena": True, "pseudonymizace_potvrzena": True,
+            "kontrolni": False, "fakta": facts, "zakazana_tvrzeni": []}
+        question["otisk_potvrzeni"] = confirmation_fingerprint(facts, [])
+        return question
+
+    def question_catalog(self, *questions: dict):
+        return parse_catalog({"format_version": 2, "base_revision": self.base,
+                              "cases": list(questions)})
+
+    def test_question_without_a_fix_commit_passes_when_its_places_exist(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-ok",
+            {"soubor": "Src/Placeholder/LoadAction.cs", "clen": "LoadAction.Reload",
+             "radky": 4},
+            {"soubor": "Src/Placeholder/Scheduler.cs", "typ": "Scheduler", "radky": "1-1"}))
+        self.assertEqual(prepare.find_case_problems(self.repo, cat, tree), [])
+        prepare.check_cases(self.repo, cat, tree, self.base)
+
+    def test_question_place_in_a_file_missing_from_the_export_is_refused(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-gone",
+            {"soubor": "Src/Placeholder/NewHelper.cs", "clen": "NewHelper.Added", "radky": 1}))
+        with self.assertRaises(PrepareError) as ctx:
+            prepare.check_cases(self.repo, cat, tree)
+        message = str(ctx.exception)
+        self.assertIn("q-gone", message)
+        self.assertIn("NewHelper.cs", message)
+
+    def test_question_member_not_in_its_file_is_refused(self):
+        tree = self.export().tree_dir
+        cat = self.question_catalog(self.question(
+            "q-member",
+            {"soubor": "Src/Placeholder/LoadAction.cs", "clen": "LoadAction.RenamedLater",
+             "radky": 1}))
+        problems = prepare.find_case_problems(self.repo, cat, tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("RenamedLater", problems[0])
+
+    def test_forbidden_claim_place_in_a_missing_file_is_refused(self):
+        tree = self.export().tree_dir
+        question = self.question(
+            "q-claim", {"soubor": "Src/Placeholder/LoadAction.cs", "typ": "LoadAction",
+                        "radky": 1})
+        question["zakazana_tvrzeni"] = [{"id": "z1", "text": "Nepravda.", "mista": [
+            {"soubor": "Src/Placeholder/Missing.cs", "typ": "Missing", "radky": 1}]}]
+        question["otisk_potvrzeni"] = confirmation_fingerprint(question["fakta"],
+                                                               question["zakazana_tvrzeni"])
+        problems = prepare.find_case_problems(self.repo, self.question_catalog(question), tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("z1", problems[0])
+        self.assertIn("Missing.cs", problems[0])
+
+    def test_mixed_catalog_checks_bugs_by_fix_commit_and_questions_by_places(self):
+        tree = self.export().tree_dir
+        cat = parse_catalog({"format_version": 2, "base_revision": self.base, "cases": [
+            dict(make_case("bug", "Src/Placeholder/LoadAction.cs",
+                           "LoadAction.SetScheduledTasksInvalid", self.pre), druh="chyba"),
+            self.question("q", {"soubor": "Src/Placeholder/Scheduler.cs", "typ": "Scheduler",
+                                "radky": 1})]})
+        problems = prepare.find_case_problems(self.repo, cat, tree)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("bug", problems[0])
+
 
 class WorktreeProtectionTest(GitRepoFixture):
     """Every worktree of a protected repository is protected, not only the one named."""
@@ -410,6 +483,53 @@ def _remove_dir_link(link: Path) -> None:
         os.rmdir(link)
     else:
         os.unlink(link)
+
+
+class AtomicWriteTest(unittest.TestCase):
+    """One atomic writer for every file of the tool (the others were copies of it)."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+
+    def test_every_module_writes_through_the_one_function(self):
+        import card_check
+        import corpus
+        import judge
+        import report
+        import review
+        self.assertIs(report.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(card_check.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(corpus.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(review.write_text_atomic, prepare.write_text_atomic)
+        self.assertIs(judge.write_json_atomic, prepare.write_json_atomic)
+
+    def test_no_module_keeps_its_own_temp_file_dance(self):
+        tool = Path(__file__).resolve().parent.parent
+        owners = sorted(p.name for p in tool.glob("*.py") if "mkstemp(" in p.read_text("utf-8"))
+        self.assertEqual(owners, ["prepare.py"])
+
+    def test_the_text_is_replaced_in_one_step_in_a_directory_that_is_made_when_missing(self):
+        target = self.tmp / "a" / "b" / "file.txt"
+        prepare.write_text_atomic(target, "první\n")
+        prepare.write_text_atomic(target, "druhý\n")
+        self.assertEqual(target.read_bytes(), "druhý\n".encode("utf-8"))  # LF, UTF-8, no BOM
+        self.assertEqual([p.name for p in target.parent.iterdir()], ["file.txt"])
+
+    def test_the_json_is_indented_sorted_unescaped_and_ends_with_a_newline(self):
+        target = self.tmp / "data.json"
+        prepare.write_json_atomic(target, {"b": 1, "a": "č"})
+        self.assertEqual(target.read_text("utf-8"), '{\n  "a": "č",\n  "b": 1\n}\n')
+
+    def test_a_failed_replace_keeps_the_old_file_and_leaves_no_temp_file(self):
+        target = self.tmp / "file.txt"
+        prepare.write_text_atomic(target, "stará\n")
+        with mock.patch.object(prepare.os, "replace", side_effect=OSError("zamčeno")):
+            with self.assertRaises(OSError):
+                prepare.write_text_atomic(target, "nová\n")
+        self.assertEqual(target.read_text("utf-8"), "stará\n")
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["file.txt"])
 
 
 if __name__ == "__main__":

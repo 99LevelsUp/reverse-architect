@@ -110,13 +110,17 @@ fn coverage_names_the_contract_each_language_was_parsed_under() {
     assert_eq!(contracts("probe"), ["0.1"]);
     assert_eq!(contracts("rust"), ["0.2"]);
     // The probe and the SQL example on 0.1, the six bundled tree-sitter
-    // families on 0.2.
+    // families on 0.2, the XAML plugin on 0.3.
     let noise = coverage.noise.expect("every run writes noise");
     assert_eq!(
         noise.plugins_by_contract,
-        [("0.1".to_string(), 2), ("0.2".to_string(), 6)]
-            .into_iter()
-            .collect()
+        [
+            ("0.1".to_string(), 2),
+            ("0.2".to_string(), 6),
+            ("0.3".to_string(), 1)
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -160,7 +164,8 @@ fn a_run_without_declared_plugins_records_only_the_bundled_ones() {
             "java",
             "python",
             "rust",
-            "sql"
+            "sql",
+            "xaml"
         ]
     );
     // A file no plugin claims is still reported, not dropped.
@@ -312,4 +317,207 @@ fn sql_objects_are_cards_linked_to_the_tables_they_touch() {
                 && c.contents.contains("Orders placed through the shop")),
         "no card for the table"
     );
+}
+
+/// The bundled XAML plugin — built outside the plugin workspace, from the 0.3
+/// WIT alone, like the SQL one — covers `.xaml` in a run that declares no
+/// plugin: the file is read under the language `xaml` and contract 0.3, its
+/// style is a node of its own, and the type it targets gets the usage.
+#[test]
+fn a_run_without_plugin_declarations_covers_xaml_with_the_bundled_plugin() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[
+            ("src/EditorView.cs", "namespace Acme { public class EditorView { } }\n"),
+            (
+                "src/Styles.xaml",
+                "<ResourceDictionary xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n    xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\"\n    xmlns:local=\"clr-namespace:Acme\">\n  <Style x:Key=\"Bold\" TargetType=\"local:EditorView\" />\n</ResourceDictionary>\n",
+            ),
+        ],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let generated = reverse_architect::generate(&config_for(repo.path(), out.path())).unwrap();
+
+    let file = generated
+        .coverage
+        .files
+        .iter()
+        .find(|f| f.path == "src/Styles.xaml")
+        .unwrap();
+    assert_eq!(file.language.as_deref(), Some("xaml"));
+    assert!(file.structural, "{file:?}");
+    let language = generated
+        .coverage
+        .languages
+        .iter()
+        .find(|l| l.language == "xaml")
+        .unwrap_or_else(|| panic!("no `xaml` in {:?}", generated.coverage.languages));
+    assert_eq!(language.contracts, ["0.3"]);
+
+    let xaml = generated
+        .manifest
+        .plugins
+        .iter()
+        .find(|p| p.id == "xaml")
+        .expect("the bundled XAML plugin is recorded");
+    assert_eq!(xaml.origin, "bundled");
+    assert!(
+        generated
+            .graph
+            .node(&reverse_architect::graph::NodeKey::new(
+                "sym:xaml:src/Styles.xaml#Bold"
+            ))
+            .is_some(),
+        "the style is a node of its own"
+    );
+}
+
+fn probe3() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/prebuilt/probe3.wasm")
+}
+
+/// Contract 0.3: a component declares a node kind with a card policy and
+/// emits a symbol of that kind. The graph holds it as a node of the declared
+/// kind, not as a core `Symbol`, and it gets the card its policy names. A
+/// symbol of a kind the component's vocabulary does not declare — or of
+/// another namespace's — is dropped whole; an ordinary symbol beside it is
+/// not. The second run is served from the cache, which must carry the kind.
+#[test]
+fn a_symbol_of_a_declared_node_kind_gets_its_own_card_on_a_cold_and_a_warm_run() {
+    use reverse_architect::card::{build_cards, CardKind};
+    use reverse_architect::graph::{NodeKey, NodeKind};
+
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[("widget.probe3", "w\n"), ("stray.probe3", "s\n")],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let mut config = config_for(repo.path(), out.path());
+    config.plugins = vec![PluginSpec {
+        path: probe3(),
+        sha256: None,
+    }];
+
+    for run in ["cold", "warm"] {
+        let generated = reverse_architect::generate(&config).unwrap();
+        if run == "cold" {
+            // The warm run proves something only if the kind was written to
+            // the declaration records it is served from.
+            assert!(
+                cache_holds(&out.path().join(".ra-cache"), "\"node_kinds\""),
+                "the cold run wrote no declaration record carrying the node kind"
+            );
+        }
+        let graph = &generated.graph;
+        let key = NodeKey::new("sym:probe3:widget.probe3#Main");
+        let node = graph
+            .node(&key)
+            .unwrap_or_else(|| panic!("{run}: the widget must reach the graph"));
+        let NodeKind::Declared(id) = node.kind else {
+            panic!(
+                "{run}: the widget is a {:?}, not its declared kind",
+                node.kind
+            );
+        };
+        assert_eq!(
+            graph.vocabulary().node_name(id).as_deref(),
+            Some("probe3:widget"),
+            "{run}"
+        );
+
+        let cards = build_cards(graph);
+        let card = cards
+            .iter()
+            .find(|c| c.identity == key.as_str())
+            .unwrap_or_else(|| panic!("{run}: the widget has no card"));
+        assert!(matches!(card.kind, CardKind::Declared(_)), "{run}");
+        assert_eq!(card.kind_word, "probe3:widget", "{run}");
+
+        for dropped in ["Stray", "Foreign"] {
+            assert!(
+                graph
+                    .node(&NodeKey::new(format!("sym:probe3:stray.probe3#{dropped}")))
+                    .is_none(),
+                "{run}: a symbol of an undeclared kind must be dropped whole"
+            );
+        }
+        let plain = graph
+            .node(&NodeKey::new("sym:probe3:stray.probe3#Plain"))
+            .unwrap_or_else(|| panic!("{run}: the ordinary symbol must survive"));
+        assert_eq!(plain.kind, NodeKind::Symbol, "{run}");
+    }
+}
+
+/// Contract 0.3: a component that returns `err` for a file fails that file
+/// with its own reason, and `coverage.json` carries the reason rather than a
+/// trap; the next file of the same run is read as usual.
+#[test]
+fn a_file_the_plugin_refuses_carries_the_plugins_reason_in_coverage() {
+    let repo = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "a",
+        &[("refuse.probe3", "x\n"), ("fine.probe3", "x\n")],
+    );
+    let out = tempfile::tempdir().unwrap();
+    let mut config = config_for(repo.path(), out.path());
+    config.plugins = vec![PluginSpec {
+        path: probe3(),
+        sha256: None,
+    }];
+
+    let generated = reverse_architect::generate(&config).unwrap();
+    let refused = generated
+        .coverage
+        .files
+        .iter()
+        .find(|f| f.path == "refuse.probe3")
+        .unwrap();
+    let reason = refused.not_structural_because.as_deref().unwrap();
+    assert!(
+        reason.contains("declarations: declarations: probe3 cannot read this file"),
+        "{reason}"
+    );
+    assert!(reason.contains("`probe3` failed"), "{reason}");
+    assert!(!reason.contains("trapped"), "{reason}");
+
+    // The artifact as written says the same.
+    let json = reverse_architect::coverage::to_json(&generated.coverage);
+    let written: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let file = written["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["path"] == "refuse.probe3")
+        .unwrap();
+    assert_eq!(file["not_structural_because"], reason);
+
+    assert!(generated
+        .graph
+        .node(&reverse_architect::graph::NodeKey::new(
+            "sym:probe3:fine.probe3#Thing"
+        ))
+        .is_some());
+}
+
+/// Whether any file under `dir` contains `needle`.
+fn cache_holds(dir: &Path, needle: &str) -> bool {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                cache_holds(&path, needle)
+            } else {
+                std::fs::read(&path)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).contains(needle))
+                    .unwrap_or(false)
+            }
+        })
 }

@@ -1,0 +1,359 @@
+{
+ "schema_version": 11,
+ "strings": [
+  "src/Acme/Models/ExternalCheck.cs",
+  "sym:csharp:Acme.Models#ExternalCheck",
+  "sym:csharp:Acme.Models#ExternalCheck._verdict",
+  "sym:csharp:Acme.Models#ExternalCheck.Run()",
+  "sym:csharp:Acme.Models#ExternalCheck.Validate(string)",
+  "src/Acme/Jiny.cs",
+  "sym:csharp:Acme.Triggers#AcmeTrigger",
+  "sym:csharp:Acme.Triggers#AcmeTrigger.Fire()"
+ ],
+ "documents": [
+  {
+   "id": "sym:csharp:Acme.Models#ExternalCheck",
+   "kind": "card:type",
+   "level": "card",
+   "parent": "map:src/Acme",
+   "header": {
+    "path": "src/Acme/Models/ExternalCheck.cs",
+    "module": "src/Acme",
+    "kind": "public class",
+    "name": "ExternalCheck"
+   },
+   "title": "ExternalCheck",
+   "guiding_question": "q?",
+   "path": "cards/type/csharp/ExternalCheck.md",
+   "chunks": []
+  },
+  {
+   "id": "sym:csharp:Acme.Triggers#AcmeTrigger",
+   "kind": "card:type",
+   "level": "card",
+   "parent": "map:src/Acme",
+   "header": {
+    "path": "src/Acme/Jiny.cs",
+    "module": "src/Acme",
+    "kind": "public class",
+    "name": "AcmeTrigger"
+   },
+   "title": "AcmeTrigger",
+   "guiding_question": "q?",
+   "path": "cards/type/csharp/AcmeTrigger.md",
+   "chunks": []
+  },
+  {
+   "id": "map:src/Acme",
+   "kind": "map",
+   "level": "map",
+   "parent": "src/Acme",
+   "header": {
+    "path": "src/Acme",
+    "module": "src/Acme",
+    "kind": "public class",
+    "name": "Map of src/Acme"
+   },
+   "title": "Map of src/Acme",
+   "guiding_question": "q?",
+   "path": "cards/map/src/Acme.md",
+   "chunks": []
+  },
+  {
+   "id": "detail:sym:csharp:Acme.Models#ExternalCheck",
+   "kind": "card:detail",
+   "level": "detail",
+   "parent": "sym:csharp:Acme.Models#ExternalCheck",
+   "embed": false,
+   "header": {
+    "path": "src/Acme/Models/ExternalCheck.cs",
+    "module": "src/Acme",
+    "kind": "public class",
+    "name": "Detail of ExternalCheck"
+   },
+   "title": "Detail of ExternalCheck",
+   "guiding_question": "q?",
+   "path": "cards/detail/type/csharp/ExternalCheck.md",
+   "chunks": []
+  },
+  {
+   "id": "triggers:index",
+   "kind": "triggers",
+   "level": "map",
+   "title": "Triggers",
+   "guiding_question": "q?",
+   "path": "cards/triggers.md",
+   "chunks": []
+  }
+ ],
+ "nodes": [
+  {
+   "key_id": 1,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "ExternalCheck",
+     "provenance": {
+      "file_id": 0,
+      "line": 5,
+      "end_line": 120,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "ExternalCheck",
+     "provenance": {
+      "file_id": 0,
+      "line": 5,
+      "end_line": 120,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "ExternalCheck",
+     "provenance": {
+      "file_id": 0,
+      "line": 5,
+      "end_line": 120,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  },
+  {
+   "key_id": 2,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "ExternalCheck._verdict",
+     "provenance": {
+      "file_id": 0,
+      "line": 8,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "ExternalCheck._verdict",
+     "provenance": {
+      "file_id": 0,
+      "line": 8,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "ExternalCheck._verdict",
+     "provenance": {
+      "file_id": 0,
+      "line": 8,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  },
+  {
+   "key_id": 3,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "ExternalCheck.Run()",
+     "provenance": {
+      "file_id": 0,
+      "line": 20,
+      "end_line": 60,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "ExternalCheck.Run()",
+     "provenance": {
+      "file_id": 0,
+      "line": 20,
+      "end_line": 60,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "ExternalCheck.Run()",
+     "provenance": {
+      "file_id": 0,
+      "line": 20,
+      "end_line": 60,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  },
+  {
+   "key_id": 4,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "ExternalCheck.Validate(string)",
+     "provenance": {
+      "file_id": 0,
+      "line": 62,
+      "end_line": 90,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "ExternalCheck.Validate(string)",
+     "provenance": {
+      "file_id": 0,
+      "line": 62,
+      "end_line": 90,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "ExternalCheck.Validate(string)",
+     "provenance": {
+      "file_id": 0,
+      "line": 62,
+      "end_line": 90,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  },
+  {
+   "key_id": 6,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "AcmeTrigger",
+     "provenance": {
+      "file_id": 5,
+      "line": 800,
+      "end_line": 900,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "AcmeTrigger",
+     "provenance": {
+      "file_id": 5,
+      "line": 800,
+      "end_line": 900,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "AcmeTrigger",
+     "provenance": {
+      "file_id": 5,
+      "line": 800,
+      "end_line": 900,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  },
+  {
+   "key_id": 7,
+   "kind": "symbol",
+   "facts": [
+    {
+     "kind": "symbol_name",
+     "value": "AcmeTrigger.Fire()",
+     "provenance": {
+      "file_id": 5,
+      "line": 830,
+      "end_line": 860,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_kind",
+     "value": "AcmeTrigger.Fire()",
+     "provenance": {
+      "file_id": 5,
+      "line": 830,
+      "end_line": 860,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    },
+    {
+     "kind": "symbol_signature",
+     "value": "AcmeTrigger.Fire()",
+     "provenance": {
+      "file_id": 5,
+      "line": 830,
+      "end_line": 860,
+      "extractor": "csharp",
+      "tier": "structural",
+      "resolution": "heuristic"
+     },
+     "dissent": []
+    }
+   ]
+  }
+ ],
+ "edges": []
+}

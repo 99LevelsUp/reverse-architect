@@ -29,7 +29,7 @@
 //! [`FactKind::DocComment`]: crate::graph::FactKind::DocComment
 
 use crate::extract::external::is_long_token;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// How many words a card keeps. A word's diacritics-free variant rides along
 /// with it and is not counted: it is the same word, written the way a search
@@ -90,7 +90,7 @@ pub fn split_identifier(name: &str) -> Vec<String> {
 
 /// Whether a lower-cased part is a keyword at all: long enough, not too long,
 /// not a bare number, not a common word.
-fn is_word(part: &str) -> bool {
+pub(crate) fn is_word(part: &str) -> bool {
     let chars = part.chars().count();
     (MIN_WORD_CHARS..=MAX_WORD_CHARS).contains(&chars)
         && part.chars().any(char::is_alphabetic)
@@ -188,23 +188,44 @@ pub struct KeywordIndex {
     rarity: Vec<u32>,
     /// Unit → `(word, occurrences in the unit)`.
     terms: HashMap<String, Vec<(u32, u32)>>,
+    /// Word → its index in `words`: the rarity of a word a later layer
+    /// brings is looked up here.
+    ids: HashMap<Box<str>, u32>,
+    /// The documents the rarities are weighed over.
+    documents: u32,
 }
 
 impl KeywordIndex {
     /// The keywords of `unit`, at most [`KEYWORD_CAP`] of them, the most
     /// typical first. Empty for a unit without a word.
     pub fn keywords(&self, unit: &str) -> Vec<Keyword> {
-        let Some(terms) = self.terms.get(unit) else {
-            return Vec::new();
-        };
-        let mut ranked: Vec<(u64, &str)> = terms
-            .iter()
-            .map(|&(id, occurrences)| {
-                (
-                    u64::from(occurrences) * u64::from(self.rarity[id as usize]),
-                    &*self.words[id as usize],
-                )
-            })
+        self.keywords_with(unit, &UnitWords::default())
+    }
+
+    /// [`Self::keywords`] with the words the second layer brings to `unit`
+    /// (plan 2a, U6: KTD9 point 4). Their occurrences add to the unit's own;
+    /// the rarity of every word stays the one the first layer's document
+    /// frequencies give it, and a word only the second layer brings weighs as
+    /// one found in a single document. No other unit's keywords change, and
+    /// with no words this is [`Self::keywords`].
+    pub fn keywords_with(&self, unit: &str, extra: &UnitWords) -> Vec<Keyword> {
+        let mut scored: BTreeMap<&str, (u64, u32)> = BTreeMap::new();
+        for &(id, occurrences) in self.terms.get(unit).into_iter().flatten() {
+            scored.insert(
+                &*self.words[id as usize],
+                (u64::from(occurrences), self.rarity[id as usize]),
+            );
+        }
+        for (word, &times) in &extra.words {
+            let weight = match self.ids.get(word.as_str()) {
+                Some(&id) => self.rarity[id as usize],
+                None => rarity(self.documents, 1),
+            };
+            scored.entry(word.as_str()).or_insert((0, weight)).0 += u64::from(times);
+        }
+        let mut ranked: Vec<(u64, &str)> = scored
+            .into_iter()
+            .map(|(word, (occurrences, weight))| (occurrences * u64::from(weight), word))
             .collect();
         // `str` orders by bytes, and UTF-8 bytes order as code points do.
         ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(b.1)));
@@ -314,6 +335,49 @@ impl KeywordIndexBuilder {
                 .into_iter()
                 .map(|(unit, unit_terms)| (unit, unit_terms.into_iter().collect()))
                 .collect(),
+            ids: self.ids,
+            documents,
+        }
+    }
+}
+
+/// The words a later layer brings to one unit (plan 2a, U6: KTD9 point 4),
+/// read as the first layer reads its own: an identifier split into its parts,
+/// prose split by token with every token shaped like a key dropped whole,
+/// and every part kept only when it is a keyword at all. Ordered by word, so
+/// what is added is the same whatever order it was read in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnitWords {
+    words: BTreeMap<String, u32>,
+}
+
+impl UnitWords {
+    /// An identifier: a member's, a type's, a resource key's.
+    pub fn identifier(&mut self, name: &str) {
+        for part in split_identifier(name) {
+            self.add(&part);
+        }
+    }
+
+    /// Prose: a quoted label.
+    pub fn text(&mut self, text: &str) {
+        for token in text.split_whitespace() {
+            if is_long_token(token.trim_matches(|c: char| !c.is_ascii_alphanumeric())) {
+                continue;
+            }
+            for part in split_identifier(token) {
+                self.add(&part);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
+    fn add(&mut self, part: &str) {
+        if is_word(part) {
+            *self.words.entry(part.to_string()).or_default() += 1;
         }
     }
 }
@@ -392,5 +456,47 @@ mod tests {
         let got: Vec<String> = kept.iter().map(|k| k.word.clone()).collect();
         assert_eq!(got, expected);
         assert!(kept.iter().all(|k| k.folded.is_some()));
+    }
+
+    /// KTD9 point 4: a later layer's words weigh by the first layer's
+    /// document frequencies — a word it alone brings as one in a single
+    /// document — add to the unit's occurrences, and change no other unit;
+    /// with none, the keywords are the first layer's.
+    #[test]
+    fn a_later_layers_words_weigh_by_the_first_layers_frequencies() {
+        let mut b = KeywordIndexBuilder::default();
+        b.text("u", "common shared", 1);
+        b.text("v", "common shared other", 1);
+        b.text("w", "common", 1);
+        let index = b.finish();
+        assert_eq!(
+            index.keywords_with("u", &UnitWords::default()),
+            index.keywords("u")
+        );
+
+        let mut extra = UnitWords::default();
+        extra.identifier("ParserCommon");
+        extra.text("Kontrola chyb x");
+        let words: Vec<String> = index
+            .keywords_with("u", &extra)
+            .iter()
+            .map(|k| k.word.clone())
+            .collect();
+        // `parser`, `kontrola` and `chyb` are in no document: df 1, the rarest.
+        // `shared` weighs by its two documents of three; `common`, in all
+        // three, weighs 0 however often it occurs.
+        assert_eq!(words, ["chyb", "kontrola", "parser", "shared", "common"]);
+        assert_eq!(rarity(3, 1), 6);
+        assert_eq!(
+            index.keywords("v"),
+            index.keywords_with("v", &UnitWords::default())
+        );
+        // A unit with no word of its own gets the words alone.
+        let alone: Vec<String> = index
+            .keywords_with("nothing", &extra)
+            .iter()
+            .map(|k| k.word.clone())
+            .collect();
+        assert_eq!(alone, ["chyb", "kontrola", "parser", "common"]);
     }
 }

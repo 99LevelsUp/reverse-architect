@@ -655,6 +655,7 @@ fn config_for(dir: &std::path::Path) -> Config {
         model_verification: false,
         model_purpose: false,
         trace_over_ceiling: false,
+        detail_level: None,
     }
 }
 

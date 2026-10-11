@@ -1,0 +1,784 @@
+package ra:plugin@0.3.0;
+
+// The contract a reverse-architect language plugin is built against, version
+// 0.3.
+//
+// Everything `wit-v2/extractor.wit` (0.2.0) says about what a plugin is, what
+// it is given and what the host does with what it returns holds here
+// unchanged. 0.1.0 and 0.2.0 stay frozen beside this file and the host loads
+// all three: it tries this world first, then 0.2, then 0.1, so a plugin built
+// against an older contract keeps working exactly as before.
+//
+// What 0.3 adds is a third pass over a file, `bodies`: the syntax tree of the
+// bodies of the file's members, normalized by logic rather than by spelling,
+// with every node anchored to its lines. The host reads it into a second,
+// optional layer of a run (`--detail-level`) that sits beside the graph: it
+// is paired with the declarations of the first layer by the position of the
+// declared name, and nothing in it becomes a fact of the graph. 0.3 also lets
+// `declarations` say what 0.2 could not:
+//
+// - a symbol may be of a node kind from the component's own vocabulary
+//   (`xaml:style`), which gets the card that kind's policy gives it;
+// - a declaration may refer to another by name only (`{StaticResource K}`),
+//   for the host to resolve once every file has been read (`name-ref`), and a
+//   file may list the nested blocks such references are looked up in.
+//
+// `describe` says which of the three passes a component serves. The host
+// routes each (extension, pass) pair to the first plugin, in its usual order,
+// that serves it, so one component can read the declarations of a language
+// and another the bodies of the same files.
+//
+// Extending a record is an incompatible type change in the component model,
+// and only a patch `@0.2.x` counts as compatible, so these changes are a new
+// minor version rather than an edit of 0.2.0.
+//
+// Unlike 0.1 and 0.2, every pass returns a `result`, so a component can say
+// why a file failed instead of trapping.
+//
+// Lines and columns are 1-based. A column counts characters (Unicode scalar
+// values) from the start of its line, so it means the same on every platform
+// whatever the encoding a reader converts it to.
+//
+// The shape of this contract was fixed on 10.10.2026 after measuring the
+// bodies pass of the bundled C# component on a large repository: the costliest
+// file used under a tenth of its fuel budget and of its memory ceiling, so
+// nothing of the planned records was sacrificed.
+//
+// Every text a plugin returns in `bodies` — literal values, condition texts,
+// attribute arguments, tag values — is redacted by the host before it is
+// stored, against the run's secret prefixes. A plugin does not filter and is
+// not given the configuration for this pass: one filter, in one place.
+
+interface types {
+    // ---------------------------------------------------------------- 0.2 --
+    // The records below are 0.2's, unchanged in meaning.
+
+    /// Which lines of the file a statement was read from, inclusive.
+    variant span {
+        whole,
+        line(u32),
+        range(tuple<u32, u32>),
+    }
+
+    /// One point in the file.
+    record position {
+        line: u32,
+        column: u32,
+    }
+
+    /// Where in the file a statement was read.
+    record place {
+        span: span,
+        /// Where the name of the declaration this statement is about is
+        /// written — the identifier itself, not the start of the declaration.
+        /// `none` for a statement that is not about a declaration.
+        name: option<position>,
+    }
+
+    variant value {
+        text(string),
+        int(s64),
+        flag(bool),
+    }
+
+    record fact {
+        kind: string,
+        value: value,
+        place: place,
+    }
+
+    record edge {
+        source: string,
+        target: string,
+        kind: string,
+        place: place,
+    }
+
+    /// A declaration and everything hung off it, created as one group (0.2).
+    ///
+    /// New in 0.3: `node-kind` and `block`.
+    record symbol {
+        key: string,
+        facts: list<fact>,
+        edges: list<edge>,
+        /// A node kind from this component's vocabulary, `namespace:name`
+        /// (`xaml:style`). The symbol's node is then of that kind and gets the
+        /// card its policy names; a kind the vocabulary does not declare drops
+        /// the whole group with a message, as an undeclared fact kind does.
+        /// `none`: an ordinary symbol, its kind given by the `symbol_kind`
+        /// fact as under 0.2.
+        node-kind: option<string>,
+        /// Index into `file-declarations.blocks` of the innermost block the
+        /// declaration is written in, for a language that looks names up
+        /// block by block. `none` when the file has no such blocks.
+        block: option<u32>,
+    }
+
+    record keyed-fact {
+        node: string,
+        fact: fact,
+    }
+
+    enum relation-kind {
+        extends,
+        implements,
+        by-target-kind,
+    }
+
+    record relation {
+        sources: list<string>,
+        targets: list<string>,
+        kind: relation-kind,
+        place: place,
+    }
+
+    /// One change, applied in the order returned.
+    variant op {
+        fact(keyed-fact),
+        symbol(symbol),
+        edge(edge),
+        relation(relation),
+    }
+
+    enum usage-kind {
+        call,
+        call-or-construct,
+        construct,
+        reference,
+    }
+
+    record using-directive {
+        target: string,
+        alias: option<string>,
+        is-static: bool,
+        is-global: bool,
+    }
+
+    record scope {
+        namespace: string,
+        lines: tuple<u32, u32>,
+        parent: option<u32>,
+        usings: list<using-directive>,
+    }
+
+    variant receiver {
+        none,
+        name(string),
+        value(string),
+        keyword(string),
+        expression,
+    }
+
+    record declared-type {
+        name: string,
+        keyword: bool,
+    }
+
+    record site-context {
+        scope: u32,
+        receiver: receiver,
+        declared-type: option<declared-type>,
+        argument-count: option<u32>,
+        qualifier: option<string>,
+    }
+
+    record usage {
+        name: string,
+        kind: usage-kind,
+        line: u32,
+        column: option<u32>,
+        context: option<site-context>,
+    }
+
+    record file-usages {
+        scopes: list<scope>,
+        usages: list<usage>,
+    }
+
+    record language {
+        name: string,
+        extensions: list<string>,
+    }
+
+    /// The passes a component may serve.
+    enum pass {
+        declarations,
+        usages,
+        bodies,
+    }
+
+    /// New in 0.3: `passes` and `emits`.
+    record manifest {
+        id: string,
+        version: string,
+        languages: list<language>,
+        trust-rank: u8,
+        depends-on: list<string>,
+        /// The passes this component serves, for every language it lists. A
+        /// pass it does not list is never called; a component that serves
+        /// `bodies` only leaves the first layer to another component.
+        passes: list<pass>,
+        /// The record kinds and tag names this component can report in
+        /// `bodies` (`subscription`, `key-compare`, `key-gesture`,
+        /// `menu-item`, `data-source`…). It says what the component reads, not
+        /// what the host makes of it: which kinds of trigger a language is
+        /// covered for is the host's mapping over this list. Empty for a
+        /// component that does not serve `bodies`.
+        emits: list<string>,
+    }
+
+    record config {
+        secret-prefixes: list<string>,
+    }
+
+    enum structural-role { container, leaf, definition, %package, external, opaque }
+    enum link-role { containment, declaration, dependency, opaque }
+    enum cardinality { additive, scalar }
+
+    record node-kind-decl {
+        name: string,
+        role: structural-role,
+        card: option<string>,
+    }
+    record edge-kind-decl { name: string, role: link-role }
+    record fact-kind-decl { name: string, cardinality: cardinality }
+
+    record vocabulary {
+        namespace: string,
+        card-kinds: list<string>,
+        node-kinds: list<node-kind-decl>,
+        edge-kinds: list<edge-kind-decl>,
+        fact-kinds: list<fact-kind-decl>,
+    }
+
+    // ------------------------------------------------- 0.3: declarations --
+
+    /// A nested block names are looked up in, innermost first (a XAML
+    /// `*.Resources` element). A block is in force over its lines and inside
+    /// every block nested in it.
+    record lookup-block {
+        /// The lines it spans, inclusive.
+        lines: tuple<u32, u32>,
+        /// Index of the enclosing block in `file-declarations.blocks`; `none`
+        /// for an outermost block.
+        parent: option<u32>,
+    }
+
+    /// A reference to a declaration by its name alone, which only the whole
+    /// repository can resolve: the host looks it up once every file has been
+    /// read, nearest scope first, and admits what it cannot resolve.
+    record name-ref {
+        /// The key of the node that refers (a symbol this file declares, or
+        /// the file itself).
+        source: string,
+        /// The name as the reference spells it.
+        name: string,
+        /// The node kind it can resolve to, `namespace:name` from this
+        /// component's vocabulary.
+        target-kind: string,
+        /// The edge kind the resolved reference becomes: an edge kind from the
+        /// vocabulary, or `extends`. `none`: a plain reference.
+        relation: option<string>,
+        /// Index into `file-declarations.blocks` of the innermost block the
+        /// reference is written in; `none` outside every block.
+        block: option<u32>,
+        place: place,
+    }
+
+    /// What `declarations` returns under 0.3.
+    record file-declarations {
+        ops: list<op>,
+        name-refs: list<name-ref>,
+        blocks: list<lookup-block>,
+    }
+
+    // ------------------------------------------------------- 0.3: bodies --
+
+    /// A stretch of source, both ends inclusive.
+    record range {
+        start: position,
+        end: position,
+    }
+
+    /// The first name of a member access path, and what the syntax says it is.
+    enum path-root {
+        /// `this.x`
+        this,
+        /// `base.x`
+        base,
+        /// A name the member body declares as a value in scope: a local, a
+        /// parameter (a lambda's included), a pattern or catch variable.
+        local,
+        /// Any other first name: a member of the enclosing type or of a base
+        /// type, a type, a namespace. The host decides which.
+        name,
+        /// An expression the syntax cannot spell as a name — a call result,
+        /// an index, a parenthesized expression (`GetX().Run`,
+        /// `items[0].Name`). The segments are the names written after it, so
+        /// `GetX().Run()` is root `expression` and segments [`Run`]; nothing
+        /// is said about the expression itself.
+        expression,
+    }
+
+    /// A dotted path of names, as written, generic arguments dropped:
+    /// `this.viewModel.CheckCommand` is root `this` and segments
+    /// [`viewModel`, `CheckCommand`]; `Keyboard.Modifiers` is root `name` and
+    /// segments [`Keyboard`, `Modifiers`]. A path that starts at a call result
+    /// or an index has root `expression`.
+    record access-path {
+        root: path-root,
+        segments: list<string>,
+    }
+
+    /// A value that is not a literal, as the syntax names it.
+    variant constant {
+        boolean(bool),
+        null,
+        /// A numeric literal as written.
+        number(string),
+    }
+
+    /// Where a value comes from, as far as the syntax shows it.
+    variant value-ref {
+        /// The n-th (0-based) parameter of the member whose body this is.
+        param(u32),
+        /// A path: a local, a field, a property, a method group.
+        access(access-path),
+        /// A lambda or anonymous method, by its id in `member-body.lambdas`.
+        lambda(u32),
+        /// A string literal, by its id in `member-body.literals`.
+        literal(u32),
+        /// A construction `new T(…)`, by its id in `member-body.invocations`.
+        construction(u32),
+        /// A literal that is not a string.
+        constant(constant),
+        /// Anything else.
+        other,
+    }
+
+    enum access-mode {
+        read,
+        write,
+        /// Called as a method or a delegate (`x()`, `x.Invoke()`, `x?.Invoke()`).
+        invoke,
+        /// Returned from the member (`return x;`, `=> x`).
+        return,
+        /// Changed through a call on it (`items.Add(x)`, `list.Clear()`).
+        mutate,
+    }
+
+    /// One read, write, call or return of a member, a local or a parameter.
+    record member-access {
+        target: access-path,
+        mode: access-mode,
+        place: range,
+        /// The innermost body node it is in.
+        node: option<u32>,
+        /// For a write, what is written (`f = value`, `x.P = p => …`).
+        rhs: option<value-ref>,
+    }
+
+    enum call-kind {
+        /// `f(…)`, `x.m(…)`
+        call,
+        /// `new T(…)`
+        construct,
+        /// `: this(…)` — a constructor initializer calling a sibling
+        this-init,
+        /// `: base(…)` — a constructor initializer calling the base type's
+        base-init,
+    }
+
+    /// One argument written at a call.
+    record argument {
+        /// 0-based position; a named argument keeps its written position.
+        position: u32,
+        /// The parameter name a named argument gives, `none` otherwise.
+        name: option<string>,
+        value: value-ref,
+        /// Enum members the argument expression names (`ModifierKeys.Shift`),
+        /// as written, in source order.
+        enum-refs: list<string>,
+        /// Paths the argument expression reads (`Keyboard.Modifiers`).
+        reads: list<access-path>,
+    }
+
+    /// One call or construction.
+    record invocation {
+        /// The callee path. For a construction the type as written, generic
+        /// arguments dropped (`RelayCommand`, `System.Text.StringBuilder`);
+        /// for an initializer root `this` or `base` and no segments.
+        callee: access-path,
+        kind: call-kind,
+        /// The number of arguments written, named ones included.
+        arity: u32,
+        args: list<argument>,
+        /// The call is conditional on its receiver (`x?.m()`).
+        conditional: bool,
+        place: range,
+        node: option<u32>,
+        /// Where the call's result goes, when the syntax says.
+        flow: option<flow-target>,
+    }
+
+    /// Where a value flows.
+    variant flow-target {
+        /// Assigned to a field or property of the enclosing type
+        /// (`this.f = …`, `f = …`), by name.
+        member(string),
+        /// Returned from the member (`return …`, `=> …`).
+        member-return,
+        /// Assigned to or initializing a local, by name.
+        local(string),
+        /// Assigned to a member of another object (`f4.Command = new …`,
+        /// `this.view.Model = …`): the path written on the left.
+        path(access-path),
+        /// Passed as an argument of another invocation, by its id and the
+        /// argument position.
+        argument(tuple<u32, u32>),
+    }
+
+    /// A lambda, anonymous method or local function, and where it goes.
+    record lambda {
+        id: u32,
+        /// The invocation it is an argument of, by id, and its position there.
+        argument-of: option<tuple<u32, u32>>,
+        /// Its parameter count.
+        arity: u32,
+        place: range,
+        /// Where the lambda itself, or the construction it is an argument
+        /// of, flows (`f = new Cmd(p => …)` flows to member `f`).
+        flow: option<flow-target>,
+        /// Its body: a node in `member-body.nodes`.
+        body: u32,
+    }
+
+    enum subscription-mode { add, remove }
+
+    variant handler {
+        /// A method group: `x.E += OnE;`
+        method-group(access-path),
+        /// A lambda, by its id.
+        lambda(u32),
+        /// Anything else (a delegate held in a variable, a call result).
+        other,
+    }
+
+    /// `source.Event += handler` and `-=`.
+    record subscription {
+        /// What the event is raised by; `none` for the enclosing instance's
+        /// own event (`E += …`).
+        source: option<access-path>,
+        event: string,
+        handler: handler,
+        mode: subscription-mode,
+        place: range,
+        node: option<u32>,
+    }
+
+    /// Where a string literal is written.
+    variant literal-context {
+        /// An argument of a call or construction: the callee path and the
+        /// argument position.
+        call-arg(tuple<access-path, u32>),
+        /// An argument of an attribute (or of a markup attribute): its name
+        /// and its position, or the parameter name for a named argument.
+        attribute-arg(tuple<string, option<u32>, option<string>>),
+        /// Compared with `==` or `!=` against a path.
+        compared(access-path),
+        /// Assigned to a path, or initializing a field or local of that name.
+        assigned(access-path),
+        /// Returned from the member.
+        returned,
+        other,
+    }
+
+    record string-literal {
+        id: u32,
+        /// The literal's value, unescaped. Redacted by the host.
+        value: string,
+        context: literal-context,
+        place: range,
+        node: option<u32>,
+    }
+
+    /// `nameof(x)`
+    record name-of {
+        /// The name it spells, as written (`Title`, `Model.Title`).
+        text: string,
+        context: literal-context,
+        place: range,
+        node: option<u32>,
+    }
+
+    /// A tag a component puts on a node or a declaration: an idiom it
+    /// recognized (`full-traversal`, `guard-return`), a heuristic of its
+    /// platform (`notifies-change`, `lazy-init`, `key-compare`), or a fact of
+    /// its language (`data-source`). The host reads the tags it knows by name
+    /// and carries the rest. Which tags a component can report is listed in
+    /// `manifest.emits`.
+    record tag {
+        name: string,
+        /// The tag's value (`Key.F4` for `key-compare`). Redacted by the host.
+        value: option<string>,
+        /// Further values, in source order (the modifiers of a key gesture).
+        /// Redacted by the host.
+        args: list<string>,
+    }
+
+    enum compare-op { eq, ne, lt, le, gt, ge }
+
+    /// One node of a condition's expression tree. The tree is a list in
+    /// which a node names its operands by index; operands come before the
+    /// node that uses them, so the last node is the root. Parentheses are
+    /// not nodes.
+    variant expr {
+        /// `a && b && …`, flattened: nested `&&` is one node.
+        and(list<u32>),
+        /// `a || b || …`, flattened.
+        or(list<u32>),
+        /// `!a`
+        not(u32),
+        compare(tuple<compare-op, u32, u32>),
+        /// A path read (`syntax`, `this.canErrors`, `e.Key`).
+        path(access-path),
+        /// An enum member, as written (`SyntaxKind.Sql`, `Key.F4`).
+        enum-member(string),
+        constant(constant),
+        /// A string literal, by its id in `member-body.literals`.
+        literal(u32),
+        /// A call (`CanCheck()`, `x.IsValid(y)`): its callee and its
+        /// arguments' nodes.
+        call(tuple<access-path, list<u32>>),
+        /// Any other binary operator (`&`, `|`, `+`, `??`, `is`), as written,
+        /// with its operands.
+        binary(tuple<string, u32, u32>),
+        /// A subexpression the component does not break down, as written.
+        /// Redacted by the host.
+        other(string),
+    }
+
+    /// A condition, as far as the host needs to read it.
+    record condition {
+        /// The expression as written, whitespace collapsed. Redacted by the
+        /// host.
+        text: string,
+        /// Its expression tree; the last node is the root. The host compares
+        /// conditions by this tree and negates them over it (`!(a || b)` is
+        /// `!a && !b`), never by the text. A pattern (`x is not T t`) and a
+        /// character literal are `other`.
+        expr: list<expr>,
+        /// Enum members it names (`SyntaxKind.Sql`), in source order. Syntax
+        /// alone cannot tell an enum member from a static property spelled
+        /// the same way (`Type.Member`), so these are candidates: the host
+        /// keeps those that name a member of an enum the first layer declares.
+        enum-refs: list<string>,
+        /// Paths it reads (`syntax`, `this.canErrors`), in source order.
+        reads: list<access-path>,
+        /// The condition is a constant (`if (false)`).
+        constant: option<bool>,
+    }
+
+    /// The kind of a body node, normalized by logic rather than by spelling:
+    /// `if`/`else if`/`else` and `switch` are both a `choice` of `arm`s, `for`,
+    /// `foreach`, `while` and `do` are all a `loop`.
+    variant node-kind {
+        /// The root of a member body.
+        body,
+        /// A block that is none of the below.
+        block,
+        /// A choice between arms: an `if` chain or a `switch`. Its condition,
+        /// for a `switch`, is the subject.
+        choice,
+        /// One arm of a choice. Its condition is the arm's own (`else if`
+        /// condition, `case` label); `none` for `else` and `default`.
+        arm,
+        loop,
+        %try,
+        catch,
+        finally,
+        %return,
+        throw,
+        yield-break,
+        yield-return,
+        %break,
+        %continue,
+        /// An expression statement or a declaration statement.
+        statement,
+        /// The body of a lambda.
+        lambda,
+        /// An element of a markup language.
+        element(string),
+        /// Anything a language has that the kinds above do not name.
+        other(string),
+    }
+
+    record body-node {
+        id: u32,
+        kind: node-kind,
+        place: range,
+        /// The enclosing node, `none` for the root.
+        parent: option<u32>,
+        /// The condition of a choice, an arm, a loop, or a catch filter
+        /// (`catch (E e) when (…)`); and the returned expression of a
+        /// `return` or an expression body (a member's `=> …`, a lambda's
+        /// `p => …`) when it is not a constant, so a predicate can be read
+        /// as a tree. A `switch` choice's condition is its
+        /// subject and each arm's is its label (`SyntaxKind.Sql`), so the
+        /// arm is taken when subject equals label; a `when` guard on a case is
+        /// joined to the label with `and`.
+        condition: option<condition>,
+        /// What a `return` or an expression body returns when it is not a
+        /// string literal (`return false;`, `=> null`).
+        returns: option<constant>,
+        tags: list<tag>,
+    }
+
+    /// The kind of declaration a body belongs to.
+    enum body-kind {
+        method,
+        %constructor,
+        /// A static constructor.
+        type-initializer,
+        getter,
+        setter,
+        /// `init` accessor
+        initializer,
+        adder,
+        remover,
+        /// An expression-bodied property or indexer.
+        expression-property,
+        /// A field or property initializer.
+        member-initializer,
+        /// A local function: paired with the member it is declared in.
+        local-function,
+        /// A body of a markup element (a template, a style, a view).
+        markup,
+        other,
+    }
+
+    /// The type a declaration states.
+    enum declaration-kind { field, property, local, parameter, pattern, event }
+
+    /// A name declared with a type: `ViewModel viewModel`, `T viewModel`,
+    /// `is not EditorView editor`, `string p` in a parameter list.
+    record typed-name {
+        name: string,
+        /// As written, generic arguments dropped. May be a type parameter of
+        /// the declaring type (`T`).
+        type-name: string,
+        /// The generic arguments as written, outermost level only.
+        type-args: list<string>,
+        kind: declaration-kind,
+        /// Where the name is written.
+        position: position,
+        /// For a local or pattern, the innermost body node it is in scope in.
+        scope: option<u32>,
+    }
+
+    /// The body of one member. An accessor, an initializer and a local
+    /// function are bodies of their own, each carrying the name position of
+    /// the member it belongs to or is declared in; a lambda is part of the
+    /// body it is written in.
+    record member-body {
+        /// Where the name of the declaration the body belongs to is written
+        /// (the same position `place.name` carries in `declarations`). For a
+        /// body without a declaration of its own — an accessor, a local
+        /// function — the position of the member it is declared in.
+        name-position: position,
+        kind: body-kind,
+        /// The root node, an index into `nodes`.
+        root: u32,
+        /// Every node of the body, a node before its children, ids equal to
+        /// their index.
+        nodes: list<body-node>,
+        accesses: list<member-access>,
+        invocations: list<invocation>,
+        /// Ids equal to their index.
+        lambdas: list<lambda>,
+        subscriptions: list<subscription>,
+        /// Ids equal to their index.
+        literals: list<string-literal>,
+        name-ofs: list<name-of>,
+        /// Locals, parameters and pattern variables declared with a type.
+        typed-names: list<typed-name>,
+        /// Tags on the body as a whole (`target-type` on a template).
+        tags: list<tag>,
+    }
+
+    /// One entry of a type's base list (`ViewBase<EditorViewModel>`).
+    record base-type {
+        /// The base as written, generic arguments dropped, as a dotted path
+        /// (`ViewBase`, `Acme.Views.ViewBase`).
+        base: list<string>,
+        /// Its generic arguments as written, outermost level only.
+        type-args: list<string>,
+    }
+
+    /// A type declared in the file.
+    record type-shape {
+        /// Where its name is written.
+        name-position: position,
+        /// Its own type parameters (`T` in `ViewBase<T>`).
+        type-params: list<string>,
+        bases: list<base-type>,
+    }
+
+    record attribute {
+        /// As written, without the `Attribute` suffix removed.
+        name: string,
+        /// Its arguments as written, in order. Redacted by the host.
+        args: list<string>,
+    }
+
+    /// What a declaration says beside its type and name. Reported only for a
+    /// declaration that has a modifier, an attribute or a tag.
+    record declaration-meta {
+        /// Where the name of the declaration is written.
+        name-position: position,
+        /// Modifiers as written (`public`, `static`, `virtual`, `override`).
+        modifiers: list<string>,
+        attributes: list<attribute>,
+        /// `notifies-change` on a property whose setter raises a change
+        /// notification, `lazy-init` on a field initialized on first read.
+        tags: list<tag>,
+    }
+
+    /// What `bodies` returns for one file.
+    record file-bodies {
+        types: list<type-shape>,
+        members: list<member-body>,
+        /// Fields, properties and events declared with a type.
+        typed-members: list<typed-name>,
+        metas: list<declaration-meta>,
+    }
+}
+
+/// What the host offers a plugin. Answered from a snapshot frozen before the
+/// walk, so an answer can never depend on how far the walk has got.
+interface host {
+    path-exists: func(key: string) -> bool;
+}
+
+interface extractor {
+    use types.{manifest, vocabulary, config, file-declarations, file-usages, file-bodies};
+
+    describe: func() -> manifest;
+    /// Called once per run, before any file.
+    declare: func() -> option<vocabulary>;
+    /// Each pass returns `err` with a short reason when the file cannot be
+    /// read (it is not well formed, it is in an encoding the component does
+    /// not read). The host records the file as failed for that pass with the
+    /// reason, redacted, and goes on; a trap still fails the file too, but
+    /// says nothing about why.
+    declarations: func(path: string, source: list<u8>, config: config) -> result<file-declarations, string>;
+    usages: func(path: string, source: list<u8>) -> result<file-usages, string>;
+    /// The bodies of the file's members. Not given the configuration: the
+    /// host redacts every text it returns.
+    bodies: func(path: string, source: list<u8>) -> result<file-bodies, string>;
+}
+
+world language-plugin {
+    import host;
+    export extractor;
+}

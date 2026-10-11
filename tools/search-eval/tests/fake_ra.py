@@ -10,8 +10,13 @@ from pathlib import Path
 
 
 def main(argv: list[str]) -> int:
+    # `--ra-version <name>` ahead of everything else plays another version of RA:
+    # it names itself in `--version` and leaves a marker file in its corpus.
+    label = None
+    if argv[:1] == ["--ra-version"]:
+        label, argv = argv[1], argv[2:]
     if argv == ["--version"]:
-        print("reverse-architect 0.0.0-fake")
+        print(f"reverse-architect {label or '0.0.0-fake'}")
         return 0
     if "--fail" in argv:
         print("fake ra: simulated failure", file=sys.stderr)
@@ -27,6 +32,8 @@ def main(argv: list[str]) -> int:
     for f in files:
         name = f.replace("/", "__") + ".md"
         (out / "cards" / name).write_text(f"# {f}\n", encoding="utf-8", newline="\n")
+    if label is not None:
+        (out / "ra-version.txt").write_text(label + "\n", encoding="utf-8", newline="\n")
     (out / "options.txt").write_text(" ".join(options) + "\n", encoding="utf-8", newline="\n")
     return 0
 

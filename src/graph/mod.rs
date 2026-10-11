@@ -92,13 +92,18 @@ fn is_hierarchical(key: &str) -> bool {
 /// (`a/b/c`, never `c`), and every intermediate directory must exist as its own
 /// `Module` node. A synthetic root node is *not* required — top-level modules
 /// hang under `.` implicitly.
+///
+/// Shared, not owned: a key is cloned into every edge, every caller and every
+/// row of the second layer that names it, and a clone is a count, not a copy
+/// of the text. Compared, ordered, hashed and serialized by its text, exactly
+/// as a `String` is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct NodeKey(String);
+pub struct NodeKey(std::sync::Arc<str>);
 
 impl NodeKey {
     /// Build a key, normalizing OS path separators to `/` for portability.
     pub fn new(value: impl Into<String>) -> Self {
-        NodeKey(value.into().replace('\\', "/"))
+        NodeKey(value.into().replace('\\', "/").into())
     }
 
     pub fn as_str(&self) -> &str {
@@ -278,6 +283,25 @@ pub enum Rule {
     /// (plan A, U9, KTD8). Host-owned and unmeasured exactly as
     /// [`Rule::IndexElsewhere`].
     IndexOutside,
+    /// Not a sifting rule: a reference by name (contract 0.3, `name-ref`)
+    /// found its declaration in the lookup block it is written in, or in a
+    /// block around it, of the same file (plan 2c, U5: KTD5). Host-owned and
+    /// outside the resolver's catalog, like [`Rule::IndexElsewhere`]: it names
+    /// the scope a lookup ended in, and no right to delete can name it.
+    ScopeBlock,
+    /// A reference by name found its declaration elsewhere in its own file
+    /// (plan 2c, KTD5). Host-owned, as [`Rule::ScopeBlock`].
+    ScopeFile,
+    /// A reference by name found its declaration in a file its file imports,
+    /// directly or transitively — a merged resource dictionary (plan 2c,
+    /// KTD5). Host-owned, as [`Rule::ScopeBlock`].
+    ScopeImports,
+    /// A reference by name found its declaration in another file of the same
+    /// project — the same assembly — that its file does not import (plan 2c,
+    /// KTD5): still backed, but by a scope of its own, so a reader can tell it
+    /// from a lookup the file itself states. Host-owned, as
+    /// [`Rule::ScopeBlock`].
+    ScopeProject,
 }
 
 impl Rule {
@@ -296,6 +320,10 @@ impl Rule {
             Rule::BaseSpelling => "base-spelling",
             Rule::IndexElsewhere => "index-elsewhere",
             Rule::IndexOutside => "index-outside",
+            Rule::ScopeBlock => "scope-block",
+            Rule::ScopeFile => "scope-file",
+            Rule::ScopeImports => "scope-imports",
+            Rule::ScopeProject => "scope-project",
         }
     }
 }
@@ -794,6 +822,33 @@ pub enum FactKind {
     /// the File node, absent when zero. Its one projection is coverage; left
     /// out of the manifest like the decisions it counts. Additive.
     EnumDecisionsUnmatched,
+    /// The `bodies` pass of the second layer failed on this file (plan 2a,
+    /// U4: KTD8): the plugin trapped, ran out of fuel or memory, or refused
+    /// the file with a reason of its own. Carried on the File node, with the
+    /// plugin as its extractor and `bodies: <reason>` as text, redacted like
+    /// every text a plugin returns.
+    ///
+    /// The file loses only its second layer: its declarations and usages are
+    /// the first layer's, and an [`FactKind::ExtractionFailed`] is never
+    /// written for it. Written only by a run with `--detail-level`, so a run
+    /// without one carries none. Detail-only ([`FactKind::is_detail_only`]):
+    /// its projections are coverage and, from a later unit, the detail of a
+    /// type that lost its second layer. Additive.
+    BodyExtractionFailed,
+    /// A reference by name (contract 0.3, `name-ref`: a markup file's
+    /// `{StaticResource K}`) that no declaration of its target kind answers
+    /// anywhere in the repository (plan 2c, U5: R11). Carried on the File node
+    /// the reference is written in, whatever node it came from, with the
+    /// plugin as its extractor, the reference's line as its provenance and
+    /// `<name>: no <target kind> declares this name` as text — admitted, not
+    /// dropped, so a missing edge is never indistinguishable from no reference
+    /// at all (R20). One per name and target kind per file, at its first site.
+    ///
+    /// Written only for a plugin that reports references by name, so no run
+    /// without one carries any. Detail-only ([`FactKind::is_detail_only`]):
+    /// a v10 manifest keeps its closed set of fact words; its projection is
+    /// the file's documents, from a later unit (plan 2c, U8). Additive.
+    UnresolvedReference,
     /// A kind this corpus declared for itself (R1). Its cardinality comes from
     /// the declaration, which is why `merge` can resolve it (R7).
     #[serde(skip)]
@@ -1157,6 +1212,8 @@ impl FactKind {
             FactKind::AnchorsDropped,
             FactKind::EnumDecision,
             FactKind::EnumDecisionsUnmatched,
+            FactKind::BodyExtractionFailed,
+            FactKind::UnresolvedReference,
         ]
     }
 
@@ -1181,6 +1238,8 @@ impl FactKind {
                 | FactKind::AnchorsDropped
                 | FactKind::EnumDecision
                 | FactKind::EnumDecisionsUnmatched
+                | FactKind::BodyExtractionFailed
+                | FactKind::UnresolvedReference
         )
     }
 }
@@ -1896,6 +1955,8 @@ mod tests {
                 | FactKind::AnchorsDropped
                 | FactKind::EnumDecision
                 | FactKind::EnumDecisionsUnmatched
+                | FactKind::BodyExtractionFailed
+                | FactKind::UnresolvedReference
                 | FactKind::Declared(_) => {}
             }
         }
@@ -1918,7 +1979,7 @@ mod tests {
         // quietly smaller core vocabulary.
         assert_eq!(NodeKind::core_kinds().len(), 5);
         assert_eq!(EdgeKind::core_kinds().len(), 11);
-        assert_eq!(FactKind::core_kinds().len(), 28);
+        assert_eq!(FactKind::core_kinds().len(), 30);
         assert_eq!(
             FactKind::core_kinds().iter().collect::<BTreeSet<_>>().len(),
             FactKind::core_kinds().len()

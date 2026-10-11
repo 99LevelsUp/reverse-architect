@@ -1,0 +1,31 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:s="clr-namespace:Acme.Screens"
+    xmlns:m="clr-namespace:Acme.Models"
+    xmlns:beh="clr-namespace:Acme.Behaviors">
+  <SolidColorBrush x:Key="MarkerBrush" Color="Navy" />
+  <ControlTemplate TargetType="s:ViewA">
+    <Grid beh:Focus.IsInitial="True">
+      <TextBlock Text="{Binding P}" Tag="{x:Static Acme.Settings.Default}" />
+      <ListBox x:Name="PART_List">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <TextBlock Text="{Binding P}" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+      <Button Command="{Binding Holder.Command}" Content="Go" />
+      <ContentControl>
+        <ContentControl.ContentTemplate>
+          <DataTemplate DataType="{x:Type m:ItemModel}">
+            <TextBlock Text="{Binding Name}" />
+          </DataTemplate>
+        </ContentControl.ContentTemplate>
+      </ContentControl>
+    </Grid>
+  </ControlTemplate>
+  <Style x:Key="BusyLook" TargetType="s:ViewA">
+    <Setter Property="IsBusy" Value="True" />
+  </Style>
+</ResourceDictionary>

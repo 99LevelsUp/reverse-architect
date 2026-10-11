@@ -1,0 +1,12 @@
+{
+  "schema_version": 6,
+  "repo_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "files": [
+    {
+      "path": "src/Acme/Models/ExternalCheck.cs"
+    },
+    {
+      "path": "src/Acme/Jiny.cs"
+    }
+  ]
+}

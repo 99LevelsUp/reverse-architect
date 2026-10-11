@@ -162,7 +162,9 @@ const RESTORE_LOG: &str = "native/restore_log.c";
 
 /// The byte budget of a short type card and of a map row (plan B, Success
 /// Criteria: 1.2 kB and 200 bytes). Spelled out rather than imported, so the
-/// test breaks when the budget a constant states moves, not with it.
+/// test breaks when the budget a constant states moves, not with it. The card
+/// budget holds for a run without the second layer, as every run here is; a
+/// C# type's card with it has none (plan 2a, Key Decisions).
 const SHORT_CARD_BYTES: usize = 1200;
 const MAP_ROW_BYTES: usize = 200;
 

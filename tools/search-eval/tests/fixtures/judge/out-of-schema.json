@@ -1,0 +1,18 @@
+{
+  "model": "fake-model-1",
+  "odpovedi": [
+    {
+      "stitek": "VYJADRUJE"
+    },
+    {
+      "castecne": false,
+      "citace": null,
+      "stitek": "MOZNA"
+    },
+    [
+      1,
+      2
+    ]
+  ],
+  "smoke": "ok"
+}

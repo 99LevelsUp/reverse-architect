@@ -36,12 +36,20 @@ pub mod header;
 pub mod index;
 pub mod insight;
 pub mod keywords;
+pub mod layer2;
+/// The second layer on a type's card (plan 2a, U6) — the file lives beside
+/// the analyses it renders.
+#[path = "layer2/render.rs"]
+pub mod layer2_render;
 pub mod links;
 pub mod map;
 pub mod pages;
 pub mod purpose;
 pub mod render;
 pub mod story;
+/// The registry of triggers, `cards/triggers.md` (plan 2b, U7), and its line
+/// of coverage.
+pub mod triggers;
 
 use crate::coverage::CardRows;
 use crate::extract::treesitter::{symbol_role, Role};
@@ -1731,6 +1739,45 @@ pub fn render_card_files(
     lang: render::Lang,
     style: crate::cli::LinkStyle,
 ) -> Vec<crate::render::RenderedFile> {
+    render_card_files_layered(cards, index, lang, style, None)
+}
+
+/// The second layer of a run (plan 2a, U6): its level, its model and what
+/// was read of it.
+#[derive(Clone, Copy)]
+pub struct Layer2Run<'a> {
+    pub level: u8,
+    pub bodies: &'a crate::extract::bodies::BodyLayer,
+    pub analysis: &'a layer2::Analysis,
+}
+
+impl Layer2Run<'_> {
+    /// What the run's second layer gives the card: a type's level, whether
+    /// its second layer was read, and its analysis; `None` for every other
+    /// card, which the second layer leaves as it was.
+    pub fn of(&self, card: &Card) -> Option<layer2_render::Layer2<'_>> {
+        if card.kind != CardKind::Type {
+            return None;
+        }
+        let key = crate::graph::NodeKey::new(card.identity.as_str());
+        Some(layer2_render::Layer2 {
+            level: self.level,
+            state: self.bodies.layer_of(&key),
+            analysis: self.analysis.of(&key),
+        })
+    }
+}
+
+/// [`render_card_files`] with the run's second layer, when it has one: a
+/// type card carries it ([`render::render_card_layered`]); without it, and
+/// on every other card, this is [`render_card_files`].
+pub fn render_card_files_layered(
+    cards: &[Card],
+    index: &links::CardIndex,
+    lang: render::Lang,
+    style: crate::cli::LinkStyle,
+    run: Option<&Layer2Run<'_>>,
+) -> Vec<crate::render::RenderedFile> {
     // Each card renders from itself and the read-only index alone, so the
     // cards render in parallel; `collect` keeps them in card order.
     use rayon::prelude::*;
@@ -1738,9 +1785,35 @@ pub fn render_card_files(
         .par_iter()
         .map(|card| crate::render::RenderedFile {
             path: card.path.clone(),
-            contents: render::render_card(card, lang, style, index),
+            contents: render::render_card_layered(
+                card,
+                lang,
+                style,
+                index,
+                run.and_then(|r| r.of(card)),
+            ),
         })
         .collect()
+}
+
+/// The keywords of every analyzed type's card with the words its second
+/// layer brings (plan 2a, U6: KTD9 point 4), weighed by the first layer's
+/// document frequencies; every other card keeps its keywords. Read from the
+/// whole analysis, so they are the same on every level.
+pub fn add_layer2_keywords(
+    cards: &mut [Card],
+    insight: &insight::Insight,
+    analysis: &layer2::Analysis,
+) {
+    for card in cards.iter_mut().filter(|c| c.kind == CardKind::Type) {
+        let Some(a) = analysis.of(&crate::graph::NodeKey::new(card.identity.as_str())) else {
+            continue;
+        };
+        let words = layer2_render::words(a);
+        if !words.is_empty() {
+            card.story.keywords = insight.keywords_with(&card.identity, &words);
+        }
+    }
 }
 
 /// A type's header from every part's signature (plan B, U1). The signature is

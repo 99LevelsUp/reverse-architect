@@ -14,9 +14,10 @@ from pathlib import Path
 import preflight
 from agents.base import Cap
 from agents.claude_code import ClaudeCodeAdapter, ClaudeCodeSettings
+from agents.scripted import ScriptedAdapter
 from preflight import (CHECK_LOGIN, CHECK_OUTSIDE, CHECK_TELEMETRY, CHECK_TOOLS, CHECK_USER,
                        PreflightFailed, PreflightTarget, require_ok, run_preflight)
-from tests.experiment_fixture import FAKE_AGENT, SYNTHETIC_KEY, fake_agent_env
+from tests.experiment_fixture import FAKE_AGENT, SYNTHETIC_KEY, fake_agent_env, preflight_run
 
 CAP = Cap(seconds=60, steps=50, tokens=10**6)
 ALL_CHECKS = {CHECK_OUTSIDE, CHECK_USER, CHECK_TOOLS, CHECK_TELEMETRY, CHECK_LOGIN}
@@ -138,6 +139,44 @@ class PreflightTest(unittest.TestCase):
         marker = (root / "outside" / preflight.MARKER_FILE).read_text(encoding="utf-8")
         self.assertIn("PREFLIGHT-OUTSIDE-T0KEN", marker)
         self.assertEqual(sorted(p.name for p in (root / "work").iterdir()), ["README.txt"])
+
+
+class SupportRolePreflightTest(unittest.TestCase):
+    """The tool check of the support role: an empty work directory, no source file (KTD9)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="se-u12-pre-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def check(self, with_sources):
+        adapter = ScriptedAdapter(preflight_run, self.tmp / "iso")
+        target = PreflightTarget(name="korpus", slug="v1", with_corpus=True,
+                                 with_sources=with_sources)
+        result = run_preflight(adapter, target, self.tmp / "preflight", CAP, token="T0KEN")
+        return result, adapter.requests[0]
+
+    def test_no_work_directory_with_sources_is_created(self):
+        result, request = self.check(with_sources=False)
+        root = self.tmp / "preflight" / "v1"
+        self.assertTrue(result.ok, [c for c in result.checks if not c.ok])
+        self.assertFalse((root / "work").exists())
+        self.assertEqual(list(request.workdir.iterdir()), [])
+        self.assertEqual(request.workdir.parent, root)
+        self.assertEqual(request.corpus_dir, root / "corpus")
+        self.assertNotIn("README.txt", request.prompt.split(preflight.OUTSIDE_LABEL)[0])
+        self.assertIn(str(root / "corpus" / "index.md"), request.prompt)
+
+    def test_with_sources_keeps_the_work_directory_with_the_readme(self):
+        _, request = self.check(with_sources=True)
+        self.assertEqual(sorted(p.name for p in request.workdir.iterdir()), ["README.txt"])
+        self.assertEqual(request.workdir.name, "work")
+
+    def test_support_role_needs_a_corpus(self):
+        adapter = ScriptedAdapter(preflight_run, self.tmp / "iso")
+        target = PreflightTarget(name="x", slug="v1", with_corpus=False, with_sources=False)
+        with self.assertRaises(ValueError):
+            run_preflight(adapter, target, self.tmp / "preflight", CAP)
+        self.assertEqual(adapter.requests, [])
 
 
 class SharedConstantsTest(unittest.TestCase):

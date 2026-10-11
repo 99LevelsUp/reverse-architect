@@ -50,7 +50,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Protocol, Sequence
+from typing import Any, Iterator, Mapping, Protocol, Sequence
 
 from prepare import canonical_path
 
@@ -362,6 +362,66 @@ def isolated_config_dir(isolation_root: str | os.PathLike[str],
         yield target
     finally:
         remove_tree(target)
+
+
+def resolve_executable(command: Sequence[str], *, who: str = "agenta",
+                       error: type[AgentRunError] = AgentRunError) -> list[str]:
+    """`command` with its first word resolved through PATH (a path with a directory is kept).
+
+    `who` names the owner of the command in the Czech messages (the agent, the judge);
+    `error` is the exception raised for an empty command or an executable that is not found.
+    """
+    if not command:
+        raise error(f"Příkaz {who} je prázdný.")
+    first = command[0]
+    if os.path.dirname(first):
+        return list(command)
+    found = shutil.which(first)
+    if found is None:
+        raise error(f"Spustitelný soubor {who} {first} nebyl nalezen v PATH.")
+    return [found, *command[1:]]
+
+
+# Inherited from the parent only because the OS or the runtime needs them; the one list of
+# every adapter and of the judge.
+INHERITED_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC",
+                 "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+
+
+def build_isolated_env(parent: Mapping[str, str], config_dir: str | os.PathLike[str], *,
+                       passthrough: Sequence[str] = (),
+                       fixed: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The child's whole environment, built from an allow-list (agent-neutral).
+
+    Used by `claude_code.build_env` and by the judge (KTD6). Only the OS/runtime variables of `INHERITED_ENV` and the
+    variables named in `passthrough` (names matched case-insensitively, as on
+    Windows) are taken from `parent`; home, temp and cache directories all
+    point into `config_dir`; `fixed` adds the variables one CLI family needs
+    (its own configuration directory). `fixed` wins over `passthrough`, and a
+    passed-through variable never overrides the isolation variables, so an
+    allow-listed name cannot redirect the CLI out of its private directory.
+    """
+    by_upper = {key.upper(): value for key, value in parent.items()}
+    env = {name: by_upper[name] for name in INHERITED_ENV if name in by_upper}
+    for name in passthrough:
+        if name.upper() in by_upper:
+            env[name.upper() if os.name == "nt" else name] = by_upper[name.upper()]
+    cfg = Path(config_dir)
+    tmp = cfg / "tmp"
+    env.update({
+        "HOME": str(cfg),
+        "USERPROFILE": str(cfg),
+        "APPDATA": str(cfg / "appdata"),
+        "LOCALAPPDATA": str(cfg / "localappdata"),
+        "XDG_CONFIG_HOME": str(cfg / "xdg-config"),
+        "XDG_CACHE_HOME": str(cfg / "xdg-cache"),
+        "XDG_DATA_HOME": str(cfg / "xdg-data"),
+        "TEMP": str(tmp),
+        "TMP": str(tmp),
+        "TMPDIR": str(tmp),
+    })
+    env.update(fixed or {})
+    return env
 
 
 def seed_config_files(config_dir: Path, files: Sequence[tuple[str, str]]) -> None:

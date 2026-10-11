@@ -68,7 +68,19 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Also in v6 (U13): `model_purpose`, what generation did with the purpose
 /// layer `verify --purpose` wrote — records used, stale and unmatched —
 /// present only for a run asked to read it (`--model-purpose`), so every
-/// other artifact is byte for byte what it was.
+/// other artifact is byte for byte what it was. And from plan 2a, U4:
+/// `bodies`, what the second layer read and paired and where it failed,
+/// present only for a run with `--detail-level` on the same terms — no bump,
+/// since no other artifact changes by a byte. And from plan 2c, U8 (KTD12):
+/// `markup`, the state of XAML coverage for the whole run — not read, read
+/// with unsupported constructs, read in full, or the second layer off — with
+/// the files XAML failed on, the components that read no bodies, the files
+/// with a markup extension the plugin could not take apart (`unparsed`,
+/// written only when there is one) and the markup places the second layer
+/// could not pair. Present only when a plugin
+/// of the run claims XAML or the run has the second layer, so every artifact
+/// of a run with neither is byte for byte what it was; for that reason, and
+/// because a declaring corpus is already one version up, no bump either.
 ///
 /// v5: `noise` — how much noise the graph and the cards carry (plan A, U4:
 /// R21, KTD14). Written by every run, so the version rises for every corpus,
@@ -219,6 +231,331 @@ pub struct Coverage {
     /// it (`--model-purpose`), as `model_verification` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_purpose: Option<ModelPurpose>,
+    /// What the second layer read (plan 2a, U4: KTD6, KTD8): the level, the
+    /// plugins, how its bodies paired with the first layer, what paired with
+    /// nothing, and every file it failed on. Present only for a run with
+    /// `--detail-level` ([`bodies`]), as `model_purpose` is for its flag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bodies: Option<Bodies>,
+    /// The state of XAML coverage of the run (plan 2c, U8: R19, KTD12) —
+    /// what licenses a card to read a missing dynamic-call marker as the
+    /// absence of a way from XAML. Present only when a plugin of the run
+    /// claims XAML or the run has the second layer ([`markup`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markup: Option<Markup>,
+}
+
+/// The language whose coverage [`Markup`] states.
+pub const MARKUP_LANGUAGE: &str = "xaml";
+
+/// How far XAML was read in a run (plan 2c, R19): a property of the run,
+/// never of one card.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MarkupState {
+    /// The run has the second layer and no plugin reads XAML: a member
+    /// without a marker may still be bound from XAML.
+    NotRead,
+    /// XAML was read, but a file failed, a component claiming XAML read no
+    /// bodies (contract 0.2) or a value written as a markup extension could
+    /// not be taken apart: a missing marker proves nothing either.
+    ReadWithUnsupportedConstructs,
+    /// Every XAML file was read in both layers: a missing marker is evidence
+    /// that no way from XAML exists.
+    ReadInFull,
+    /// A plugin reads XAML, but the run has no second layer: no marker was
+    /// made at all.
+    SecondLayerOff,
+}
+
+/// A XAML file one pass of the run failed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedMarkup {
+    pub path: String,
+    pub plugin: String,
+    /// `first-layer` (declarations or usages) or `bodies`.
+    pub pass: String,
+    /// Redacted, as the plugin's every text.
+    pub reason: String,
+}
+
+/// A XAML file with values written as markup extensions its plugin could not
+/// take apart (`Text="{Binding Title"`, the tag `unparsed-markup`): the file
+/// was read, but what those values say was lost (plan 2c, R19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnparsedMarkup {
+    pub path: String,
+    /// How many such values the file has.
+    pub count: u64,
+}
+
+/// The markup places the second layer read, by how they ended (plan 2c,
+/// U6): counted, never a reason to lower the state — an unpaired binding is
+/// a known limit, not an unread file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkupSites {
+    pub resolved: u64,
+    pub ambiguous: u64,
+    pub unresolved: u64,
+    pub unpaired: u64,
+}
+
+/// XAML coverage of a run (plan 2c, U8: R19, KTD12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Markup {
+    pub state: MarkupState,
+    /// The plugins of the run that claim XAML, by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+    /// Tracked files of the language XAML.
+    pub files: u64,
+    /// Every XAML file a pass failed on, by path and pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedMarkup>,
+    /// The plugins that claim XAML and read no bodies in a run with the
+    /// second layer — a component on contract 0.2 serves no `bodies` pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub without_bodies: Vec<String>,
+    /// The XAML files whose bodies hold a markup extension the plugin could
+    /// not take apart, by path; only in a run with the second layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unparsed: Vec<UnparsedMarkup>,
+    /// The markup places of the second layer, by outcome; absent without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sites: Option<MarkupSites>,
+}
+
+/// The state the facts of a run give (R19): only a failed file, a component
+/// that served no bodies and a markup extension the plugin could not take
+/// apart lower it — never a known limit.
+pub fn markup_state(
+    second_layer: bool,
+    claimed: bool,
+    failed: bool,
+    without_bodies: bool,
+    unparsed: bool,
+) -> MarkupState {
+    match (second_layer, claimed) {
+        (false, _) => MarkupState::SecondLayerOff,
+        (true, false) => MarkupState::NotRead,
+        (true, true) if failed || without_bodies || unparsed => {
+            MarkupState::ReadWithUnsupportedConstructs
+        }
+        (true, true) => MarkupState::ReadInFull,
+    }
+}
+
+/// The XAML section of coverage (plan 2c, U8): `plugins` are the ids of the
+/// run's plugins that claim XAML, `bodies` the second layer when the run has
+/// one, `sites` how the second layer's markup places ended and `unparsed` the
+/// files with a markup extension the plugin could not take apart (both read
+/// only with the second layer). `None` for a run with neither a plugin for
+/// XAML nor the second layer.
+pub fn markup(
+    graph: &Graph,
+    languages: &Languages,
+    plugins: &[String],
+    bodies: Option<&crate::extract::bodies::BodyLayer>,
+    sites: Option<MarkupSites>,
+    unparsed: &[UnparsedMarkup],
+) -> Option<Markup> {
+    if plugins.is_empty() && bodies.is_none() {
+        return None;
+    }
+    let mut files = 0;
+    let mut failed: Vec<FailedMarkup> = Vec::new();
+    // Counted, and the failed files sorted below: no order of the graph's.
+    for node in graph.nodes_unordered() {
+        if node.kind != NodeKind::File {
+            continue;
+        }
+        let path = node.key.as_str();
+        if languages.name_for(path) != Some(MARKUP_LANGUAGE) {
+            continue;
+        }
+        files += 1;
+        if let Some(f) = node
+            .facts
+            .iter()
+            .find(|f| f.kind == FactKind::ExtractionFailed)
+        {
+            failed.push(FailedMarkup {
+                path: path.to_string(),
+                plugin: f.provenance.extractor.to_string(),
+                pass: "first-layer".to_string(),
+                reason: match &f.value {
+                    FactValue::Text(t) => t.clone(),
+                    other => format!("{other:?}"),
+                },
+            });
+        }
+    }
+    let mut without_bodies = Vec::new();
+    if let Some(layer) = bodies {
+        for (path, f) in layer.failures() {
+            if languages.name_for(path) == Some(MARKUP_LANGUAGE) {
+                failed.push(FailedMarkup {
+                    path: path.to_string(),
+                    plugin: f.plugin.clone(),
+                    pass: "bodies".to_string(),
+                    reason: f.reason.clone(),
+                });
+            }
+        }
+        let readers: BTreeSet<&str> = layer
+            .readers()
+            .iter()
+            .filter(|r| r.languages.iter().any(|l| l == MARKUP_LANGUAGE))
+            .map(|r| r.id.as_str())
+            .collect();
+        without_bodies = plugins
+            .iter()
+            .filter(|p| !readers.contains(p.as_str()))
+            .cloned()
+            .collect();
+    }
+    failed.sort_by(|a, b| {
+        (&a.path, &a.pass, &a.plugin, &a.reason).cmp(&(&b.path, &b.pass, &b.plugin, &b.reason))
+    });
+    let mut unparsed: Vec<UnparsedMarkup> = if bodies.is_some() {
+        unparsed.to_vec()
+    } else {
+        Vec::new()
+    };
+    unparsed.sort_by(|a, b| a.path.cmp(&b.path));
+    Some(Markup {
+        state: markup_state(
+            bodies.is_some(),
+            !plugins.is_empty(),
+            !failed.is_empty(),
+            !without_bodies.is_empty(),
+            !unparsed.is_empty(),
+        ),
+        plugins: plugins.to_vec(),
+        files,
+        failed,
+        without_bodies,
+        unparsed,
+        sites: bodies.and(sites),
+    })
+}
+
+/// The second layer of a run, as coverage reports it (plan 2a, U4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bodies {
+    /// `--detail-level`.
+    pub detail_level: u8,
+    /// The plugins that could read bodies, by id, in routing order.
+    pub plugins: Vec<String>,
+    /// Files whose bodies were read.
+    pub files: u64,
+    /// Member bodies read, and how they found their declaration: by the
+    /// position of its name, or as the nearest declaration around them.
+    pub members: u64,
+    pub paired_by_name: u64,
+    pub paired_by_enclosing: u64,
+    /// Bodies that paired with no declaration and have none around them —
+    /// kept in the model and listed here, never dropped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unpaired: Vec<UnpairedBody>,
+    /// Type shapes, typed members and declaration metas whose name position
+    /// is no declaration's.
+    pub unpaired_declarations: u64,
+    /// Every file the `bodies` pass failed on: it keeps its first layer and
+    /// loses its second.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedBodies>,
+    /// Declarations written in several files — the parts of a partial type —
+    /// rendered without their second layer because one part failed although
+    /// another was read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub withheld: Vec<String>,
+    /// The walk back over the callers (plan 2b, KTD5) stopped at the
+    /// functionality nearest each trigger, because it gave more than ten
+    /// times as many rows as occurrences of triggers. Absent when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restricted_walk: Option<RestrictedWalk>,
+}
+
+/// What the walk back gave a run whose registry was cut at the nearest
+/// functionality: rows of C# only, the registry adds those of markup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestrictedWalk {
+    /// The rows the full, transitive walk gave.
+    pub transitive_rows: u64,
+    /// The distinct occurrences of triggers among them (kind, key, member,
+    /// place).
+    pub trigger_occurrences: u64,
+    /// The rows kept at the nearest functionality.
+    pub rows: u64,
+}
+
+impl RestrictedWalk {
+    /// What coverage says of the walk `walk`: `None` unless it was cut.
+    pub fn of(walk: &crate::card::layer2::WalkCounts) -> Option<RestrictedWalk> {
+        walk.nearest.then_some(RestrictedWalk {
+            transitive_rows: walk.transitive_rows as u64,
+            trigger_occurrences: walk.occurrences as u64,
+            rows: walk.rows as u64,
+        })
+    }
+}
+
+/// One body the second layer could pair with nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnpairedBody {
+    pub path: String,
+    pub line: u32,
+    pub column: u32,
+    /// The kind of declaration it is the body of (`method`, `getter`, …).
+    pub kind: String,
+}
+
+/// One file the `bodies` pass failed on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedBodies {
+    pub path: String,
+    pub plugin: String,
+    /// Redacted, as the plugin's every text.
+    pub reason: String,
+}
+
+/// The second layer's section of coverage, read off the run's model.
+pub fn bodies(layer: &crate::extract::bodies::BodyLayer) -> Bodies {
+    let counts = layer.counts();
+    Bodies {
+        detail_level: layer.level(),
+        plugins: layer.readers().iter().map(|r| r.id.clone()).collect(),
+        files: layer.files().count() as u64,
+        members: counts.members,
+        paired_by_name: counts.paired_by_name,
+        paired_by_enclosing: counts.paired_by_enclosing,
+        unpaired: layer
+            .unpaired()
+            .iter()
+            .map(|u| UnpairedBody {
+                path: u.path.clone(),
+                line: u.position.line,
+                column: u.position.column,
+                kind: u.kind.word().to_string(),
+            })
+            .collect(),
+        unpaired_declarations: counts.unpaired_declarations,
+        failed: layer
+            .failures()
+            .map(|(path, f)| FailedBodies {
+                path: path.to_string(),
+                plugin: f.plugin.clone(),
+                reason: f.reason.clone(),
+            })
+            .collect(),
+        withheld: layer
+            .withheld()
+            .into_iter()
+            .map(|k| k.as_str().to_string())
+            .collect(),
+        restricted_walk: None,
+    }
 }
 
 /// The purpose layer's records, by what became of each one (plan B, U13).
@@ -975,6 +1312,11 @@ pub fn build_coverage(
         cards: None,
         // Generation sets it when it read the purpose layer, as above.
         model_purpose: None,
+        // Generation sets it for a run with the second layer ([`bodies`]).
+        bodies: None,
+        // Generation sets it for a run that reads XAML or has the second
+        // layer ([`markup`]).
+        markup: None,
         noise: Some(Noise {
             edges_by_rung: edges_by_rung(graph),
             card_rows,
@@ -1241,6 +1583,80 @@ mod tests {
         assert_eq!(of(&[]), (0, 0, 0));
         // Eleven: the 6th and the 10th (`ceil(9.9)`).
         assert_eq!(of(&(1..=11).collect::<Vec<u64>>()), (11, 6, 10));
+    }
+
+    /// R19, KTD12: the four states of XAML coverage, and what lowers one. A
+    /// component that claims XAML and serves no `bodies` — a plugin on
+    /// contract 0.2 — lowers a run with the second layer to "read with
+    /// unsupported constructs" even when no file failed; this repository has
+    /// no XAML component on 0.2 to run (`plugins/prebuilt/xaml.wasm` was built
+    /// on 0.3), so the case is the one the facts of such a run give. A
+    /// markup extension the plugin could not take apart lowers it too.
+    #[test]
+    fn only_a_failed_file_a_component_without_bodies_or_unparsed_markup_lowers_the_state() {
+        use MarkupState::*;
+        assert_eq!(markup_state(false, true, true, true, true), SecondLayerOff);
+        assert_eq!(
+            markup_state(false, false, false, false, false),
+            SecondLayerOff
+        );
+        assert_eq!(markup_state(true, false, false, false, false), NotRead);
+        assert_eq!(markup_state(true, true, false, false, false), ReadInFull);
+        assert_eq!(
+            markup_state(true, true, true, false, false),
+            ReadWithUnsupportedConstructs
+        );
+        assert_eq!(
+            markup_state(true, true, false, true, false),
+            ReadWithUnsupportedConstructs
+        );
+        assert_eq!(
+            markup_state(true, true, false, false, true),
+            ReadWithUnsupportedConstructs
+        );
+        let words: Vec<String> = [
+            NotRead,
+            ReadWithUnsupportedConstructs,
+            ReadInFull,
+            SecondLayerOff,
+        ]
+        .iter()
+        .map(|s| {
+            serde_json::to_value(s)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+        assert_eq!(
+            words,
+            [
+                "not-read",
+                "read-with-unsupported-constructs",
+                "read-in-full",
+                "second-layer-off"
+            ]
+        );
+    }
+
+    /// A run with neither a plugin for XAML nor the second layer has no
+    /// section; one with a plugin for XAML and no second layer says so, and
+    /// counts no markup places.
+    #[test]
+    fn the_section_is_absent_without_xaml_and_the_second_layer() {
+        let graph = Graph::new();
+        let languages = Languages::bundled();
+        assert_eq!(markup(&graph, &languages, &[], None, None, &[]), None);
+        let unparsed = [UnparsedMarkup {
+            path: "a.xaml".into(),
+            count: 1,
+        }];
+        let off = markup(&graph, &languages, &["xaml".into()], None, None, &unparsed).unwrap();
+        assert_eq!(off.state, MarkupState::SecondLayerOff);
+        assert_eq!(off.sites, None);
+        // Read only with the second layer, like the markup places.
+        assert!(off.unparsed.is_empty());
     }
 
     #[test]

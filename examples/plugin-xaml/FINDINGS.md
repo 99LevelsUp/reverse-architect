@@ -1,0 +1,92 @@
+# Findings: what XAML needs from the plugin contract
+
+This plugin was built the way a third party would build one: from the published contract and
+[`docs/plugins.md`](../../docs/plugins.md) alone, in its own workspace, loaded with `--plugin`, with no change to
+the host. Its first version targeted `ra:plugin@0.2.0` ([`wit-v2/extractor.wit`](../../wit-v2/extractor.wit)); it
+now targets `ra:plugin@0.3.0` ([`wit-v3/extractor.wit`](../../wit-v3/extractor.wit)) and serves all three passes.
+This book records, for every XAML construct the plugin reads or was asked to read, whether the contract carries
+it:
+
+- **fits** — the contract says it, and the host does the right thing with it;
+- **sacrificed** — left out on purpose, as a known limit;
+- **needs-ra-change** — the contract or the host cannot carry it; the proposal says what would.
+
+It describes constructs of the language, not any repository it was run over. In the first table, line numbers
+refer to `wit-v2/extractor.wit` (WIT) and `docs/plugins.md` (docs) at the revision the 0.2 plugin was built
+against. The column *State* says what 0.3 changed:
+
+- **closed in 0.3** — the contract carries it and the host takes it in as it says;
+- **carried in 0.3, host pending** — the plugin reports it in the 0.3 records, but the host does not yet do
+  anything with it in a run beyond redacting and storing it;
+- **read by the host** — the plugin reports it in the 0.3 records and a run with the second layer pairs it with
+  the C# members it reads, writes or calls (step 2c: the dynamic-call markers and `## Dynamic access` of the
+  cards, the rows of XAML in the registry of triggers);
+- **resolved by the host** — the host looks the reference up after all files are read (`docs/plugins.md`,
+  *References by name*).
+
+## Constructs
+
+| Construct | What the plugin did on 0.2 | Verdict on 0.2 | Decided by / proposal | State |
+|---|---|---|---|---|
+| `TargetType` | `reference` usage of the type; a style or template with no `x:Key` is keyed `type:<CLR name>` | fits | usage kinds, WIT 136–146; docs 74–75 | unchanged; 0.3 adds the `target-type` tag on the body |
+| `DataType` | the same (implicit `DataTemplate`) | fits | as above | unchanged; 0.3 adds `data-source: typed` |
+| `{x:Type T}` | `reference` usage; for a nested type (`Outer+Inner`) the outer type goes to `qualifier` | fits | `qualifier`, WIT 247–251; without it the nested-type rule disputes the right candidate (docs 98) | — |
+| `xmlns` → CLR namespace | every `clr-namespace:`/`using:` mapping of the file becomes a using of scope 0; a prefix mapped to a URI gives `context: none` | fits, with a limit | scopes and usings, WIT 162–178; docs 94–96. A type name that exists in two mapped namespaces stays ambiguous: the visibility rule disputes the namespace that is not visible but does not back the one that is | — |
+| `qualifier` on a type reference | not used for the CLR namespace of a prefix | needs-ra-change | No rule runs on a site whose `qualifier` is a namespace (docs do not say what the host does with it). Proposal: a rule that backs the candidate whose namespace equals the qualifier and disputes the others | open |
+| Type-keyed implicit styles | key `type:<CLR name>`, the same key whatever prefix spells the type | fits | keys, docs 44 | — |
+| Resources with `x:Key` | symbol of kind `resource` | fits | a kind outside the core lists is kept and shown, nothing resolves to it (docs 64) | node kind `xaml:resource` |
+| Styles | symbol of kind `style` | fits | as above | node kind `xaml:style` |
+| Templates | symbol of kind `template` | fits | as above | node kind `xaml:template` |
+| Kinds with a card of their own | styles, templates and resources are members of the file's card only | needs-ra-change | 0.2 cannot create a node of a plugin's own kind: every symbol becomes a core symbol node, and only the core kinds get a card. Proposal: a symbol may carry a node kind from the plugin's vocabulary, which gets the card its policy names | closed in 0.3 (`symbol.node-kind`; `declare` declares five kinds, each with a card) |
+| `x:Name` inside a template | symbol of kind `element`, keyed `<container>/<name>`, with a `symbol_container` fact; no `has_member` edge | fits | a `has_member` target is left off the file card as a member of a type (docs 64, 66), and a template has no card of its own on 0.2 | 0.3: node kind `xaml:element` and a `has_member` edge from its template or style |
+| Nesting of elements under templates | flattened to `symbol_container` | needs-ra-change | Proposal: with kinds of their own (above) a template can own its elements | closed in 0.3 (`has_member`) |
+| `x:Name` outside templates | not reported | sacrificed | in a file with `x:Class` these names are fields of the generated code-behind, not XAML declarations | — |
+| `x:Class` | symbol `sym:xaml:<file>#x:Class` of kind `view`, name position on the value; no key of the C# class is declared | needs-ra-change | `view` is a referenced kind with a card of its own (WIT 92–94, docs 63), so one class gets a second card beside its C# card; the plugin qualifies `symbol_name` to keep the XAML symbol out of the candidates of every reference to the class. Proposal: a kind of the plugin's own vocabulary with a card policy (0.3), or a "second half of a partial type" relation the host folds into the C# card | closed in 0.3 (`xaml:view`); see *`symbol_kind` beside a node kind* below |
+| Merged dictionaries | `imports` edge to the merged file, from a relative path or a `pack://…;component/…` URI mapped to a top-level directory named after the assembly, always confirmed through `path-exists` | fits | edges, docs 66; host import, WIT 333–337 | — |
+| `*.Resources` blocks | containers of resources; a key repeated in one file gets `~N` | fits | keys, docs 44 | — |
+| Block a resource or a reference sits in | not reported | needs-ra-change | Nothing in 0.2 says which block a definition or a reference is written in, so nearest-block lookup is impossible. Proposal: a list of the file's lookup blocks with line ranges and parent index, and a `block` index on a resource declaration and on a reference | resolved by the host: nearest block and its parents first |
+| `{StaticResource K}`, `{DynamicResource K}` | not reported | needs-ra-change | No usage kind resolves to a resource (docs 64). Proposal: a reference by name to a declaration of the plugin's own kind, resolved by the host after all files are read, nearest scope first | resolved by the host (`name-ref`: block, file, merged dictionaries, project, repository; variants and ambiguity; an unresolved key is a fact on the file) |
+| `BasedOn` | only `{StaticResource {x:Type T}}` naming a type-keyed style of the same file became an `extends` relation | needs-ra-change | both ends were cardless kinds, so the host lifted the relation onto the file and the file card said it extends itself. Proposal: a `name-ref` with relation `extends` between nodes of the plugin's own kinds | resolved by the host (`name-ref.relation = extends` becomes an `extends` edge, any base, any file; the 0.2 relation is gone) |
+| Binding paths | not reported | needs-ra-change | No usage kind expresses reading a property on a type the file does not name (WIT 136–146). Proposal: member accesses with a path and a mode, read in a pass over element bodies, and a tag saying where the binding's data comes from | read by the host (`member-access`, `data-source`: a binding marks the member of the source's type, through a view's model; an unpaired source is counted, not guessed) |
+| `Command=` | not reported | needs-ra-change | a binding path (above); a command is also a trigger | read by the host (`member-access`, `trigger`, `control-key`: a control or menu-item row in the registry of triggers, with the command its binding names) |
+| Event handlers (`Click="OnSave"`) | not reported | needs-ra-change | not a call but a delegate binding to a method of the class. Proposal: a subscription record | read by the host (`subscription`: a handler mark on the method of the `x:Class` type; the handler's name is redacted like a literal of its attribute); see *Which attribute is an event* below |
+| `{x:Static T.M}` | `reference` to `T` | fits; the member `M` sacrificed | no usage kind for a static member read (docs 64) | member: read by the host (`member-access` `read` of `[T, M]`, a static mark on `M`) |
+| Attached properties (`a:Owner.Prop=`) | not reported | fits (deferred) | the owner type would fit as a `reference`; the write through its accessors needs a member access | read by the host (`member-access` `write` of `[Owner, Prop]`, a mark on `GetProp`/`SetProp`) |
+| `Setter Property=` | not reported | needs-ra-change | the property is a member of the style's `TargetType`; needs a member access | read by the host (`member-access` `write` of `[TargetType, Prop]`, a setter mark) |
+| String literals in attributes | not reported | sacrificed | the host's lexer does not read `.xaml`, so attribute values never become keywords; reporting them needs a literal record the host redacts | carried in 0.3, host pending (`string-literal`, `attribute-arg`: redacted and stored; no analysis reads them yet — a C# literal that names an element or a resource of XAML is read, from the C# side) |
+| `KeyBinding` in `InputBindings` | not reported | sacrificed | the command is a binding, the gesture a literal | read by the host (`key-gesture`: a key row in the registry of triggers) |
+| Implicit two-way bindings | not reported | sacrificed | the default mode lives in the framework's property metadata, which no file states (WIT 226–227: everything is read from the one file) | — (still: only an explicit `Mode` writes) |
+| Why a file failed | the file traps; coverage says it failed | needs-ra-change | `declarations` and `usages` returned plain lists, so the only failure a plugin could report was a trap, and the panic text was lost. Proposal: a `result<…, string>` or an error record per pass | closed in 0.3 (every pass returns `result<…, string>`; the plugin no longer panics) |
+
+## What building on 0.3 found
+
+Line numbers refer to `wit-v3/extractor.wit` (WIT) and `docs/plugins.md` (docs) at the revision the 0.3 plugin
+was built against.
+
+| Construct | What the plugin does on 0.3 | Verdict | Decided by / proposal |
+|---|---|---|---|
+| A template referenced by `{StaticResource}` | `name-ref.target-kind` is `xaml:style` for `BasedOn`, `Style` and a property ending in `Style`, and `xaml:resource` for everything else, a template included (`ItemTemplate="{StaticResource Row}"`) | needs-ra-change | A reference names one target kind (WIT 276–278), but the syntax of `{StaticResource K}` does not say whether `K` is a style, a template or another resource; only the property it sets hints at it. Proposal: a list of target kinds, or "any kind of this namespace", so a lookup by key is not narrowed by a guess. Until then a host that matches the kind strictly will not find a template by its key |
+| Card kind names | `card-kinds` lists `style`, `template`, `resource`, `element`, `view`, and each node kind (named bare too) names the card of the same name; symbols and references spell the kind `xaml:style` | closed | Neither the WIT (246–252) nor the docs said how a name in the vocabulary is spelled. The first build named the kinds and cards `xaml:style` there too, and the host refused the whole vocabulary (`MalformedName`): the plugin did not load. The docs now say it (*Kinds of your own*): bare in `declare()`, `namespace:name` in `node-kind` and `target-kind` |
+| Structural role of a kind | every kind is a `definition` | fits, after a fix | The first build made styles, templates and views `container`s and named elements `leaf`s, reading the role as "holds others". The host reads it as the place in its backbone views: a `container` is a module of the directory tree, whose key must be a `/`-path with a node at every level, and a run with styles in it stopped on "a module whose parent dir is not a module node". Neither the WIT (234–240) nor the docs say what a role means for a node of a plugin's own kind; a declaration inside a file is a `definition` |
+| `symbol_kind` beside a node kind | every symbol keeps the 0.2 `symbol_kind` (`style`, `template`, `resource`, `element`, `view`) and carries its `node-kind` | open | The docs say `symbol_kind` is required (docs 55) and that a symbol with `node-kind` gets its kind and card from the node kind (docs 137), but not whether `symbol_kind` is then ignored. `view` is a referenced core kind: if the host still reads it, the `x:Class` root could become a candidate of references to the C# class again. The docs should say which wins |
+| Which attribute is an event | in a file with `x:Class`, a plain attribute whose value is a C# identifier (not `True`/`False`), whose name does not start with `Is`/`Has` and is not one the plugin reads as a name, is a handler when its name ends like an event (`Click`, `…Changed`, `Loaded`, `…Down`, …) or its value is named like a handler (`OnSave`, `Save_Click`); an `EventSetter` always is | sacrificed (heuristic) | XAML does not mark an event: `Click="OnSave"` and `Content="Save"` are the same syntax, and only the framework's metadata tells them apart. Without `x:Class` a handler cannot compile, so a dictionary is never read for handlers. An event whose name ends otherwise and whose handler is named otherwise is missed |
+| Where a binding reads from | one `data-source` tag per distinct source on the element: `element`, `self`, `templated-parent`, `explicit`, `typed`, `item`, `view` | fits, with a limit | The label set has no word for `RelativeSource FindAncestor` or for an element that sets `DataContext` itself; both are `explicit`, with the `AncestorType` (or the `{x:Static}` source) in the args where the file names it. A `DataContext` set by a binding (`DataContext="{Binding Detail}"`) makes everything under it `explicit`, not a chain |
+| Gesture of a `KeyBinding` | `key-gesture` with the gesture as written as the value (`Ctrl+S`, or `Modifiers+Key`) and the command as written as the one arg | open | The WIT says a tag's `args` are further values "(the modifiers of a key gesture)" (WIT 524–526); in XAML the modifiers are part of the gesture's text, and the command is reported beside the gesture, so this plugin's `args` mean something else than another component's might. A host that reads `args` as modifiers has to know which component the tag came from |
+| `KeyBinding` and `Command=` | an input binding (`KeyBinding`, `MouseBinding`, `CommandBinding`: any element whose name ends in `Binding`) carries no `trigger: control`; a `KeyBinding` carries `key-gesture` | fits | It has `Command=`, but it is no control; a `trigger: control` on it would put a false control row beside the key row. A `MouseBinding`'s gesture is not reported |
+| Literals outside a body | only attributes inside a style's, a template's or the `x:Class` root's body are reported | sacrificed | A literal belongs to a `member-body` (WIT 698), and only styles, templates and views have bodies here. The attributes of other resources (a `sys:String`, a brush) and of a dictionary's own elements have no body to go in. Element text content (`<TextBlock>Save</TextBlock>`) is not reported either: the literal contexts name attribute arguments, not content |
+| Values also read as something else | every attribute value that passes the syntactic rule is a literal, also when the plugin reports it as another record too (`Setter Property="IsBusy"`, `Gesture="Ctrl+S"`, `Value="True"`, `TargetType="local:ViewA"`); only `xmlns`, attributes of the XAML language namespace and values taken for an event handler are left out | fits, with noise | The rule (plan, KTD9) is syntactic, with no list of attribute names, so enumeration values (`Visibility="Collapsed"`), type names and gestures are literals beside what they also are; the host's reading of literals has to live with it |
+| Element names in a body | `element(<name>)` carries the element's type name, qualified by the CLR namespace of a `clr-namespace` prefix (`Acme.Views.ViewA`), as written without prefix under a URI mapping | fits | the host has no `xmlns` map, so a name it can match against a declared type is the one with the namespace |
+| A markup extension the parser cannot take apart | `Text="{Binding Title"` gives no access and no literal; its element carries `unparsed-markup` with the attribute's name as the value | fits, after a fix | The first 0.3 build dropped such a value silently, and a run reported XAML as read in full while a binding was lost. Nothing in the contract says how a body reports a construct it read but could not understand; a tag of the component's own is enough, because the host counts it per file and lowers the state of XAML coverage to "read with unsupported constructs" (`coverage.json`, `markup.unparsed`) |
+
+## Verdict on the architecture
+
+A declarative language fits the plugin model as far as declarations, type references, imports and file
+coverage go: all of that came through 0.2 with no change to the host. What did not fit is the declarative
+graph itself — resources referenced by name, blocks, the kinds that should carry a card, and everything a binding
+says about members. Contract 0.3 adds those as typed records rather than as text, and the plugin now reports all
+of them; the host resolves the references by name and, in a run with the second layer, reads the XAML side of
+it — bindings, static members, attached properties, setters, handlers and triggers become dynamic-call markers on
+the C# members and rows of the registry of triggers. What is left is the literals of attributes, which the host
+stores redacted but reads with no analysis yet, and two places of the contract's wording: one target kind per
+reference (the host widens `xaml:resource` to styles and templates for now) and how `symbol_kind` relates to a
+node kind. The rule over a namespace `qualifier` stays a proposal for the host.

@@ -57,10 +57,20 @@ pub struct Generated {
     /// beside the cards' and the details' (KTD9), paired with its module's
     /// card by path like a detail.
     pub maps: Vec<render::RenderedFile>,
+    /// The registry of triggers, `cards/triggers.md` (plan 2b, U7: KTD10) —
+    /// for a run with `--detail-level`, `None` otherwise. A field of its own,
+    /// like the maps' (KTD9): it pairs with no card, and its one document in
+    /// the manifest is `triggers:index`.
+    pub triggers: Option<render::RenderedFile>,
     /// What the corpus may claim, and over which files (U7/R6/R20). A separate
     /// artifact rather than a sentence in a view, so a consumer deciding whether
     /// an absence claim is licensed reads a file instead of parsing prose.
     pub coverage: coverage::Coverage,
+    /// The second layer (plan 2a, U4): the model of the members' bodies,
+    /// paired with the graph's declarations — for a run with
+    /// `--detail-level`, `None` otherwise. The run analyzed it and put it on
+    /// the C# type cards (U6); the analyses of later steps read it from here.
+    pub bodies: Option<extract::bodies::BodyLayer>,
 }
 
 impl Generated {
@@ -121,6 +131,8 @@ pub fn generate_reporting(
         graph,
         options: extract_options,
         registry,
+        bodies,
+        corpus_extensions,
     } = build_graph(config, progress)?;
     // The one profile flows into BOTH projections, so the corpus and the manifest
     // always agree on the selected view set (KTD-C5).
@@ -138,8 +150,16 @@ pub fn generate_reporting(
     } else {
         None
     };
+    // Which kinds of trigger the second layer covers in which language (plan
+    // 2b, U7–U8: KTD11) — only for a run with it. Read from what the run's
+    // body components declare and from the files they read, before any
+    // projection: the view `entry-points` and the registry both carry it.
+    let trigger_coverage = bodies
+        .as_ref()
+        .map(|layer| card::triggers::coverage(&body_components(layer, &extract_options)));
     progress.phase("render views", None);
-    let mut corpus = render::build_corpus(&graph, config.links, profile)?;
+    let mut corpus =
+        render::build_corpus_with(&graph, config.links, profile, trigger_coverage.as_ref())?;
     progress.phase_done();
     progress.phase("build manifest", None);
     let mut manifest = manifest::build_manifest(&graph, profile)?;
@@ -159,6 +179,22 @@ pub fn generate_reporting(
                 .collect(),
         })
         .collect();
+    // The second layer's own component and level (plan 2a, U4: KTD9) — only
+    // for a run with it, so every other manifest is what it was.
+    if let Some(layer) = &bodies {
+        manifest.detail_level = Some(layer.level());
+        // The run's own plugins are listed already; the component the layer
+        // added is not one of them.
+        for reader in layer.readers().iter().filter(|r| r.component) {
+            manifest.plugins.push(manifest::ManifestPlugin {
+                id: reader.id.clone(),
+                version: reader.version.clone(),
+                sha256: reader.sha256.clone(),
+                origin: plugin::Origin::Bundled.word().to_string(),
+                languages: reader.languages.clone(),
+            });
+        }
+    }
     progress.phase_done();
     progress.phase("render cards", None);
     let (mut card_set, insight, card_rows) = match &layer {
@@ -179,13 +215,101 @@ pub fn generate_reporting(
     } else {
         None
     };
+    // The second layer's analysis, once per run and only for a run with it
+    // (plan 2a, U6): the keywords of the analyzed types' cards first, so
+    // every count read off the cards below sees them. The dynamic-call
+    // markers of step 2c are built in it, before the triggers that read them.
+    let mut analysis = bodies
+        .as_ref()
+        .map(|layer| card::layer2::analyze_run(&graph, layer, config.ambiguity_ceiling));
+    // A diagnostic for measuring a large repository: what the walk back gave,
+    // whether or not it was cut. Never part of the corpus.
+    if let (Some(a), Some(_)) = (&analysis, std::env::var_os("RA_DIAG_WALK")) {
+        eprintln!(
+            "diag walk: transitive_rows={} trigger_occurrences={} rows={} restricted={}",
+            a.walk.transitive_rows, a.walk.occurrences, a.walk.rows, a.walk.nearest
+        );
+    }
+    if let Some(analysis) = &analysis {
+        card::add_layer2_keywords(&mut card_set, &insight, analysis);
+    }
+    // The run's state of XAML coverage (plan 2c, U8: R19, KTD12): from the
+    // plugins that claim XAML, the files they failed on and the second
+    // layer, before any card renders — the analyzed types' `## Dynamic
+    // access` and the XAML documents end in it; coverage carries it.
+    //
+    // A plugin counts only when the corpus holds a file it claims — the same
+    // test that decides whether it declares its kinds: with no XAML file in
+    // the corpus, the run is what it was without the plugin.
+    let present: std::collections::BTreeSet<String> = extract_options
+        .plugins
+        .iter()
+        .filter(|p| p.claims_any(&corpus_extensions))
+        .map(|p| p.id().to_string())
+        .collect();
+    let markup_plugins: Vec<String> = extract_options
+        .plugins
+        .iter()
+        .filter(|p| {
+            p.manifest()
+                .languages
+                .iter()
+                .any(|l| l.name == coverage::MARKUP_LANGUAGE)
+        })
+        .filter(|p| present.contains(p.id()))
+        .map(|p| p.id().to_string())
+        .collect();
+    let markup = coverage::markup(
+        &graph,
+        registry.languages(),
+        &markup_plugins,
+        bodies.as_ref(),
+        analysis.as_ref().map(|a| a.dynamic.site_counts()),
+        analysis.as_ref().map_or(&[][..], |a| a.dynamic.unparsed()),
+    );
+    if let (Some(analysis), Some(markup)) = (&mut analysis, &markup) {
+        analysis.set_markup_state(markup.state);
+    }
     // Built once and shared: the card renderer and the signpost (below) both
     // need a CardIndex, and building it is an O(n) clone-into-a-map over the
     // full card set — not free to repeat at real-repository scale.
     let card_index = card::links::CardIndex::build(&card_set);
-    let cards = card::render_card_files(&card_set, &card_index, lang, config.links);
+    let run = match (&bodies, &analysis) {
+        (Some(layer), Some(analysis)) => Some(card::Layer2Run {
+            level: layer.level(),
+            bodies: layer,
+            analysis,
+        }),
+        _ => None,
+    };
+    let mut cards =
+        card::render_card_files_layered(&card_set, &card_index, lang, config.links, run.as_ref());
+    // The documents of XAML files (plan 2c, U8): their unresolved references,
+    // and with the second layer the state of XAML coverage and the
+    // references from C# — before the manifest and the sizes read the cards.
+    card::render::add_markup_documents(
+        &mut cards,
+        &card_set,
+        &graph,
+        analysis
+            .as_ref()
+            .zip(markup.as_ref())
+            .map(|(a, m)| (&a.dynamic, m.state)),
+        lang,
+    );
     let details = card::detail::render_detail_files(&card_set, &card_index, lang, config.links);
     let maps = card::map::render_map_files(&card_set, &card_index, lang, config.links);
+    // The registry of triggers (plan 2b, U7): with the second layer only,
+    // and then always — the cards and the view `entry-points` link it.
+    let triggers = match (&analysis, trigger_coverage) {
+        (Some(analysis), Some(coverage)) => Some(card::triggers::render_registry(
+            &card::triggers::Registry::of(analysis, coverage),
+            &card_index,
+            lang,
+            config.links,
+        )),
+        _ => None,
+    };
     // Appends the corpus signpost (U10/R12) to index.md's own RenderedFile —
     // a module list plus a curated "most-referenced types" highlight, built
     // from the same card set rather than walking the graph a second time.
@@ -231,6 +355,11 @@ pub fn generate_reporting(
         .extend(card::documents::manifest_documents(
             &card_set, &cards, &maps, &details, lang,
         ));
+    if let Some(file) = &triggers {
+        manifest
+            .documents
+            .push(card::documents::triggers_document(file));
+    }
     card::index::prepend_start_here(
         &mut corpus,
         &[
@@ -273,6 +402,27 @@ pub fn generate_reporting(
     // The card levels are counted over what was rendered (plan B, U12), the
     // way the card noise is counted by the layer that built it.
     coverage.cards = Some(coverage::card_levels(&card_set, &cards, &details, &maps));
+    // The plugins that could read bodies, by the same rule as the state of
+    // XAML above: a plugin with no file in the corpus is as absent as it is
+    // from the vocabulary, so the list names the run's plugins that claim a
+    // file of the corpus, and the body component.
+    coverage.bodies = bodies.as_ref().map(|layer| {
+        let mut section = coverage::bodies(layer);
+        let component: std::collections::BTreeSet<&str> = layer
+            .readers()
+            .iter()
+            .filter(|r| r.component)
+            .map(|r| r.id.as_str())
+            .collect();
+        section
+            .plugins
+            .retain(|id| present.contains(id) || component.contains(id.as_str()));
+        section.restricted_walk = analysis
+            .as_ref()
+            .and_then(|a| coverage::RestrictedWalk::of(&a.walk));
+        section
+    });
+    coverage.markup = markup;
     progress.phase_done();
     Ok(Generated {
         graph,
@@ -281,8 +431,39 @@ pub fn generate_reporting(
         cards,
         details,
         maps,
+        triggers,
         coverage,
+        bodies,
     })
+}
+
+/// The run's body components as the line of trigger coverage reads them
+/// (plan 2b, U7: KTD11): the languages each claims, what its `describe`
+/// says it emits, and whether it read a file. The bundled body component is
+/// no plugin of the run, so its declaration is read from the bundle.
+fn body_components(
+    layer: &extract::bodies::BodyLayer,
+    options: &extract::ExtractOptions,
+) -> Vec<card::triggers::BodyComponent> {
+    let read: std::collections::BTreeSet<&str> =
+        layer.files().map(|(_, f)| f.plugin.as_str()).collect();
+    layer
+        .readers()
+        .iter()
+        .map(|r| {
+            let plugin = options.plugins.iter().find(|p| p.id() == r.id).or_else(|| {
+                (r.component && plugin::bundled::csharp_body().id() == r.id)
+                    .then(plugin::bundled::csharp_body)
+            });
+            card::triggers::BodyComponent {
+                languages: r.languages.clone(),
+                emits: plugin
+                    .map(|p| p.manifest().emits.clone())
+                    .unwrap_or_default(),
+                read: read.contains(r.id.as_str()),
+            }
+        })
+        .collect()
 }
 
 /// The graph one run builds, with what built it — everything the projections,
@@ -295,6 +476,13 @@ pub struct Built {
     /// names the component behind each file's usage sites.
     pub options: extract::ExtractOptions,
     pub registry: extract::Registry,
+    /// The second layer, for a run with `--detail-level` (plan 2a, U4).
+    pub bodies: Option<extract::bodies::BodyLayer>,
+    /// The text after the last dot of every tracked path, read once: whether
+    /// the corpus holds a file a plugin claims
+    /// ([`plugin::Plugin::claims_any`]) decides whether the plugin declares
+    /// its kinds and whether it counts for XAML coverage.
+    pub corpus_extensions: std::collections::BTreeSet<String>,
 }
 
 /// Open the repository and build its merged fact graph from `config`: the
@@ -313,9 +501,24 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     // reason, not halfway through the walk. Their kinds are declared next, so
     // the cache below and every extractor read one vocabulary (U19).
     let plugins = plugin::PluginSet::with_declared(&config.plugins)?;
-    plugins.declare_vocabularies(&mut graph)?;
+    let corpus_extensions: std::collections::BTreeSet<String> = repo
+        .tracked_files()?
+        .iter()
+        .filter_map(|key| key.rsplit_once('.').map(|(_, ext)| ext.to_string()))
+        .collect();
+    plugins.declare_vocabularies(&mut graph, &corpus_extensions)?;
+    // The second layer (plan 2a, U4: KTD7): only a run with a detail level
+    // loads the body component, and only such a run records it among the
+    // languages — after the first layer's plugins, so no extension changes
+    // hands. It stays out of `plugins`, which the cache fingerprint names.
+    let body_pass = config
+        .detail_level
+        .map(|level| extract::bodies::BodyPass::new(level, &plugins));
     let mut languages = extract::languages::Languages::bundled();
     plugins.register_languages(&mut languages);
+    if let Some(pass) = &body_pass {
+        plugins.register_body_languages(&mut languages, pass.component());
+    }
     let extract_options = extract::ExtractOptions {
         ambiguity_ceiling: config.ambiguity_ceiling,
         secret_prefixes: config.secret_prefixes.clone(),
@@ -373,13 +576,31 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
                 graph.vocabulary().clone(),
             )
         });
-    extract::run_all_with_cached(
+    // The declaration-name positions, kept past the usage pass only for the
+    // second layer's pairing.
+    let names = body_pass.as_ref().map(|_| extract::NamesHandoff::default());
+    extract::run_all_handing_names(
         &repo,
         &mut graph,
         &extract_options,
         progress,
         cache.as_ref(),
+        names.as_ref(),
     )?;
+    // After every first-layer extractor, before the merge sorts the facts
+    // its failures add (KTD8).
+    let bodies = match (&body_pass, &names) {
+        (Some(pass), Some(names)) => Some(extract::bodies::run(
+            pass,
+            &repo,
+            &mut graph,
+            &names.take(),
+            &extract::external::SecretPrefixes::new(&config.secret_prefixes),
+            cache.as_ref(),
+            progress,
+        )?),
+        _ => None,
+    };
     // Merge unifies facts from every extractor before either projection reads
     // the graph (KTD-B5): additive kinds union, scalar conflicts resolve by
     // trust-rank with losers preserved as dissent. `generate` supplies the
@@ -392,5 +613,7 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
         graph,
         options: extract_options,
         registry,
+        bodies,
+        corpus_extensions,
     })
 }

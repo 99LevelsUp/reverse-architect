@@ -1,0 +1,21 @@
+{
+  "model": "fake-model-1",
+  "odpovedi": [
+    {
+      "castecne": false,
+      "citace": "ViewA zobrazuje seznam položek.",
+      "stitek": "VYJADRUJE"
+    },
+    {
+      "castecne": false,
+      "citace": "ViewA zobrazuje seznam položek.",
+      "stitek": "VYJADRUJE"
+    },
+    {
+      "castecne": false,
+      "citace": null,
+      "stitek": "NEVYJADRUJE"
+    }
+  ],
+  "smoke": "ok"
+}

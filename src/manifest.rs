@@ -120,7 +120,9 @@ use std::collections::BTreeMap;
 /// The same holds for the kinds of plan B, U5 (`enum_decision`,
 /// `enum_decisions_unmatched`): core kinds of the graph, never in a v10
 /// manifest — the decisions' projection is the enum's detail and the count's
-/// is coverage.
+/// is coverage. So does the second layer's `body_extraction_failed` (plan 2a,
+/// U4), written only by a run with `--detail-level`: detail-only, its
+/// projection is coverage.
 /// From plan B, U11 the `documents` describe the three levels of the card
 /// corpus (KTD9, R4, R16), so each channel picks what it indexes. Two new
 /// document kinds: `map`, one per module map, id `map:<module key>`, and
@@ -228,6 +230,13 @@ pub struct Manifest {
     /// manifest is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<ManifestPlugin>,
+    /// The second layer's detail level, for a corpus built with
+    /// `--detail-level` (plan 2a, U4: KTD7). Its plugins are in `plugins`
+    /// beside the first layer's — the body component among them. Absent for
+    /// every other corpus, which is then byte for byte what it was; additive
+    /// and without a version bump, like `plugins`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_level: Option<u8>,
     /// Every repeated long string in the artifact, written once.
     ///
     /// Node keys and source paths are the two things this export says over and
@@ -361,15 +370,20 @@ pub struct ManifestCardKind {
 pub struct ManifestDoc {
     pub id: String,
     /// `card:type`, `card:file`, `card:module`, `card:<declared kind>`,
-    /// `card:detail`, `map` or `page`; absent on a view (v8, v10).
+    /// `card:detail`, `map`, `triggers` or `page`; absent on a view (v8,
+    /// v10). `triggers` is the registry of triggers of a run with the second
+    /// layer (plan 2b, U7: KTD10), id `triggers:index`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Which level of the card corpus the document is (plan B, U11): `map`,
-    /// `card` or `detail`. Absent on a view and a page.
+    /// `card` or `detail`. Absent on a view and a page. The registry of
+    /// triggers is at `map` too — the level above the cards — though it maps
+    /// no module.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<String>,
     /// The id of the document one level up: a detail's card, a map's module
-    /// card, a type card's map. See [`SCHEMA_VERSION`], v10.
+    /// card, a type card's map — never the registry of triggers, which has
+    /// nothing above it. See [`SCHEMA_VERSION`], v10.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// `false` on a document a vector index should leave out — every detail
@@ -377,7 +391,9 @@ pub struct ManifestDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<bool>,
     /// The context header of the entity a card, a detail or a map is about
-    /// (plan B, R4). Absent on a view and a page.
+    /// (plan B, R4). Absent on a view, a page and the registry of triggers,
+    /// which is about no one entity (plan 2b, KTD10): every document with a
+    /// `level` but that one carries it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub header: Option<ManifestHeader>,
     pub title: String,
@@ -653,6 +669,7 @@ pub fn build_manifest(
         schema_version,
         vocabulary,
         plugins: Vec::new(),
+        detail_level: None,
         strings: strings.into_table(),
         documents,
         nodes,

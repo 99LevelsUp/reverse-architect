@@ -1,0 +1,34 @@
+# A reverse-architect language plugin for XAML, built the way a third party
+# would build one: outside the host's and the bundled plugins' build graph,
+# against nothing but the published contract in `wit-v3/` (`ra:plugin@0.3.0`).
+#
+#   rustup target add wasm32-wasip2
+#   cargo build --release --target wasm32-wasip2
+#   reverse-architect <repo> --plugin target/wasm32-wasip2/release/plugin_xaml.wasm
+#
+# Pure Rust (quick-xml), so no C toolchain and no wasi-sdk is needed.
+[package]
+name = "plugin-xaml"
+version = "0.2.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "reverse-architect language plugin: styles, templates, resources, named template parts, merged dictionaries, references by name and the bodies of templates and views in XAML."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wit-bindgen = "=0.51.0"
+quick-xml = "=0.41.0"
+
+# Its own workspace: nothing here is shared with the repository's crates.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+debug = false
+panic = "abort"

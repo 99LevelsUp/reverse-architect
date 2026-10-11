@@ -5,8 +5,8 @@ later fix commit and a two-case catalog over it. `config()` returns an
 `ExperimentConfig` whose every path lies inside the temporary directory.
 
 Transcript builders produce Claude Code stream-json lines for the scripted
-adapter: a correct tool check, an answer after some reads, a run that reads
-outside the tree, an API login failure.
+adapter: a correct tool check, an answer after some reads, a free answer to a
+question, a run that reads outside the tree, an API login failure.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from typing import Any, Mapping, Sequence
 
 from agents.base import Cap, RunRequest
 from agents.scripted import ScriptedAdapter, ScriptedRun
+from catalog import confirmation_fingerprint
 from preflight import OUTSIDE_LABEL, PREFLIGHT_TITLE
 from run import ExperimentConfig, VariantSpec
 from tests.test_prepare import commit_all, git, write
@@ -45,6 +46,7 @@ ROUNDING = """public static class Rounding
 CASE_A_PROMPT = "Zákazník A hlásí: po uložení záznamu se zobrazí chyba v plánovaných úlohách."
 CASE_B_PROMPT = "Firma X hlásí: zaokrouhlený součet v přehledu nesouhlasí."
 CASE_A_FILE, CASE_A_MEMBER = "Src/Placeholder/LoadAction.cs", "LoadAction.SetScheduledTasksInvalid"
+QUESTION_ID, QUESTION_TEXT = "ukazka-otazka", "Ukázková otázka?"
 CASE_B_FILE, CASE_B_MEMBER = "Src/Placeholder/Rounding.cs", "Rounding.Apply(+1)"
 USAGE = (10, 200, 300, 40)
 
@@ -113,6 +115,7 @@ class Experiment:
             data = {"format_version": 1, "base_revision": self.base, "cases": all_cases[:cases]}
             self.case_prompts = {c["id"]: c["prompt"] for c in data["cases"]}
         self.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.question_prompts: dict[str, str] = {}
         self.output = self.root / "out"
         self.export = self.root / "export"
         self.isolation = self.root / "iso"
@@ -133,29 +136,65 @@ class Experiment:
 
     # -- variants ---------------------------------------------------------------
 
-    def corpus_variant(self, name: str, corpus: str,
-                       ra_options: Sequence[str] = ()) -> VariantSpec:
+    def corpus_variant(self, name: str, corpus: str, ra_options: Sequence[str] = (),
+                       ra_command: Sequence[str] | None = None) -> VariantSpec:
         """A variant with its own corpus directory under the temporary root."""
-        return VariantSpec(name, corpus_dir=self.root / corpus, ra_options=tuple(ra_options))
+        return VariantSpec(name, corpus_dir=self.root / corpus, ra_options=tuple(ra_options),
+                           ra_command=tuple(ra_command) if ra_command is not None else None)
+
+    def other_ra(self, label: str) -> tuple[str, ...]:
+        """The command of the fake RA playing another version of RA."""
+        return (*FAKE_RA, "--ra-version", label)
+
+    @property
+    def support_workdir(self) -> Path:
+        """The empty work directory of the support role (a sibling of the export)."""
+        return self.export.with_name(self.export.name + "-podpora-prazdny")
+
+    def support_variants(self) -> tuple[VariantSpec, VariantSpec]:
+        """Two corpora, the pair the support role needs."""
+        return (self.corpus_variant("korpus A", "corpus-a"),
+                self.corpus_variant("korpus B", "corpus-b", ["--marker-b"]))
+
+    def add_questions(self, bugs: bool = True, line: int = 4) -> None:
+        """Make the catalog a format 2 one with a question (and the bugs, unless `bugs` is off).
+
+        `line` is the line of the question's one fact in `LoadAction.Reload`."""
+        data = json.loads(self.catalog.read_text(encoding="utf-8"))
+        kept = [dict(c, druh="chyba") for c in data["cases"]] if bugs else []
+        facts = [{"id": "f1", "text": "Ukázkový fakt.", "role": "misto",
+                  "mista": [{"soubor": CASE_A_FILE, "clen": "LoadAction.Reload", "radky": line}]}]
+        question = {"druh": "otazka", "id": QUESTION_ID, "dotaz": QUESTION_TEXT,
+                    "ramcova_odpoved": "Ukázková odpověď.", "commit": self.base,
+                    "fakta_potvrzena": True, "pseudonymizace_potvrzena": True,
+                    "kontrolni": False, "fakta": facts, "zakazana_tvrzeni": [],
+                    "otisk_potvrzeni": confirmation_fingerprint(facts, [])}
+        data.update(format_version=2, cases=[*kept[:1], question, *kept[1:]])
+        self.catalog.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        self.question_prompts = {QUESTION_ID: QUESTION_TEXT}
 
     def default_variants(self) -> tuple[VariantSpec, VariantSpec]:
         return (VariantSpec("bez karet"), self.corpus_variant("s kartami", "corpus"))
 
     def config(self, variants: Sequence[VariantSpec] | None = None, seed: int = 7,
                cap: Cap = Cap(seconds=600, steps=50, tokens=100_000),
-               **overrides: Any) -> ExperimentConfig:
+               role: str = "vyvojar", **overrides: Any) -> ExperimentConfig:
         config = ExperimentConfig(
             catalog_path=self.catalog, source_repo=self.repo, output_root=self.output,
             export_dir=self.export, isolation_root=self.isolation, ra_command=FAKE_RA,
             model="model-test", cap=cap, seed=seed,
-            variants=tuple(variants or self.default_variants()),
+            variants=tuple(variants or self.default_variants()), role=role,
             credentials=self.credentials)
         return replace(config, **overrides)
 
     def case_of(self, request: RunRequest) -> str:
-        """Which catalog case a run prompt is for."""
-        return next(case_id for case_id, prompt in self.case_prompts.items()
+        """Which catalog item (case or question) a run prompt is for."""
+        return next(item_id for item_id, prompt in
+                    {**self.case_prompts, **self.question_prompts}.items()
                     if prompt in request.prompt)
+
+    def is_question(self, request: RunRequest) -> bool:
+        return self.case_of(request) in self.question_prompts
 
     def scripted(self, script) -> ScriptedAdapter:
         return ScriptedAdapter(script, self.isolation,
@@ -224,6 +263,22 @@ def answer_run(file: str, member: str, *, reads: Sequence[str] = (),
                   tool_result(f"t{index}", read_text)]
     lines += [assistant("final", [{"type": "text", "text": answer_block(file, member)}], usage),
               result(usage)]
+    return ScriptedRun(tuple(lines), wall_seconds=wall_seconds)
+
+
+FREE_ANSWER = ("Metoda `LoadAction.Reload` zavolá `Src/Placeholder/LoadAction.cs:4` a nic jiného "
+               "neudělá.")
+
+
+def free_answer_run(text: str = FREE_ANSWER, *, reads: Sequence[str] = (),
+                    usage: Sequence[int | None] = USAGE, read_text: str = "obsah",
+                    wall_seconds: float = 1.0) -> ScriptedRun:
+    """A run that reads `reads`, then answers a question in free text (no JSON block)."""
+    lines = [init(["Glob", "Grep", "Read"])]
+    for index, path in enumerate(reads):
+        lines += [assistant(f"m{index}", [read(f"t{index}", path)], usage),
+                  tool_result(f"t{index}", read_text)]
+    lines += [assistant("final", [{"type": "text", "text": text}], usage), result(usage)]
     return ScriptedRun(tuple(lines), wall_seconds=wall_seconds)
 
 

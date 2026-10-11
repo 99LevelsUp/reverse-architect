@@ -26,15 +26,17 @@ Modes:
                           kills it; no result event)
   auto <mode> [arg ...]   answer a tool-check prompt as `preflight good`,
                           any other prompt as <mode> (spew, tokens, answer,
-                          call, stash)
+                          free, call, stash)
   answer <file> <member>  read nothing, answer with that location and exit 0
+  free <text>             read nothing, answer a question with that free text (no
+                          JSON block) and exit 0
   call <tool> <file> <member>
                           call <tool> once, then answer like `answer`
   stash <file> <member>   write the prompt into the temp, cache and
                           configuration directories (as a CLI's own session
                           files would), then answer like `answer`
 
-The modes answer, call and stash start with the init event Claude Code would
+The modes answer, free, call and stash start with the init event Claude Code would
 emit for the given options (see `init_event`).
 """
 import json
@@ -174,6 +176,13 @@ def answer(file, member):
     return 0
 
 
+def free_answer(text):
+    """Answer a question: the text is the whole message, no JSON block (KTD10)."""
+    emit(assistant("msg_final", [{"type": "text", "text": text}], USAGE))
+    emit(result(USAGE))
+    return 0
+
+
 def stash(prompt):
     """Leave the prompt where a CLI keeps session state: temp, cache, configuration."""
     for variable, sub in (("TMPDIR", ""), ("XDG_CACHE_HOME", "fake-cli"),
@@ -193,10 +202,12 @@ def main(argv, prompt=None):
         if PREFLIGHT_TITLE in prompt:
             return preflight(argv, prompt, "good")
         return main([argv[0], *argv[2:]], prompt)
-    if mode in ("answer", "call", "stash"):
+    if mode in ("answer", "free", "call", "stash"):
         emit(init_event(argv))
     if mode == "answer":
         return answer(argv[2], argv[3])
+    if mode == "free":
+        return free_answer(argv[2])
     if mode == "call":
         emit(assistant("msg_call", [{"type": "tool_use", "id": "t_call", "name": argv[2],
                                      "input": {"title": "kontrola"}}], USAGE))

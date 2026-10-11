@@ -1,0 +1,15 @@
+{
+  "schema_version": 6,
+  "repo_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "files": [
+    {
+      "path": "src/Acme/Views/EditorView.cs"
+    },
+    {
+      "path": "src/Acme/Views/EditorViewModel.cs"
+    },
+    {
+      "path": "src/Acme/Views/TwoViews.cs"
+    }
+  ]
+}

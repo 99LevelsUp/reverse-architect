@@ -647,6 +647,13 @@ impl Insight {
         self.keywords.keywords(unit)
     }
 
+    /// [`Self::keywords`] with the words the second layer brings to the unit,
+    /// weighed by the first layer's document frequencies (plan 2a, U6: KTD9
+    /// point 4) — see [`KeywordIndex::keywords_with`].
+    pub fn keywords_with(&self, unit: &str, extra: &super::keywords::UnitWords) -> Vec<Keyword> {
+        self.keywords.keywords_with(unit, extra)
+    }
+
     /// Every database object the unit and its members reach, once per way
     /// they reach it, ordered by access and then by object (plan B, U7).
     pub fn db_accesses(&self, unit: &str) -> impl Iterator<Item = (DbAccessKind, &str)> {

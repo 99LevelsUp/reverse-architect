@@ -27,10 +27,13 @@ function Build($package, $feature, $artifact) {
 }
 
 Build "probe" $null "probe"
+Build "probe3" $null "probe3"
 # One component per language family, named after its plugin id.
 foreach ($lang in "rust", "ecmascript", "python", "csharp", "go", "java") {
   Build "treesitter" $lang $lang
 }
+# The bodies of C# members (contract 0.3): the same crate, its own component.
+Build "treesitter" "csharp-body" "csharp-body"
 # Built like a third party's plugin: its own workspace, the published WIT only.
 if ($Only.Count -eq 0 -or $Only -contains "sql") {
   Push-Location "$PSScriptRoot\..\examples\plugin-sql"
@@ -38,6 +41,14 @@ if ($Only.Count -eq 0 -or $Only -contains "sql") {
   if ($LASTEXITCODE -ne 0) { Pop-Location; throw "build of sql failed" }
   Pop-Location
   Copy-Item "$PSScriptRoot\..\examples\plugin-sql\target\wasm32-wasip2\release\plugin_sql.wasm" "prebuilt\sql.wasm" -Force
+}
+
+if ($Only.Count -eq 0 -or $Only -contains "xaml") {
+  Push-Location "$PSScriptRoot\..\examples\plugin-xaml"
+  & cargo build --release --target wasm32-wasip2
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "build of xaml failed" }
+  Pop-Location
+  Copy-Item "$PSScriptRoot\..\examples\plugin-xaml\target\wasm32-wasip2\release\plugin_xaml.wasm" "prebuilt\xaml.wasm" -Force
 }
 
 $sums = @()

@@ -7,8 +7,11 @@
 //! projection of it. These tests assert over every artifact a run writes.
 
 mod common;
+#[path = "common/coverage_line.rs"]
+mod coverage_line;
 
 use common::init_repo_with_files;
+use coverage_line::without_coverage_line;
 use reverse_architect::config::{Config, DEFAULT_AMBIGUITY_CEILING};
 use reverse_architect::render::RenderedFile;
 use reverse_architect::{card, cli::LinkStyle, coverage, generate, manifest, Generated};
@@ -76,16 +79,26 @@ fn config_for(repo: &Path, out: &Path) -> Config {
         model_verification: false,
         model_purpose: false,
         trace_over_ceiling: false,
+        detail_level: None,
     }
 }
 
 /// Every rendered artifact of one run, as (label, contents).
 fn all_artifacts(repo: &Path, out: &Path) -> Vec<(String, String)> {
-    artifacts_of(&generate(&config_for(repo, out)).expect("the pipeline runs"))
+    artifacts_of(
+        &generate(&config_for(repo, out)).expect("the pipeline runs"),
+        out,
+    )
 }
 
-/// Every rendered artifact of `generated`, as (label, contents).
-fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
+/// Where a run into `out` keeps the second layer's model of bodies (plan 2a,
+/// KTD8): one record per file, stored before anything else reads it.
+const BODY_RECORDS: &str = ".ra-cache/languages-bodies";
+
+/// Every rendered artifact of `generated`, written into `out`, as (label,
+/// contents) — and every record of the second layer under `out`, the one
+/// surface a body's text reaches before any later unit renders it.
+fn artifacts_of(generated: &Generated, out: &Path) -> Vec<(String, String)> {
     let mut artifacts: Vec<(String, String)> = Vec::new();
     for file in &generated.corpus.files {
         artifacts.push((format!("view {}", file.path), file.contents.clone()));
@@ -101,6 +114,11 @@ fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
     // A type's row with its purpose and its database accesses (plan B, U10).
     for file in &generated.maps {
         artifacts.push((format!("map {}", file.path), file.contents.clone()));
+    }
+    // The registry of triggers of a run with the second layer (plan 2b, U7):
+    // a key, a menu item's label and an event's name reach it from the code.
+    if let Some(file) = &generated.triggers {
+        artifacts.push((format!("registry {}", file.path), file.contents.clone()));
     }
     artifacts.push((
         "manifest.json".to_string(),
@@ -128,29 +146,525 @@ fn artifacts_of(generated: &Generated) -> Vec<(String, String)> {
         "coverage.json".to_string(),
         coverage::to_json(&generated.coverage),
     ));
+    if let Ok(entries) = std::fs::read_dir(out.join(BODY_RECORDS)) {
+        let mut records: Vec<std::path::PathBuf> = entries.map(|e| e.unwrap().path()).collect();
+        records.sort();
+        for path in records {
+            let bytes = std::fs::read(&path).unwrap();
+            artifacts.push((
+                format!("record {}", path.file_name().unwrap().to_string_lossy()),
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+        }
+    }
     artifacts
 }
 
+/// What plants one fixture into a repository directory.
+type Plant = fn(&Path);
+
+/// Every fixture of this file, by name: the gate below sweeps them all.
+const FIXTURES: [(&str, Plant); 4] = [
+    ("base", fixture),
+    ("anchors", anchor_fixture),
+    ("area b", b_fixture),
+    ("bodies", body_fixture),
+];
+
+/// The levels a run is swept at: without the second layer, and with it.
+const LEVELS: [Option<u8>; 2] = [None, Some(2)];
+
+/// R22 over every fixture of this file, with the second layer and without
+/// it: no secret of any of them reaches an artifact or a record of a body
+/// (plan 2a, KTD16).
 #[test]
 fn no_secret_value_reaches_any_artifact_of_a_run() {
+    for (name, plant) in FIXTURES {
+        for level in LEVELS {
+            let repo = tempfile::tempdir().unwrap();
+            let out = tempfile::tempdir().unwrap();
+            plant(repo.path());
+            let config = Config {
+                detail_level: level,
+                ..b_config(repo.path(), out.path())
+            };
+            let generated = generate(&config).expect("the pipeline runs");
+            let artifacts = artifacts_of(&generated, out.path());
+            assert!(
+                artifacts.len() > 5,
+                "the fixture must produce a real corpus, saw {}",
+                artifacts.len()
+            );
+            let records: Vec<&str> = artifacts
+                .iter()
+                .filter(|(label, _)| label.starts_with("record "))
+                .map(|(_, contents)| contents.as_str())
+                .collect();
+            assert_eq!(
+                records.is_empty(),
+                level.is_none(),
+                "{name}: a run with the second layer stores its bodies, one without none"
+            );
+            assert_eq!(
+                artifacts
+                    .iter()
+                    .any(|(label, _)| label.starts_with("registry ")),
+                level.is_some(),
+                "{name}: the registry of triggers is swept with the second layer"
+            );
+            for (label, contents) in &artifacts {
+                assert_no_b_secret(&format!("{label} ({name}, level {level:?})"), contents);
+            }
+            // Over-redaction is the failure direction, but not this far: the
+            // messages support searches for stay in the model (AE5).
+            if name == "area b" && level.is_some() {
+                assert!(
+                    records
+                        .iter()
+                        .any(|r| MESSAGES.iter().all(|m| r.contains(m))),
+                    "the messages stay in the record of their body: {records:#?}"
+                );
+            }
+        }
+    }
+}
+
+// ---- The bodies of the second layer (plan 2a, U8: KTD16) ----
+
+/// The secret values the bodies fixture carries: compared with a name that
+/// says what the value is, a provider token given to a field whose name says
+/// it and one an attribute's argument is, and a comment inside a condition
+/// and after a call. The field's value has a shape of its own: a value only
+/// its name names reaches the first layer's signature of the field, which
+/// this unit leaves as it is (the second layer withholds it, see the unit
+/// tests of `extract::bodies`).
+const BODY_SECRETS: &[&str] = &[
+    "brindlecairn",
+    "ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1",
+    "ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5",
+    "hollyquartz",
+    "ghp_Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5Lq4",
+];
+
+/// A body for every shape of [`BODY_SECRETS`]; a name with a character of
+/// two bytes stands before the compared literal on its line (that the
+/// pairing counts columns in characters is shown by the unit tests of
+/// `extract::bodies`).
+const GATE_CS: &str = "namespace Orbit.Gate\n\
+{\n\
+\x20   public class Gate\n\
+\x20   {\n\
+\x20       private const string SmtpPassword = \"ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1\";\n\
+\x20       [DefaultValue(\"ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5\")]\n\
+\x20       public string Mode { get; set; }\n\
+\x20       public bool Check(string token, string žeton)\n\
+\x20       {\n\
+\x20           if (žeton == \"plain\" || token == \"brindlecairn\") { return true; }\n\
+\x20           if (GetResourceString(\"k\") /* heslo: hollyquartz */ == null) { return false; }\n\
+\x20           return GetResourceString(\"k\") /* heslo: hollyquartz */ != null;\n\
+\x20       }\n\
+\x20       public string GetResourceString(string key) { return key; }\n\
+\x20       public void Admit(string token, string mode)\n\
+\x20       {\n\
+\x20           if (token == \"ghp_Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5Lq4\") { Grant(); }\n\
+\x20           if (mode == \"plain\") { Deny(); }\n\
+\x20       }\n\
+\x20       void Grant() { }\n\
+\x20       void Deny() { }\n\
+\x20   }\n\
+}\n";
+
+/// The base fixture plus the bodies file.
+fn body_fixture(dir: &Path) {
+    let mut files = BASE_FILES.to_vec();
+    files.push(("src/Gate.cs", GATE_CS));
+    init_repo_with_files(dir, "Alice", &files);
+}
+
+/// The second layer read the bodies fixture — the compared literal that is
+/// no secret is in its record — and withheld every secret of it there.
+#[test]
+fn a_body_keeps_its_plain_literals_and_withholds_its_secrets_in_the_record() {
     let repo = tempfile::tempdir().unwrap();
     let out = tempfile::tempdir().unwrap();
-    fixture(repo.path());
+    body_fixture(repo.path());
+    let config = Config {
+        detail_level: Some(2),
+        ..b_config(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let records: Vec<(String, String)> = artifacts_of(&generated, out.path())
+        .into_iter()
+        .filter(|(label, _)| label.starts_with("record "))
+        .collect();
+    let gate = records
+        .iter()
+        .map(|(_, r)| r)
+        .find(|r| r.contains("\"path\":\"src/Gate.cs\""))
+        .unwrap_or_else(|| panic!("a record of the bodies file: {records:#?}"));
+    assert!(gate.contains("\"value\":\"plain\""), "{gate}");
+    assert!(gate.contains(REDACTION_MARKER), "{gate}");
+    for secret in BODY_SECRETS {
+        assert!(
+            !gate.contains(secret),
+            "`{secret}` is in the record: {gate}"
+        );
+    }
+}
 
-    let artifacts = all_artifacts(repo.path(), out.path());
-    assert!(
-        artifacts.len() > 5,
-        "the fixture must produce a real corpus, saw {}",
-        artifacts.len()
+/// A key-shaped word in the comment after a call argument — the label of a
+/// menu item — is cut the way the first layer cuts it in any comment
+/// (`long token`): the quote is withheld whole, in the record of the body,
+/// on the card and in the manifest.
+#[test]
+fn a_long_token_in_a_label_comment_is_withheld_in_the_record_and_on_the_card() {
+    const TOKEN: &str = "9f2b8c1d4e5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c";
+    let view = format!(
+        "namespace Acme.Menus\n\
+{{\n\
+\x20   public class MenuView\n\
+\x20   {{\n\
+\x20       private ContextMenu menu;\n\
+\x20       public string GetResourceString(string key) {{ return key; }}\n\
+\x20       void BuildMenu()\n\
+\x20       {{\n\
+\x20           ContextMenuItem f4 = new ContextMenuItem();\n\
+\x20           f4.Header = GetResourceString(\"k\") /* {TOKEN} */;\n\
+\x20           f4.Command = CheckCommand;\n\
+\x20           menu.Items.Add(f4);\n\
+\x20       }}\n\
+\x20       public RelayCommand CheckCommand => new RelayCommand(p => Check());\n\
+\x20       public void Check() {{ }}\n\
+\x20   }}\n\
+}}\n"
     );
-
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(repo.path(), "Alice", &[("src/Menus.cs", &view)]);
+    let config = Config {
+        detail_level: Some(2),
+        ..config_for(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let artifacts = artifacts_of(&generated, out.path());
     for (label, contents) in &artifacts {
-        for secret in SECRETS {
-            assert!(
-                !contents.contains(secret),
-                "R22: `{secret}` leaked into {label}"
-            );
+        assert!(
+            !contents.contains(TOKEN),
+            "the token is in {label}: {contents}"
+        );
+    }
+    let record = artifacts
+        .iter()
+        .find(|(label, contents)| {
+            label.starts_with("record ") && contents.contains("\"path\":\"src/Menus.cs\"")
+        })
+        .map(|(_, contents)| contents)
+        .unwrap_or_else(|| panic!("a record of the menu file"));
+    assert!(
+        record.contains("[redacted: long token"),
+        "the quote is withheld, not dropped: {record}"
+    );
+    let card = generated
+        .cards
+        .iter()
+        .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("\n# MenuView\n"))
+        .unwrap_or_else(|| panic!("the card of MenuView"));
+    let item = card
+        .contents
+        .lines()
+        .find(|l| l.starts_with("- Menu item `f4`"))
+        .unwrap_or_else(|| panic!("no menu item f4:\n{}", card.contents));
+    assert!(item.contains("[redacted: long token"), "{item}");
+}
+
+/// The card of the type `Gate` of the bodies fixture, from a run at `level`
+/// in `lang`, and every artifact and record of that run.
+fn gate_run(level: u8, lang: &str) -> (String, Vec<(String, String)>) {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    body_fixture(repo.path());
+    let config = Config {
+        detail_level: Some(level),
+        lang: lang.to_string(),
+        ..b_config(repo.path(), out.path())
+    };
+    let generated = generate(&config).expect("the pipeline runs");
+    let card = generated
+        .cards
+        .iter()
+        .find(|c| c.path.starts_with("cards/type/") && c.contents.contains("\n# Gate\n"))
+        .unwrap_or_else(|| panic!("the card of Gate"))
+        .contents
+        .clone();
+    (card, artifacts_of(&generated, out.path()))
+}
+
+/// R14, KTD16, AE5: a step whose text carried a secret keeps the marker and
+/// says, once on its line, that a value was left out; the step beside it
+/// that compares `mode` with a plain string shows the string. The secret is
+/// in no artifact and no record of the run — in either language.
+#[test]
+fn a_withheld_value_is_admitted_in_the_card_and_a_plain_one_stays_visible() {
+    for (lang, sentence, under_diagram, plain_step) in [
+        (
+            "en",
+            "a value was left out as a likely secret; see the source",
+            "A value in the diagram was left out as a likely secret; see the source.",
+            "when `mode == \"plain\"`",
+        ),
+        (
+            "cs",
+            "hodnota vynechána jako pravděpodobné tajemství; viz zdroj",
+            "Hodnota v diagramu vynechána jako pravděpodobné tajemství; viz zdroj.",
+            "když `mode == \"plain\"`",
+        ),
+    ] {
+        let (card, artifacts) = gate_run(2, lang);
+        // The English run is swept by `no_secret_value_reaches_any_artifact_of_a_run`
+        // over this very fixture; the Czech one is new.
+        if lang == "cs" {
+            for (label, contents) in &artifacts {
+                assert_no_b_secret(&format!("{label} ({lang})"), contents);
+            }
         }
+        assert!(!card.contains("ghp_"), "{lang}: {card}");
+        assert!(card.contains(plain_step), "{lang}: {plain_step}\n{card}");
+
+        // Outside the diagrams: the marker stays, and its line says once
+        // that a value was left out; no line says it without a marker.
+        let mut in_diagram = false;
+        let mut diagram_lines: Vec<&str> = Vec::new();
+        let mut admitting = 0;
+        for line in card.lines() {
+            if line.starts_with("```mermaid") {
+                in_diagram = true;
+            } else if line.starts_with("```") {
+                in_diagram = false;
+            } else if in_diagram {
+                diagram_lines.push(line);
+            } else if line.contains(REDACTION_MARKER) {
+                admitting += 1;
+                assert_eq!(line.matches(sentence).count(), 1, "{lang}: {line}");
+            } else {
+                assert!(!line.contains(sentence), "{lang}: {line}");
+            }
+        }
+        assert!(
+            admitting >= 2,
+            "{lang}: the steps with a withheld value are on the card"
+        );
+
+        // In the diagrams: the node keeps the marker, its quotes are
+        // balanced, and one sentence under each diagram says what was left.
+        let node = diagram_lines
+            .iter()
+            .find(|l| l.contains(REDACTION_MARKER))
+            .unwrap_or_else(|| panic!("{lang}: no node with a marker"));
+        assert_eq!(node.matches('"').count() % 2, 0, "{node}");
+        assert!(!node.contains("-->"), "{node}");
+        assert_eq!(
+            card.matches(under_diagram).count(),
+            card.matches("```mermaid").count(),
+            "{lang}: every diagram of Gate holds a marker and says so"
+        );
+    }
+}
+
+/// `value` without the keys named, at the top level or one level down
+/// (`noise.plugins_by_contract`).
+fn without(mut value: serde_json::Value, keys: &[&str]) -> serde_json::Value {
+    for key in keys {
+        match key.split_once('.') {
+            Some((outer, inner)) => {
+                value[outer].as_object_mut().unwrap().remove(inner);
+            }
+            None => {
+                value.as_object_mut().unwrap().remove(*key);
+            }
+        }
+    }
+    value
+}
+
+/// A card's front matter, without its fences, and the rest of it.
+fn front_matter(card: &str) -> (&str, &str) {
+    let rest = card.strip_prefix("---\n").expect("front matter");
+    let end = rest.find("\n---\n\n").expect("the end of the front matter");
+    (&rest[..end], &rest[end + "\n---\n\n".len()..])
+}
+
+/// The parts of a card the second layer leaves as they are: everything but
+/// the purpose and the keywords, which it rewrites, and the functionalities
+/// and states, which it adds (plan 2a, U6: KTD10), and its dynamic access
+/// (step 2c, U8: KTD11).
+fn first_layer_sections(body: &str) -> String {
+    let mut out = String::new();
+    let mut keep = true;
+    for line in body.split_inclusive('\n') {
+        if let Some(heading) = line.strip_prefix("## ") {
+            keep = ![
+                "Purpose",
+                "Keywords",
+                "Functionality: ",
+                "State: ",
+                "Dynamic access",
+            ]
+            .iter()
+            .any(|h| heading.starts_with(h));
+        }
+        if keep {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// The first layer's bytes do not move with the second layer: over every
+/// fixture of this file, every view, detail and map, every card but a type's,
+/// the first-layer sections of a type's card, the manifest forms and the sites
+/// are what a run without the layer writes, and the manifest and coverage
+/// differ only by what the layer adds to them — among it, since plan 2b, the
+/// line of trigger coverage in `entry-points.md` (U8) and the document
+/// `triggers:index` of the registry of triggers (U7).
+#[test]
+fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
+    for (name, plant) in FIXTURES {
+        let repo = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        plant(repo.path());
+        let run = |level: Option<u8>, dir: &str| {
+            generate(&Config {
+                detail_level: level,
+                ..b_config(repo.path(), &out.path().join(dir))
+            })
+            .expect("the pipeline runs")
+        };
+        let plain = run(None, "plain");
+        let layered = run(Some(2), "layered");
+        assert_eq!(
+            plain.corpus,
+            without_coverage_line(&layered.corpus),
+            "{name}: the views differ"
+        );
+        // Plan 2a, U6 (KTD9 point 2): a type's card names the second layer in
+        // its front matter and, with the type's analysis, rewrites its purpose
+        // and keywords and adds what the layer read; every other part of it,
+        // and every other card, is the plain run's. The secrets of the cards
+        // are checked with every other file of the corpus.
+        assert_eq!(plain.cards.len(), layered.cards.len(), "{name}");
+        for (p, l) in plain.cards.iter().zip(&layered.cards) {
+            assert_eq!(p.path, l.path, "{name}");
+            if !p.path.starts_with("cards/type/") {
+                assert_eq!(p, l, "{name}: {}", p.path);
+                continue;
+            }
+            let (plain_front, plain_body) = front_matter(&p.contents);
+            let (front, body) = front_matter(&l.contents);
+            let (_, word) = front.rsplit_once("\nlayer2: ").expect("a layer2 word");
+            assert_eq!(
+                front,
+                format!(
+                    "{}\ndetail_level: 2\nlayer2: {word}",
+                    plain_front.replace("schema: 6\n", "schema: 7\n")
+                ),
+                "{name}: {}",
+                p.path
+            );
+            if word == "present" {
+                assert_eq!(
+                    first_layer_sections(body),
+                    first_layer_sections(plain_body),
+                    "{name}: {}",
+                    p.path
+                );
+            } else {
+                assert_eq!(body, plain_body, "{name}: {}", p.path);
+            }
+        }
+        assert_eq!(plain.details, layered.details, "{name}: the details differ");
+        assert_eq!(plain.maps, layered.maps, "{name}: the maps differ");
+        for form in [
+            manifest::to_nodes_jsonl as fn(&manifest::Manifest) -> String,
+            manifest::to_edges_jsonl,
+        ] {
+            assert_eq!(form(&plain.manifest), form(&layered.manifest), "{name}");
+        }
+        // A type card's document gains the chunks of its new sections, and
+        // the manifest the registry's document (plan 2b, U7).
+        let unchunked = |m: &manifest::Manifest| -> Vec<serde_json::Value> {
+            manifest::to_documents_jsonl(m)
+                .lines()
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+                .filter(|d| d["kind"] != "triggers")
+                .map(|mut d| {
+                    if d["kind"] == "card:type" {
+                        d.as_object_mut().unwrap().remove("chunks");
+                    }
+                    d
+                })
+                .collect()
+        };
+        assert_eq!(
+            unchunked(&plain.manifest),
+            unchunked(&layered.manifest),
+            "{name}"
+        );
+        // The strings form carries the manifest's head, the plugins with it.
+        let strings = |g: &Generated, keys: &[&str]| {
+            without(
+                serde_json::from_str(&manifest::to_strings_json(&g.manifest)).unwrap(),
+                keys,
+            )
+        };
+        assert_eq!(
+            strings(&plain, &["plugins"]),
+            strings(&layered, &["plugins", "detail_level"]),
+            "{name}: the strings form differs beyond the layer's own rows"
+        );
+        assert_eq!(
+            manifest::to_sites_jsonl(&plain.graph),
+            manifest::to_sites_jsonl(&layered.graph),
+            "{name}"
+        );
+        let manifest_value = |g: &Generated, keys: &[&str]| {
+            let mut v = without(serde_json::to_value(&g.manifest).unwrap(), keys);
+            v["documents"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|d| d["kind"] != "triggers");
+            for d in v["documents"].as_array_mut().unwrap() {
+                if d["kind"] == "card:type" {
+                    d.as_object_mut().unwrap().remove("chunks");
+                }
+            }
+            v
+        };
+        assert_eq!(
+            manifest_value(&plain, &["plugins"]),
+            manifest_value(&layered, &["plugins", "detail_level"]),
+            "{name}: the manifest differs beyond the layer's own rows"
+        );
+        // The sizes of the type cards and the count of cards without keywords
+        // are the second layer's; every other level of the cards is not.
+        let other_levels = |c: &serde_json::Value| {
+            let mut cards = c["cards"].clone();
+            cards["sizes"].as_object_mut().unwrap().remove("type_card");
+            cards.as_object_mut().unwrap().remove("without_keywords");
+            cards
+        };
+        let (pc, lc) = (
+            serde_json::to_value(&plain.coverage).unwrap(),
+            serde_json::to_value(&layered.coverage).unwrap(),
+        );
+        assert_eq!(other_levels(&pc), other_levels(&lc), "{name}");
+        assert_eq!(
+            without(pc, &["noise.plugins_by_contract", "cards"]),
+            without(
+                lc,
+                &["bodies", "markup", "noise.plugins_by_contract", "cards"]
+            ),
+            "{name}: coverage differs beyond the layer's own rows"
+        );
     }
 }
 
@@ -283,6 +797,24 @@ fn two_runs_still_agree_after_redaction() {
     let first = all_artifacts(repo.path(), out.path());
     let second = all_artifacts(repo.path(), out.path());
     assert_eq!(first, second, "redaction must be deterministic (R18)");
+
+    // The redaction of the second layer too: a cold run and a warm one, and
+    // a run into another directory, write the same records (plan 2a, U8).
+    let repo = tempfile::tempdir().unwrap();
+    body_fixture(repo.path());
+    let layered = |out: &Path| {
+        let config = Config {
+            detail_level: Some(2),
+            ..b_config(repo.path(), out)
+        };
+        artifacts_of(&generate(&config).expect("the pipeline runs"), out)
+    };
+    let out = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let cold = layered(out.path());
+    assert!(cold.iter().any(|(label, _)| label.starts_with("record ")));
+    assert_eq!(cold, layered(out.path()), "a warm run differs");
+    assert_eq!(cold, layered(other.path()), "another directory differs");
 }
 
 #[test]
@@ -892,7 +1424,7 @@ fn assert_no_b_secret(label: &str, text: &str) {
             "R10: `{secret}` ({planted}) leaked into {label}"
         );
     }
-    for secret in SECRETS.iter().chain(ANCHOR_SECRETS) {
+    for secret in SECRETS.iter().chain(ANCHOR_SECRETS).chain(BODY_SECRETS) {
         assert!(
             !lower.contains(&secret.to_lowercase()),
             "R10: `{secret}` leaked into {label}"
@@ -1021,7 +1553,7 @@ fn no_secret_reaches_any_surface_area_b_added() {
     );
 
     // And none of them carries a secret.
-    for (label, contents) in artifacts_of(&generated) {
+    for (label, contents) in artifacts_of(&generated, out.path()) {
         assert_no_b_secret(&label, &contents);
     }
     for header in &headers {
@@ -1159,7 +1691,7 @@ fn no_secret_reaches_the_model_purpose_layer_or_its_backend() {
         page(&shown.cards, "cards/type/", "Vault").contains(MODEL_SENTENCE),
         "the layer is shown"
     );
-    for (label, contents) in artifacts_of(&shown) {
+    for (label, contents) in artifacts_of(&shown, out.path()) {
         assert_no_b_secret(&label, &contents);
     }
 }

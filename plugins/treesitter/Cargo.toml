@@ -19,6 +19,10 @@ python = ["dep:tree-sitter-python"]
 csharp = ["dep:tree-sitter-c-sharp"]
 go = ["dep:tree-sitter-go"]
 java = ["dep:tree-sitter-java"]
+# The bodies of C# members (contract 0.3, `ra:plugin@0.3.0`): a component of
+# its own that serves only the `bodies` pass, so the `csharp` component, which
+# carries the first layer, stays byte for byte what it was.
+csharp-body = ["dep:tree-sitter-c-sharp"]
 
 # Exact pins, matching the host's Cargo.lock at the migration: the grammar
 # version decides the bytes of every fact, and a caret requirement would let

@@ -22,6 +22,8 @@ use reverse_architect::{generate, Generated};
 use std::path::Path;
 
 mod common;
+#[path = "common/editor_fixture.rs"]
+mod editor_fixture;
 
 /// A repository whose output actually depends on the order its files are
 /// applied in — otherwise the gate would be green over a fixture with nothing
@@ -118,16 +120,27 @@ fn config_for(repo: &Path, out: &Path) -> Config {
         model_verification: false,
         model_purpose: false,
         trace_over_ceiling: false,
+        detail_level: None,
     }
 }
 
 /// Generate the corpus inside a pool of exactly `threads` threads.
 fn generate_on(threads: usize, repo: &Path, out: &Path) -> Generated {
+    generate_at(threads, None, repo, out)
+}
+
+/// The same, with the second layer at `level` (step 2b: the flows and the
+/// registry of triggers are built in parallel walks too).
+fn generate_at(threads: usize, level: Option<u8>, repo: &Path, out: &Path) -> Generated {
     let pool = ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
         .expect("a thread pool of a fixed size");
-    pool.install(|| generate(&config_for(repo, out)).expect("the pipeline runs"))
+    let config = Config {
+        detail_level: level,
+        ..config_for(repo, out)
+    };
+    pool.install(|| generate(&config).expect("the pipeline runs"))
 }
 
 /// Everything that reaches disk, as comparable bytes.
@@ -140,6 +153,11 @@ fn corpus_bytes(g: &Generated) -> Vec<(String, String)> {
     // cards, so they are held to the same bytes at every thread count (R15).
     for c in g.cards.iter().chain(&g.details).chain(&g.maps) {
         out.push((c.path.clone(), c.contents.clone()));
+    }
+    // The registry of triggers (plan 2b, U7) is a file of its own with the
+    // second layer: `cards/triggers.md`.
+    if let Some(t) = &g.triggers {
+        out.push((t.path.clone(), t.contents.clone()));
     }
     out.push((
         "manifest.json".to_string(),
@@ -227,6 +245,63 @@ fn one_thread_and_many_threads_produce_the_same_corpus() {
         b.len(),
         "the two runs disagree on how many files the corpus has"
     );
+    for ((path_a, text_a), (path_b, text_b)) in a.iter().zip(b.iter()) {
+        assert_eq!(path_a, path_b, "the two runs produced different files");
+        assert_eq!(
+            text_a, text_b,
+            "{path_a} differs between a 1-thread and a 12-thread run"
+        );
+    }
+}
+
+/// Step 2b (U9, KTD13): with the second layer the cards carry their flows and
+/// the registry of triggers is written, and none of it may depend on the
+/// thread count — over the editor of the acceptance examples, whose triggers,
+/// flows and shared parts are what the walks order.
+#[test]
+fn the_second_layer_gives_the_same_bytes_on_one_thread_and_on_many() {
+    let repo = tempfile::tempdir().unwrap();
+    let out_one = tempfile::tempdir().unwrap();
+    let out_many = tempfile::tempdir().unwrap();
+    common::init_repo_with_files(repo.path(), "Alice", &editor_fixture::files());
+
+    let one = generate_at(1, Some(2), repo.path(), out_one.path());
+    let many = generate_at(12, Some(2), repo.path(), out_many.path());
+    let a = corpus_bytes(&one);
+    let b = corpus_bytes(&many);
+
+    // Guard the guard: a run without flows or registry compares nothing.
+    let registry = a
+        .iter()
+        .find(|(path, _)| path == "cards/triggers.md")
+        .expect("the registry is part of what is compared");
+    assert!(
+        registry.1.contains(
+            "
+## Triggers
+"
+        ),
+        "{}",
+        registry.1
+    );
+    assert!(
+        a.iter().any(|(path, text)| path.starts_with("cards/type/")
+            && text.contains(
+                "
+### Context
+"
+            )),
+        "the comparison must cover a context"
+    );
+    assert!(
+        a.iter().any(|(_, text)| text.contains(
+            "```mermaid
+sequenceDiagram"
+        )),
+        "the comparison must cover a sequence diagram"
+    );
+
+    assert_eq!(a.len(), b.len());
     for ((path_a, text_a), (path_b, text_b)) in a.iter().zip(b.iter()) {
         assert_eq!(path_a, path_b, "the two runs produced different files");
         assert_eq!(

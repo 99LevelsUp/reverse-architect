@@ -1,8 +1,9 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "base_revision": "1111111111111111111111111111111111111111",
   "cases": [
     {
+      "druh": "chyba",
       "id": "ukazka-1",
       "prompt": "Ukázkové zadání, nejde o skutečný případ. Zákazník A hlásí: po uložení záznamu se zobrazí chybová hláška, která uvádí metodu SetScheduledTasksInvalid. Záznam se přesto uloží.",
       "acceptable_locations": [
@@ -19,6 +20,7 @@
       "prompt_names_location": true
     },
     {
+      "druh": "chyba",
       "id": "ukazka-2",
       "prompt": "Ukázkové zadání, nejde o skutečný případ. Firma X hlásí: součet v přehledu nesouhlasí se součtem položek, rozdíl se objevuje jen u některých záznamů.",
       "acceptable_locations": [
@@ -39,6 +41,81 @@
       "pseudonymization_confirmed": true,
       "used_for_card_tuning": false,
       "prompt_names_location": false
+    },
+    {
+      "druh": "otazka",
+      "id": "ukazka-otazka-1",
+      "dotaz": "Ukázkové zadání, nejde o skutečný případ. Uživatel se ptá: proč se po stisku tlačítka Uložit v ViewA změní stav modelu ModelB a kdo to řídí?",
+      "ramcova_odpoved": "Ukázková odpověď: tlačítko Uložit v ViewA volá příkaz, ten předá práci modelu ModelB, který zapíše příznak změny do pole AcmeState.",
+      "commit": "1111111111111111111111111111111111111111",
+      "fakta_potvrzena": true,
+      "pseudonymizace_potvrzena": true,
+      "otisk_potvrzeni": "25f2fd5945b7f7d867221e6dab694ae65c0b6573d2dab167a5759691fbf32df0",
+      "kontrolni": false,
+      "fakta": [
+        {
+          "id": "f1",
+          "text": "Tlačítko Uložit v ViewA spustí příkaz SaveCommand.",
+          "role": "ramcova",
+          "mista": [
+            {
+              "soubor": "Src/Placeholder/ViewA.xaml.cs",
+              "clen": "ViewA.OnSaveClick",
+              "radky": 31,
+              "odkazovany_clen": "SaveCommand"
+            }
+          ],
+          "tok": {"krok": 1, "tok": "ulozeni"}
+        },
+        {
+          "id": "f2",
+          "text": "ModelB.Save zapíše příznak změny do pole AcmeState.",
+          "role": "misto",
+          "mista": [
+            {
+              "soubor": "Src/Placeholder/ModelB.cs",
+              "clen": "ModelB.Save(+1)",
+              "radky": "52-60",
+              "odkazovany_clen": "AcmeState"
+            }
+          ],
+          "tok": {"krok": 2, "tok": "ulozeni"}
+        },
+        {
+          "id": "f3",
+          "text": "Celé uložení vede od kliknutí v ViewA až po zápis do AcmeState v ModelB.",
+          "role": "ramcova",
+          "mista": [
+            {
+              "soubor": "Src/Placeholder/ViewA.xaml.cs",
+              "clen": "ViewA.OnSaveClick",
+              "radky": 31,
+              "odkazovany_clen": "SaveCommand"
+            },
+            {
+              "soubor": "Src/Placeholder/ModelB.cs",
+              "clen": "ModelB.Save(+1)",
+              "radky": "52-60",
+              "odkazovany_clen": "AcmeState"
+            }
+          ],
+          "tok": {"cely_tok": "ulozeni"}
+        }
+      ],
+      "zakazana_tvrzeni": [
+        {
+          "id": "z1",
+          "text": "Stav modelu mění přímo ViewA bez příkazu.",
+          "mista": [
+            {
+              "soubor": "Src/Placeholder/ViewA.xaml.cs",
+              "typ": "ViewA",
+              "radky": "10-80"
+            }
+          ],
+          "fakty": ["f1"]
+        }
+      ]
     }
   ]
 }

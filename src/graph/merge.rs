@@ -139,6 +139,7 @@ impl FactKind {
             | FactKind::ResolvedCoverage
             // Each pass that failed says so; one must not hide the other.
             | FactKind::ExtractionFailed
+            | FactKind::BodyExtractionFailed
             // One per database access the code makes — a method that reads a
             // table on two lines makes two, and collapsing them would hide one
             // of the places (plan B, R11).
@@ -153,6 +154,9 @@ impl FactKind {
             // unmatched-count per file (plan B, U5).
             | FactKind::EnumDecision
             | FactKind::EnumDecisionsUnmatched
+            // One per name a file refers to that nothing declares (plan 2c,
+            // U5): two missing names are two admissions, not one.
+            | FactKind::UnresolvedReference
             | FactKind::DependencyName => Cardinality::Additive,
 
             // Scalar — one resolved value per node.

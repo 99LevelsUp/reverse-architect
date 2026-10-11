@@ -1,0 +1,12 @@
+[package]
+name = "probe3"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test component for contract 0.3: declared node kinds, references by name and the bodies pass."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.51.0"

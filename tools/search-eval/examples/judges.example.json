@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "hodnotitele": [
+    {
+      "id": "codex-vlastnik",
+      "rodina": "openai",
+      "prikaz": [
+        "codex", "exec", "--json", "--ignore-user-config", "--ignore-rules",
+        "--skip-git-repo-check", "-s", "read-only",
+        "--disable", "shell_tool", "--disable", "unified_exec",
+        "-m", "gpt-6.1-sol", "-"
+      ],
+      "model": "gpt-6.1-sol",
+      "vystup": "codex-jsonl",
+      "prihlaseni": [
+        {"zdroj": "~/.codex/auth.json", "cil": "auth.json"}
+      ],
+      "promenne": []
+    },
+    {
+      "id": "claude-vlastnik",
+      "rodina": "claude",
+      "prikaz": [
+        "claude", "-p", "--model", "sonnet", "--restricted", "--tools", "",
+        "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence",
+        "--permission-prompts", "none", "--output-format", "json"
+      ],
+      "model": "sonnet",
+      "vystup": "claude-json",
+      "prihlaseni": [
+        {"zdroj": "~/.claude/.credentials.json", "cil": ".credentials.json"}
+      ],
+      "promenne": []
+    }
+  ]
+}

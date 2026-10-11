@@ -576,3 +576,123 @@ fn golden_corpus_snapshot() {
     }
     insta::assert_snapshot!("phase_a_corpus", combined);
 }
+
+// ---- Plan 2b, U8: the line of trigger coverage in `entry-points.md` ----
+
+use reverse_architect::card::triggers::{coverage, BodyComponent, TriggerCoverage};
+use reverse_architect::render::build_corpus_with;
+
+fn csharp_coverage() -> TriggerCoverage {
+    coverage(&[BodyComponent {
+        languages: vec!["csharp".into()],
+        emits: ["subscription", "key-compare", "key-gesture", "menu-item"]
+            .map(String::from)
+            .to_vec(),
+        read: true,
+    }])
+}
+
+/// AE7, R17, KTD12: without the second layer's summary the corpus is the one
+/// `build_corpus` renders, every file to the byte — `entry-points.md`
+/// included, which the golden snapshot above pins.
+#[test]
+fn without_the_second_layer_the_corpus_is_byte_identical() {
+    let tmp = tempfile::tempdir().unwrap();
+    standard_fixture(tmp.path());
+    let repo = Repo::open(tmp.path()).unwrap();
+    let mut graph = Graph::new();
+    run_all(&repo, &mut graph).unwrap();
+    for links in [LinkStyle::Portable, LinkStyle::Obsidian] {
+        let plain = build_corpus(&graph, links, None).unwrap();
+        assert_eq!(build_corpus_with(&graph, links, None, None).unwrap(), plain);
+        assert!(!file(&plain, "entry-points.md").contains("Coverage of triggers"));
+    }
+}
+
+/// AE6, R15, KTD12: with the summary, the line of coverage — English, with
+/// the link to the registry in the run's link style — stands right above the
+/// sentence E9, which is unchanged and last; no other view moves.
+#[test]
+fn the_line_of_coverage_stands_right_above_e9_and_nothing_else_moves() {
+    let tmp = tempfile::tempdir().unwrap();
+    standard_fixture(tmp.path());
+    let repo = Repo::open(tmp.path()).unwrap();
+    let mut graph = Graph::new();
+    run_all(&repo, &mut graph).unwrap();
+    let summary = csharp_coverage();
+    for (links, registry) in [
+        (
+            LinkStyle::Portable,
+            "[registry of triggers](cards/triggers.md)",
+        ),
+        (
+            LinkStyle::Obsidian,
+            "[[cards/triggers|registry of triggers]]",
+        ),
+    ] {
+        let plain = build_corpus(&graph, links, None).unwrap();
+        let with = build_corpus_with(&graph, links, None, Some(&summary)).unwrap();
+        let line = format!(
+            "- Coverage of triggers by the second layer, by language — C#: event, key, menu \
+             item, entry from another component; XAML: not covered. The {registry} lists every \
+             trigger it found.\n"
+        );
+        let entry = file(&with, "entry-points.md");
+        let plain_entry = file(&plain, "entry-points.md");
+        let e9 = plain_entry
+            .lines()
+            .find(|l| l.starts_with("- Framework-level entry points — "))
+            .expect("E9");
+        assert!(entry.contains(&format!("{line}{e9}\n")), "{entry}");
+        assert_eq!(entry.replacen(&line, "", 1), plain_entry);
+        let items: Vec<&str> = entry.lines().filter(|l| l.starts_with("- ")).collect();
+        assert_eq!(items.last(), Some(&e9), "E9 stays last: {entry}");
+        assert_eq!(with.files.len(), plain.files.len());
+        for (a, b) in with.files.iter().zip(&plain.files) {
+            assert_eq!(a.path, b.path);
+            if a.path != "entry-points.md" {
+                assert_eq!(a, b, "{}", a.path);
+            }
+        }
+    }
+}
+
+/// U8: a lens of `entry-points` that holds no sentence E9 still gets the line
+/// of coverage — last, never dropped without a word; a lens with no section
+/// gets one of its own for it.
+#[test]
+fn without_e9_the_line_of_coverage_goes_last_rather_than_missing() {
+    use reverse_architect::lens::{Lens, Section};
+    use reverse_architect::render::place_entry_points_line;
+    use reverse_architect::taxonomy::views::Instance;
+
+    let instance = |text: &str| Instance {
+        text: text.to_string(),
+        indent_level: 0,
+        rung: None,
+    };
+    let lens = |sections: Vec<Section>| Lens {
+        view_id: "entry-points".to_string(),
+        title: "Entry points".to_string(),
+        guiding_question: String::new(),
+        problem: String::new(),
+        mechanism: String::new(),
+        sections,
+        diagram: None,
+        failure_modes: Vec::new(),
+    };
+    fn texts(lens: &Lens) -> Vec<&str> {
+        lens.instances().map(|i| i.text.as_str()).collect()
+    }
+    let entry = "`main` in `src/main.rs` — language-level entry point.";
+
+    let mut without = lens(vec![Section::undivided(vec![instance(entry)])]);
+    place_entry_points_line(&mut without, "Coverage of triggers".to_string());
+    assert_eq!(texts(&without), [entry, "Coverage of triggers"]);
+    assert_eq!(without.sections.len(), 1);
+
+    let mut empty = lens(Vec::new());
+    place_entry_points_line(&mut empty, "Coverage of triggers".to_string());
+    assert_eq!(texts(&empty), ["Coverage of triggers"]);
+    assert_eq!(empty.sections.len(), 1);
+}

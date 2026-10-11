@@ -353,6 +353,32 @@ impl CacheStore {
         &self.vocabulary
     }
 
+    /// This store, tagged for records that depend on more than the run
+    /// fingerprint says: the same root, ids and vocabulary, and a digest that
+    /// is the run's own followed by `tag` (plan 2a, U4: KTD7, KTD8).
+    ///
+    /// The second layer's records (`languages-bodies`) are a function of the
+    /// body component's bytes and of the host's redaction of what it
+    /// returned, and neither is in [`RunFingerprint`] — on purpose: the
+    /// component is loaded only for `--detail-level`, and putting it in the
+    /// fingerprint would make every switch of the layer clear the first
+    /// layer's records with it. The tag names both instead, so [`get`]'s
+    /// per-record digest check turns a rebuilt component or a raised
+    /// redaction version into a miss for exactly those records, and the
+    /// `languages-decl` and `languages-usages` records, written under the
+    /// untagged digest, never notice. The tag is written out rather than
+    /// hashed into the digest, so a record says which component made it.
+    ///
+    /// [`get`]: CacheStore::get
+    pub(crate) fn derived(&self, tag: &str) -> CacheStore {
+        CacheStore::new(
+            self.root.clone(),
+            format!("{}+{tag}", self.digest),
+            self.known_ids.clone(),
+            self.vocabulary.clone(),
+        )
+    }
+
     fn path_for(&self, phase_id: &str, blob_id: git2::Oid) -> PathBuf {
         self.root.join(phase_id).join(format!("{blob_id}.json"))
     }

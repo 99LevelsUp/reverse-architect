@@ -136,6 +136,23 @@ pub fn manifest_documents(
     out
 }
 
+/// The document of the registry of triggers (plan 2b, U7: R14, KTD10): id
+/// `triggers:index`, kind `triggers`, level `map`, its chunks its `## Part N`
+/// or its one `## Triggers`. It has no `parent` and no `header`: it is about
+/// no one entity, so there is no context header to give it.
+pub fn triggers_document(file: &RenderedFile) -> ManifestDoc {
+    let mut doc = rendered_document(
+        super::triggers::TRIGGERS_ID,
+        super::triggers::TRIGGERS_KIND,
+        "Registry of triggers",
+        "Which triggers lead to which functionality, and is each way open?",
+        &file.path,
+        &file.contents,
+    );
+    doc.level = Some(LEVEL_MAP.into());
+    doc
+}
+
 /// A card's document kind and guiding question (v8).
 fn card_kind_and_question(card: &Card) -> (String, String) {
     match card.kind {

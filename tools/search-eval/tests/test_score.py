@@ -9,7 +9,9 @@ from agents.base import CAP_STEPS, CAP_TIME, CAP_TOKENS, Cap, CapHit, RunRecord,
 from agents.claude_code import parse_lines
 from audit import AuditFinding, audit_run
 from catalog import load_catalog
-from score import (FAILURE, SPOILED, SUCCESS, evaluate_run, extract_answer, member_matches)
+from score import (ANSWERED, FAILURE, SPOILED, SUCCESS, UNANSWERED, evaluate_run,
+                   extract_answer, member_matches)
+from tests.test_card_check import fact, make_catalog, place, question_json
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "catalog.example.json"
 
@@ -192,6 +194,76 @@ class ScoreTest(unittest.TestCase):
         for outcome in outcomes:
             self.assertEqual(outcome.failure_reason is not None, outcome.state == FAILURE)
             self.assertEqual(bool(outcome.spoil_reasons), outcome.state == SPOILED)
+
+
+class QuestionRunTest(unittest.TestCase):
+    """A run of a question (KTD10) is stored, not scored: answered, or without an answer."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="se-u13-score-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.work = self.tmp / "work"
+        self.work.mkdir()
+        self.question = make_catalog(question_json(
+            [fact("f1", "Tichý návrat", [place("src/A.cs", "A.Run()", radky=3)])])).questions[0]
+
+    def record(self, *lines, cap_hit=None):
+        parsed = parse_lines(list(lines))
+        return RunRecord(
+            adapter="claude-code", workdir=str(self.work), corpus_dir=None,
+            config_dir=str(self.tmp / "iso" / "agent-config"),
+            events=parsed.events, tokens=TokenUsage(), steps=parsed.steps,
+            wall_seconds=1.0, cap=Cap(60, 10, 1000), cap_hit=cap_hit, exit_status=0,
+            final_message=parsed.final_message)
+
+    def question_outcome(self, final_text, **kwargs):
+        record = self.record(assistant("m-final", text(final_text)), **kwargs)
+        return evaluate_run(record, self.question, audit_run(record))
+
+    def test_the_whole_last_message_is_the_answer(self):
+        message = "Odpověď.\n\nPodle `src/A.cs:3` se vrací tiše."
+        outcome = self.question_outcome(message)
+        self.assertEqual((outcome.state, outcome.failure_reason), (ANSWERED, None))
+        self.assertEqual(outcome.answer_text, message)
+        self.assertIsNone(outcome.answer)
+
+    def test_a_json_block_in_it_is_not_read_as_a_location(self):
+        message = ("Závěr:\n```json\n"
+                   '{"file": "src/A.cs", "member": "A.Run", "hypothesis": "h"}\n```')
+        outcome = self.question_outcome(message)
+        self.assertEqual(outcome.state, ANSWERED)
+        self.assertEqual(outcome.answer_text, message)
+        self.assertIsNone(outcome.answer)
+
+    def test_a_question_run_is_never_invalid_answer(self):
+        for message in ("nic", "```json\n{\"file\": }\n```", "Příčina je ve tvaru, který nikdo nečeká."):
+            with self.subTest(message=message):
+                outcome = self.question_outcome(message)
+                self.assertEqual((outcome.state, outcome.failure_reason), (ANSWERED, None))
+
+    def test_no_final_message_is_without_an_answer(self):
+        record = self.record(json.dumps({"type": "system", "subtype": "init"}))
+        outcome = evaluate_run(record, self.question, ())
+        self.assertEqual((outcome.state, outcome.failure_reason, outcome.answer_text),
+                         (UNANSWERED, "no_answer", None))
+        unfinished = self.record(assistant("m1", text("Něco."),
+                                           read_call("t1", str(self.work / "a.cs"))))
+        outcome = evaluate_run(unfinished, self.question, ())
+        self.assertEqual((outcome.state, outcome.failure_reason), (UNANSWERED, "no_answer"))
+
+    def test_a_cap_makes_the_run_without_an_answer_and_the_text_is_not_kept(self):
+        for kind, reason in ((CAP_STEPS, "cap_steps"), (CAP_TOKENS, "cap_tokens"),
+                             (CAP_TIME, "cap_time")):
+            with self.subTest(kind=kind):
+                hit = CapHit(kind=kind, limit=10, observed=12, overshoot=2)
+                outcome = self.question_outcome("Hotová odpověď.", cap_hit=hit)
+                self.assertEqual((outcome.state, outcome.failure_reason, outcome.answer_text),
+                                 (UNANSWERED, reason, None))
+
+    def test_the_audit_comes_first(self):
+        record = self.record(assistant("m", text("Odpověď.")))
+        outcome = evaluate_run(record, self.question, (AuditFinding("git", "t1", "x"),))
+        self.assertEqual((outcome.state, outcome.answer_text), (SPOILED, None))
 
 
 class GenericMemberMatchTest(unittest.TestCase):
