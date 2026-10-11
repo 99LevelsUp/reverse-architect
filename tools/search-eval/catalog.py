@@ -75,7 +75,11 @@ Items of the `otazka` kind:
   accepted, so there is one spelling only. A forbidden claim's places have
   the same shape.
 * `fakty` of a forbidden claim lists ids of facts of the same question that
-  the claim contradicts; an id that names no fact is refused.
+  the claim contradicts; an id that names no fact is refused. It is optional:
+  a claim without it contradicts no fact, so finding it never puts a fact in
+  conflict. A forbidden claim holds only `id`, `text`, `mista` and `fakty`;
+  any other key is refused, so a misspelled `fakty` cannot drop the link to
+  its facts unnoticed.
 * The `commit` of a question must equal `base_revision`: the catalog has one
   export.
 * Confirmation. `fakta_potvrzena` must be true, `pseudonymizace_potvrzena`
@@ -503,6 +507,10 @@ def _parse_fact(raw: Any, qid: str, index: int) -> Fact:
                 tok=_parse_flow(raw.get("tok"), where))
 
 
+#: The keys a forbidden claim may hold; `fakty` is optional (plan U1, step 5).
+CLAIM_FIELDS = frozenset({"id", "text", "mista", "fakty"})
+
+
 def _parse_claim(raw: Any, qid: str, index: int) -> ForbiddenClaim:
     if not isinstance(raw, dict):
         raise CatalogError(f"Otázka „{qid}“, zakázané tvrzení č. {index + 1}: "
@@ -518,6 +526,10 @@ def _parse_claim(raw: Any, qid: str, index: int) -> ForbiddenClaim:
     for field in ("text", "mista"):
         if field not in raw:
             raise fail(field, "chybí")
+    unknown = sorted(set(raw) - CLAIM_FIELDS)
+    if unknown:
+        raise CatalogError(f"{where}: neznámé pole „{unknown[0]}“ (zakázané tvrzení nese jen "
+                           "„id“, „text“, „mista“ a „fakty“).")
     if not isinstance(raw["text"], str) or not raw["text"].strip():
         raise fail("text", "musí být neprázdný text")
     places = _parse_places(raw["mista"], where)
