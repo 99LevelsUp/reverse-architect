@@ -47,7 +47,8 @@ is refused by every pass with a short reason (`err`) and listed as failed, the r
   host confirms the path exists.
 - **Usages:** type references from `TargetType`, `DataType`, `{x:Type}`, prefixed element names and
   `{x:Static}`, with the file's `clr-namespace` mappings as usings.
-- **Bodies:** one `markup` body per style, template and `x:Class` root, paired with its declaration by the
+- **Bodies:** one `markup` body per style, template and `x:Class` root (and per keyed resource that holds a
+  markup extension it cannot parse, carrying only the `unparsed-markup` tag), paired with its declaration by the
   name position, with a node per element; binding paths, `{x:Static}`, attached properties and setters as
   member accesses; event handlers and `EventSetter`s as subscriptions; attribute texts as literals; and the
   tags `target-type`, `data-source`, `trigger`, `control-key`, `key-gesture` and `unparsed-markup` (a value

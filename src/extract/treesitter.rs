@@ -578,8 +578,16 @@ fn node_kind_named(word: &str, vocabulary: &Vocabulary) -> Option<NodeKindId> {
 /// plugin did not declare drops the whole group with a message, as an
 /// undeclared fact kind drops its fact — and its block, the references by
 /// name and the lookup blocks are kept for the later resolution of those
-/// references. A name a reference spells is redacted like any text value, so
-/// it still matches the declared name it means.
+/// references. A name a reference spells is redacted like any text value; a
+/// name that loses its text so resolves to nothing ([`super::name_ref`]).
+///
+/// A node's key is a plugin's choice and may spell what it read: a resource
+/// keyed `x:Key="ghp_…"` is `sym:xaml:<file>#ghp_…`, and a declared card is
+/// titled by its key. A key whose local part (after its first `#`) the
+/// secret filter would withhold from a name ([`withheld_keys`]) is replaced
+/// by an opaque one wherever this file's output names it — the symbol, its
+/// edges, its facts, its relations and the references that come from it —
+/// so no plugin can carry a credential into the graph through a key (KTD16).
 fn output_from_ops(
     file: &str,
     plugin: &ExtractorId,
@@ -593,11 +601,22 @@ fn output_from_ops(
         name_refs,
         blocks,
     } = declarations;
+    let opaque = withheld_keys(&ops, prefixes);
+    // The key a node keeps; `None` for a withheld key this file does not
+    // declare, which nothing here can rename consistently and so drops.
+    let rekey = |key: String| -> Option<String> {
+        match opaque.get(&key) {
+            Some(k) => Some(k.clone()),
+            None if withholds(&key, prefixes) => None,
+            None => Some(key),
+        }
+    };
     let mut out = FileOutput {
         name_refs: name_refs
             .into_iter()
             .map(|r| NameRef {
                 name: super::external::redact_secret_block(&r.name, prefixes).0,
+                source: rekey(r.source).unwrap_or_else(|| file.to_string()),
                 ..r
             })
             .collect(),
@@ -644,23 +663,28 @@ fn output_from_ops(
             None
         })?;
         Some((
-            NodeKey::new(e.source),
-            NodeKey::new(e.target),
+            NodeKey::new(rekey(e.source)?),
+            NodeKey::new(rekey(e.target)?),
             Edge::new(kind, provenance(file, plugin, e.place)),
         ))
     };
     for (index, op) in ops.into_iter().enumerate() {
         match op {
             Op::Fact(kf) => {
+                let Some(node) = rekey(kf.node) else {
+                    continue;
+                };
                 if let Some((fact, skips)) = fact_of(kf.fact) {
-                    let node = NodeKey::new(kf.node);
+                    let node = NodeKey::new(node);
                     out.fact(node.clone(), fact);
                     for skip in skips {
                         out.fact(node.clone(), skip);
                     }
                 }
             }
-            Op::Symbol(sym) => {
+            Op::Symbol(mut sym) => {
+                // Every symbol key is either kept or in `opaque`.
+                sym.key = rekey(sym.key).expect("a declared key is kept or replaced");
                 let extra = extras.next_if(|e| e.op == index);
                 if let Some(word) = extra.as_ref().and_then(|e| e.node_kind.as_deref()) {
                     // Only the plugin's own namespace: a kind is "from its
@@ -711,19 +735,80 @@ fn output_from_ops(
                     out.edge(from, to, edge);
                 }
             }
-            Op::Relation(r) => out.relations.push(TypeRelation {
-                from: r.sources.into_iter().map(NodeKey::new).collect(),
-                to: r.targets.into_iter().map(NodeKey::new).collect(),
-                kind: match r.kind {
-                    WireRelationKind::Extends => RelationKind::Extends,
-                    WireRelationKind::Implements => RelationKind::Implements,
-                    WireRelationKind::ByTargetKind => RelationKind::ByTargetKind,
-                },
-                prov: provenance(file, plugin, r.place),
-            }),
+            Op::Relation(r) => {
+                // A side that loses every candidate to the filter drops the
+                // relation; nothing else changes what the plugin said.
+                let keys = |keys: Vec<String>| -> Option<Vec<NodeKey>> {
+                    let had = !keys.is_empty();
+                    let kept: Vec<NodeKey> = keys
+                        .into_iter()
+                        .filter_map(rekey)
+                        .map(NodeKey::new)
+                        .collect();
+                    (!had || !kept.is_empty()).then_some(kept)
+                };
+                let (Some(from), Some(to)) = (keys(r.sources), keys(r.targets)) else {
+                    continue;
+                };
+                out.relations.push(TypeRelation {
+                    from,
+                    to,
+                    kind: match r.kind {
+                        WireRelationKind::Extends => RelationKind::Extends,
+                        WireRelationKind::Implements => RelationKind::Implements,
+                        WireRelationKind::ByTargetKind => RelationKind::ByTargetKind,
+                    },
+                    prov: provenance(file, plugin, r.place),
+                });
+            }
         }
     }
     out
+}
+
+/// Whether the secret filter would withhold the local part of `key` — what
+/// follows its first `#` — were it a name: the rule a `symbol_name` fact is
+/// redacted by ([`super::external::redact_secret_block`]), so a key loses
+/// its text exactly when its name does. A key with no `#` (a file) is never
+/// withheld here.
+fn withholds(key: &str, prefixes: &SecretPrefixes) -> bool {
+    key.split_once('#')
+        .is_some_and(|(_, local)| super::external::redact_secret_block(local, prefixes).1)
+}
+
+/// Each symbol key of `ops` that [`withholds`] the local part of, mapped to
+/// an opaque key: its part up to the `#` kept, so the key still names its
+/// file and plugin, and `withheld~<n>` after it, `n` counting such keys in
+/// declaration order — the same file read twice gives the same keys. An
+/// opaque key another symbol of the file already uses moves to the next `n`.
+fn withheld_keys(ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, String> {
+    let declared: HashSet<&str> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Symbol(sym) => Some(sym.key.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut opaque = HashMap::new();
+    let mut n = 0usize;
+    for op in ops {
+        let Op::Symbol(sym) = op else {
+            continue;
+        };
+        if opaque.contains_key(&sym.key) || !withholds(&sym.key, prefixes) {
+            continue;
+        }
+        let head = sym.key.split_once('#').map_or("", |(head, _)| head);
+        let key = loop {
+            n += 1;
+            let key = format!("{head}#withheld~{n}");
+            if !declared.contains(key.as_str()) {
+                break key;
+            }
+        };
+        opaque.insert(sym.key.clone(), key);
+    }
+    opaque
 }
 
 /// One type relation a declaration names, buffered until the whole repo has been

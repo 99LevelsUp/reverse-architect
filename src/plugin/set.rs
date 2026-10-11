@@ -303,7 +303,8 @@ impl PluginSet {
     ///
     /// A plugin declares only when the corpus holds a file its extensions
     /// claim (`corpus_extensions`, the text after the last dot of every
-    /// tracked path): a corpus nothing of the plugin reads stays as it was
+    /// tracked path that is not a symlink, the files the extractors read): a
+    /// corpus nothing of the plugin reads stays as it was
     /// without the plugin, in particular on the schema versions a declared
     /// vocabulary raises.
     pub fn declare_vocabularies(

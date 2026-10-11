@@ -1102,6 +1102,7 @@ fn a_component_that_serves_no_bodies_lowers_the_state() {
         &g.graph,
         &Languages::bundled(),
         &["rust".to_string()],
+        &Default::default(),
         Some(layer),
         None,
         &[],
@@ -1156,6 +1157,36 @@ fn a_markup_extension_that_cannot_be_parsed_lowers_the_state() {
     let clean = &layered().0.generated;
     let json = reverse_architect::coverage::to_json(&clean.coverage);
     assert!(!json.contains("\"unparsed\""), "{json}");
+}
+
+/// Review of 2c: the same in a resource that is neither a style nor a
+/// template — one with no body of its own until it holds such a value — in a
+/// dictionary with no `x:Class`: the run is not "read in full" either.
+#[test]
+fn a_markup_extension_that_cannot_be_parsed_in_a_plain_resource_lowers_the_state() {
+    use reverse_architect::coverage::UnparsedMarkup;
+    let path = "Acme.Ui/Brushes/Broken.xaml";
+    let dictionary = "<ResourceDictionary \
+                      xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\"\n    \
+                      xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n  \
+                      <SolidColorBrush x:Key=\"Accent\" Color=\"{DynamicResource\" />\n\
+                      </ResourceDictionary>\n";
+    let r = run_with(&[(path, dictionary)], true, Some(2));
+    let markup = r
+        .generated
+        .coverage
+        .markup
+        .as_ref()
+        .expect("a markup section");
+    assert_eq!(markup.state, MarkupState::ReadWithUnsupportedConstructs);
+    assert_eq!(
+        markup.unparsed,
+        [UnparsedMarkup {
+            path: path.to_string(),
+            count: 1
+        }]
+    );
+    assert!(markup.failed.is_empty() && markup.without_bodies.is_empty());
 }
 
 // ---- U9: the rows of XAML in the registry of triggers ----
