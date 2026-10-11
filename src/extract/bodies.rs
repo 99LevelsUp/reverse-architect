@@ -59,7 +59,7 @@
 
 use super::cache::CacheStore;
 use super::external::{
-    comments_after_literals, named_secret, redact_secret_block, secret_pattern,
+    comments_after_literals, is_long_token, named_secret, redact_secret_block, secret_pattern,
     without_long_tokens, SecretPrefixes, SourceSecrets, REDACTION_MARKER,
 };
 use super::resolve::table::NamePositions;
@@ -81,22 +81,31 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 6 withholds a key-shaped handler of a
-/// markup body that does not end in a word ([`key_shaped_handler`]), 5
+/// conversion of a model raises it: 7 decides a key-shaped markup handler by
+/// its digits rather than by its last segment ([`key_shaped_handler`]), 6
+/// withholds a key-shaped handler of a markup body that does not end in a
+/// word, 5
 /// decides the handler a markup body
 /// subscribes like a literal and filters every subscription's texts (plan 2c,
 /// review), 4 cuts key-shaped words out of a quoted
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 6;
+pub const BODY_REDACTION_VERSION: u32 = 7;
 
-/// Whether a markup handler's name is a key-shaped word ([`without_long_tokens`])
-/// whose part after the last `_` is not letters alone — a random token the
-/// plugin took for a method's name, not a designer's `control_EventName`.
+/// The digits a key-shaped markup handler needs before it is taken for a
+/// token ([`key_shaped_handler`]).
+const HANDLER_TOKEN_DIGITS: usize = 3;
+
+/// Whether a markup handler's name is a random token the plugin took for a
+/// method's name: key-shaped as a whole ([`is_long_token`]) and holding at
+/// least [`HANDLER_TOKEN_DIGITS`] digits. A designer's names — a control's
+/// name and its event (`comboBox1_SelectedIndexChanged`), a duplicate
+/// (`textBox1_TextChanged_1`), a long camel-case name (`OnTab2SelectionChanged`)
+/// — are words with a digit or two and stay; a random token has digits
+/// spread through it wherever its underscores fall.
 fn key_shaped_handler(name: &str) -> bool {
-    let tail = name.rsplit('_').next().unwrap_or(name);
-    without_long_tokens(name).1 && !tail.chars().all(|c| c.is_ascii_alphabetic())
+    is_long_token(name) && name.bytes().filter(u8::is_ascii_digit).count() >= HANDLER_TOKEN_DIGITS
 }
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
@@ -2224,6 +2233,9 @@ mod tests {
                 subscription(None, "PasswordChanged", "OnPasswordChanged"),
                 subscription(None, "Tag", "k3J9xQ8vLm2_Rz7Tp4Wn6Yb1Hc5Dg0Fa"),
                 subscription(None, "Loaded", "dataGridView1_CellValueChanged"),
+                subscription(None, "Tag", "k3J9xQ8vLm2Rz7Tp4Wn6Yb1Hc5Dg0Fa_Xq"),
+                subscription(None, "TextChanged", "textBox1_TextChanged_1"),
+                subscription(None, "SelectionChanged", "OnTab2SelectionChanged"),
             ],
         );
         // Another text of the file that quotes a withheld handler loses it.
@@ -2237,11 +2249,18 @@ mod tests {
         assert_eq!(handler_of(&model, 2), "OnSave");
         assert_eq!(handler_of(&model, 3), "comboBox1_SelectedIndexChanged");
         assert_eq!(handler_of(&model, 4), "OnPasswordChanged");
-        // A random key-shaped token goes; a designer's name, key-shaped but
-        // ending in the event's name, stays.
+        // A random key-shaped token goes wherever its underscore falls; a
+        // designer's name — key-shaped, but words with a digit or two — stays.
         assert!(!text.contains("k3J9xQ8vLm2_Rz7Tp4Wn6Yb1Hc5Dg0Fa"), "{text}");
+        assert!(
+            !text.contains("k3J9xQ8vLm2Rz7Tp4Wn6Yb1Hc5Dg0Fa_Xq"),
+            "{text}"
+        );
         assert_eq!(handler_of(&model, 5), withheld("long token"));
         assert_eq!(handler_of(&model, 6), "dataGridView1_CellValueChanged");
+        assert_eq!(handler_of(&model, 7), withheld("long token"));
+        assert_eq!(handler_of(&model, 8), "textBox1_TextChanged_1");
+        assert_eq!(handler_of(&model, 9), "OnTab2SelectionChanged");
         assert_eq!(model.members[0].subscriptions[0].event, "Tag");
     }
 
