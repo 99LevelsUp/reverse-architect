@@ -17,6 +17,7 @@
 //! crate-internal `source` module.
 
 pub mod bodies;
+mod body_secrets;
 mod cache;
 pub(crate) mod directory;
 pub mod external;
