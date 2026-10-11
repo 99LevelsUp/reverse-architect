@@ -44,6 +44,7 @@ use super::links::{link, mention, CardIndex};
 use super::map::MAP_PART_ROWS;
 use super::render::{Lang, CARD_SCHEMA_VERSION_LAYER2};
 use crate::cli::LinkStyle;
+use crate::coverage::RestrictedWalk;
 use crate::extract::external::{redact_secret_block, SecretPrefixes};
 use crate::graph::NodeKey;
 use crate::render::split::{fixed_partition, ChunkWeight};
@@ -321,6 +322,9 @@ pub struct Registry {
     /// Sorted (see the module docs).
     pub rows: Vec<RegistryRow>,
     pub coverage: TriggerCoverage,
+    /// The walk back was cut at the nearest functionality (plan 2b, risk
+    /// table of KTD5): what the line of coverage admits. `None` otherwise.
+    pub restricted: Option<RestrictedWalk>,
 }
 
 impl Registry {
@@ -336,20 +340,28 @@ impl Registry {
                 &b.target,
             ))
         });
-        Registry { rows, coverage }
+        Registry {
+            rows,
+            coverage,
+            restricted: None,
+        }
     }
 
     /// The registry of the triggers the analysis of C# bodies found (U5),
-    /// and of the triggers of markup (step 2c, U9).
+    /// and of the triggers of markup (step 2c, U9), with what the walk back
+    /// admits.
     pub fn of(analysis: &Analysis, coverage: TriggerCoverage) -> Registry {
-        Registry::new(
-            analysis
-                .triggers
-                .iter()
-                .map(RegistryRow::from)
-                .chain(markup_rows(analysis)),
-            coverage,
-        )
+        Registry {
+            restricted: RestrictedWalk::of(&analysis.walk),
+            ..Registry::new(
+                analysis
+                    .triggers
+                    .iter()
+                    .map(RegistryRow::from)
+                    .chain(markup_rows(analysis)),
+                coverage,
+            )
+        }
     }
 }
 
@@ -448,21 +460,43 @@ pub fn render_registry(
             "registry of triggers"
         }
     );
+    let walk = registry
+        .restricted
+        .as_ref()
+        .map(|w| restricted_sentence(w, lang))
+        .unwrap_or_default();
     let _ = writeln!(
         s,
-        "**{}** {}.\n",
+        "**{}** {}.{walk}\n",
         if cs { "Pokrytí:" } else { "Coverage:" },
         registry.coverage.summary(lang)
     );
+    s.push_str(match (cs, registry.restricted.is_some()) {
+        (true, false) => {
+            "Jeden řádek na každý výskyt spouštěče a každou funkčnost, na kterou vede; nic se \
+         neslučuje."
+        }
+        (true, true) => {
+            "Jeden řádek na každý výskyt spouštěče a každou funkčnost, na kterou vede, \
+         aniž by jeho cesta prošla funkčností jiného typu (viz řádek pokrytí); nic se neslučuje."
+        }
+        (false, false) => {
+            "One row per occurrence of a trigger and each functionality it leads to; \
+         nothing is merged."
+        }
+        (false, true) => {
+            "One row per occurrence of a trigger and each functionality it leads to \
+         without its way passing through a functionality of another type (see the line of \
+         coverage); nothing is merged."
+        }
+    });
     s.push_str(if cs {
-        "Jeden řádek na každý výskyt spouštěče a každou funkčnost, na kterou vede; nic se \
-         neslučuje. Řádek uvádí druh, klíč, stav cesty (aktivní, mrtvá s místem, které ji vypíná, \
+        " Řádek uvádí druh, klíč, stav cesty (aktivní, mrtvá s místem, které ji vypíná, \
          nebo nerozřešená), funkčnost s odkazem na kartu jejího typu, kde ji popisuje `### Context`, \
          a místo, kde je spouštěč zapojený. Jazyk nebo druh, který řádek pokrytí neuvádí jako \
          pokrytý, může mít spouštěče, které tu nejsou.\n"
     } else {
-        "One row per occurrence of a trigger and each functionality it leads to; nothing is \
-         merged. A row gives the kind, the key, the state of the path (active, dead with the place \
+        " A row gives the kind, the key, the state of the path (active, dead with the place \
          that turns it off, or unresolved), the functionality with a link to its type's card, where \
          its `### Context` describes it, and where the trigger is wired. A language or a kind the \
          line of coverage does not name as covered can have triggers this registry does not \
@@ -494,6 +528,36 @@ pub fn render_registry(
     RenderedFile {
         path: REGISTRY_PATH.to_string(),
         contents: s,
+    }
+}
+
+/// The sentence the line of coverage ends with when the walk back was cut at
+/// the nearest functionality (plan 2b, risk table of KTD5), with a leading
+/// space.
+fn restricted_sentence(w: &RestrictedWalk, lang: Lang) -> String {
+    let (full, occurrences, rows) = (
+        w.transitive_rows as usize,
+        w.trigger_occurrences as usize,
+        w.rows as usize,
+    );
+    match lang {
+        Lang::Cs => format!(
+            " Zpětný průchod se zastavil u nejbližší funkčnosti: dal {} na {} spouštěčů, víc \
+             než desetinásobek, takže řádek vede jen na funkčnost nejbližší spouštěči mimo jeho \
+             vlastní typ, nikdy na funkčnosti dosažené za ní ({} jazyka C#).",
+            cs_n(full, ("řádek", "řádky", "řádků")),
+            cs_n(occurrences, ("výskyt", "výskyty", "výskytů")),
+            cs_n(rows, ("zbylý řádek", "zbylé řádky", "zbylých řádků")),
+        ),
+        Lang::En => format!(
+            " The walk back stopped at the nearest functionality: it gave {} for {} of \
+             triggers, more than ten times as many, so a row leads only to the functionality \
+             nearest its trigger outside the trigger's own type, never to the ones reached past \
+             it ({} of C# kept).",
+            plural(full, "row", "rows"),
+            plural(occurrences, "occurrence", "occurrences"),
+            plural(rows, "row", "rows"),
+        ),
     }
 }
 

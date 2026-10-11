@@ -60,9 +60,9 @@ use super::layer2::{
     flow::{constant_text, written, Cond, Op},
     AdmittedPrecondition, ArmStep, CommonPart, ContextPrecondition, DeadKind, DeadPath, EffectKind,
     EntryKind, EntryPoint, FlowResult, FlowStep, FlowStepKind, Functionality, FunctionalityContext,
-    FunctionalityFlow, Gap, GenericMark, Guarding, Label, MarkKind, MarkUse, MemberLine, PathState,
-    Place, Precondition, ResultKind, Source, State, StateContext, Step, StepKind, StopCause,
-    Target, Trigger, TriggerFlow, TriggerKind, TypeAnalysis, Unresolved, Written,
+    FunctionalityFlow, Gap, GenericMark, Guarding, Label, MarkKind, MarkUse, MemberLine, Narrowed,
+    PathState, Place, Precondition, ResultKind, Source, State, StateContext, Step, StepKind,
+    StopCause, Target, Trigger, TriggerFlow, TriggerKind, TypeAnalysis, Unresolved, Written,
 };
 use super::links::{mention, CardIndex};
 use super::render::Lang;
@@ -1693,7 +1693,11 @@ fn anchor_of(place: Option<&Place>) -> String {
 /// preconditions and the results; levels 2 and 3 add the steps and a
 /// sequence diagram (R16).
 fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) {
-    if c.flows.is_empty() && c.command_class.is_none() && c.refers.is_empty() {
+    if c.flows.is_empty()
+        && c.command_class.is_none()
+        && c.refers.is_empty()
+        && c.narrowed.is_none()
+    {
         return;
     }
     s.push_str("\n### Context\n\n");
@@ -1709,6 +1713,9 @@ fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) 
             cx.t("of", "typu"),
             cx.card_of(r.ty.as_str())
         );
+    }
+    if let Some(n) = &c.narrowed {
+        let _ = writeln!(s, "{}", narrowed_line(cx, n));
     }
     let block = |s: &mut String, heading: &str| {
         if !s.ends_with("\n\n") {
@@ -1797,6 +1804,40 @@ fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) 
                 let _ = write!(s, "\n{d}");
             }
         }
+    }
+}
+
+/// Where the walk back from a functionality stopped when the run kept only
+/// the nearest functionality (plan 2b, risk table of KTD5): the card claims
+/// no trigger reached past those functionalities.
+fn narrowed_line(cx: &Cx<'_>, n: &Narrowed) -> String {
+    let at: Vec<String> =
+        n.at.iter()
+            .map(|r| {
+                format!(
+                    "{} {} {}",
+                    code(short(&r.key)),
+                    cx.t("of", "typu"),
+                    cx.card_of(r.ty.as_str())
+                )
+            })
+            .collect();
+    let at = series(cx.lang, &at, n.total);
+    if cx.cs() {
+        format!(
+            "- V tomto běhu se zpětný průchod zastavuje u funkčnosti nejbližší spouštěči ({}): \
+             spouštěč, jehož cesta sem vede přes člena funkčnosti {at} — funkčnosti jiného typu \
+             mimo typ spouštěče —, vede jen tam a jeho tok je vykreslený tam, ne tady.",
+            cx.registry()
+        )
+    } else {
+        format!(
+            "- In this run the walk back stops at the functionality nearest the trigger ({}): a \
+             trigger whose way here passes through a member of the functionality {at} — another \
+             type's, outside the trigger's own — leads only there, and its flow is drawn there, \
+             not here.",
+            cx.registry()
+        )
     }
 }
 

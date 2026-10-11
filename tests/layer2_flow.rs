@@ -3798,3 +3798,212 @@ fn ae7_the_second_layer_is_the_same_bytes_twice_and_without_it_nothing_is_added(
     assert_eq!(a.manifest, b.manifest);
     assert_eq!(a.coverage, b.coverage);
 }
+
+// ---- The nearest functionality (plan 2b, risk table of KTD5; R-41) ----
+
+const RELAY_NS: &str = "sym:csharp:Acme.Relay#";
+
+/// `callers` classes each calling a shared utility `Util1` from a public
+/// method nothing calls, and the utility a chain of `depth` utilities, each
+/// a type of its own: every caller's entry reaches its own functionality and
+/// every utility's, `callers × (depth + 1)` rows for `callers` occurrences.
+fn chain(callers: usize, depth: usize) -> String {
+    let mut s = String::from("namespace Acme.Relay\n{\n");
+    for k in 1..depth {
+        s.push_str(&format!(
+            "    public class Util{k}\n    {{\n        private Util{} next;\n        public void Run() {{ next.Run(); }}\n    }}\n\n",
+            k + 1
+        ));
+    }
+    s.push_str(&format!(
+        "    public class Util{depth}\n    {{\n        public int Count;\n        public void Run() {{ Count++; }}\n    }}\n"
+    ));
+    for i in 1..=callers {
+        s.push_str(&format!(
+            "\n    public class Caller{i}\n    {{\n        private Util1 util;\n        public void Go() {{ util.Run(); }}\n    }}\n"
+        ));
+    }
+    s.push_str("}\n");
+    s
+}
+
+fn util(k: usize) -> NodeKey {
+    key(RELAY_NS, &format!("Util{k}"))
+}
+
+fn run_of(k: usize) -> NodeKey {
+    key(RELAY_NS, &format!("Util{k}.Run()"))
+}
+
+fn go(i: usize) -> NodeKey {
+    key(RELAY_NS, &format!("Caller{i}.Go()"))
+}
+
+/// The registry's text of a run.
+fn registry_text(g: &Generated) -> &str {
+    &g.triggers.as_ref().expect("the registry").contents
+}
+
+/// Over ten times as many rows as occurrences: the walk is cut at the
+/// functionality nearest each trigger. The shared utility keeps a row per
+/// caller, the utilities past it keep none and say where the walk stopped,
+/// every occurrence keeps a row, and the registry and coverage admit it —
+/// the same bytes twice.
+#[test]
+fn a_registry_over_ten_times_its_triggers_stops_at_the_nearest_functionality() {
+    let (callers, depth) = (3, 11);
+    let src = chain(callers, depth);
+    let files = [("src/Relay.cs", src.as_str())];
+    let (_, analysis) = analyzed(&files);
+
+    // The premise: the full walk is over the ratio.
+    let walk = analysis.walk;
+    assert_eq!(walk.occurrences, callers);
+    assert_eq!(walk.transitive_rows, callers * (depth + 1));
+    assert!(walk.transitive_rows > layer2::NEAREST_RATIO * walk.occurrences);
+    assert!(walk.nearest);
+    assert_eq!(walk.rows, analysis.triggers.len());
+
+    // Every occurrence keeps a row; each caller's own and the utility's.
+    let members: std::collections::BTreeSet<&NodeKey> = analysis
+        .triggers
+        .iter()
+        .map(|r| &r.trigger.member)
+        .collect();
+    let callers_go: Vec<NodeKey> = (1..=callers).map(go).collect();
+    assert_eq!(members, callers_go.iter().collect());
+    assert_eq!(walk.rows, 2 * callers);
+    let first = holding(&analysis, &util(1), &run_of(1));
+    let rows = rows_to(&analysis, &util(1), first);
+    let found: Vec<(TriggerKind, &NodeKey, Vec<&NodeKey>)> = rows
+        .iter()
+        .map(|(_, r)| {
+            (
+                r.trigger.kind,
+                &r.trigger.member,
+                r.path.iter().map(|h| &h.member).collect(),
+            )
+        })
+        .collect();
+    let expected: Vec<(TriggerKind, &NodeKey, Vec<&NodeKey>)> = callers_go
+        .iter()
+        .map(|g| (TriggerKind::External, g, vec![g]))
+        .collect();
+    assert_eq!(found, expected);
+    assert!(context_of(&analysis, &util(1), first).narrowed.is_none());
+
+    // Past the utility: no row, and the functionality says where it stopped.
+    for k in 2..=depth {
+        let f = holding(&analysis, &util(k), &run_of(k));
+        assert!(rows_to(&analysis, &util(k), f).is_empty(), "Util{k}");
+        let narrowed = context_of(&analysis, &util(k), f)
+            .narrowed
+            .as_ref()
+            .unwrap_or_else(|| panic!("Util{k} says nothing of the walk"));
+        assert_eq!(narrowed.at, [target_of(&util(1), first)]);
+        assert_eq!(narrowed.total, 1);
+    }
+
+    // The registry, coverage and the card admit it.
+    let g = layered(&files, 2, "en");
+    let text = registry_text(&g);
+    assert!(
+        text.contains(&format!(
+            "The walk back stopped at the nearest functionality: it gave {} rows for {callers} \
+             occurrences of triggers",
+            callers * (depth + 1)
+        )),
+        "{text}"
+    );
+    assert!(text.contains("without its way passing through a functionality of another type"));
+    assert!(!text.contains("each functionality it leads to; nothing is merged"));
+    let restricted = g
+        .coverage
+        .bodies
+        .as_ref()
+        .and_then(|b| b.restricted_walk.as_ref())
+        .expect("coverage admits the cut");
+    assert_eq!(
+        (
+            restricted.transitive_rows,
+            restricted.trigger_occurrences,
+            restricted.rows
+        ),
+        (
+            (callers * (depth + 1)) as u64,
+            callers as u64,
+            (2 * callers) as u64
+        )
+    );
+    let json = serde_json::to_string(&g.coverage).unwrap();
+    assert!(json.contains("\"restricted_walk\""));
+    let card = card_text(&g, &util(5));
+    let context = contexts(card).concat();
+    assert!(
+        context.contains("the walk back stops at the functionality nearest the trigger"),
+        "{context}"
+    );
+    assert!(!context.contains("\n#### "), "{context}");
+
+    // Deterministic: the same analysis and the same bytes again.
+    let (_, again) = analyzed(&files);
+    assert_eq!(analysis, again);
+    let h = layered(&files, 2, "en");
+    assert_eq!(g.triggers, h.triggers);
+    assert_eq!(g.cards, h.cards);
+    assert_eq!(g.coverage, h.coverage);
+}
+
+/// Ten times as many rows as occurrences, not more: the walk stays
+/// transitive and nothing says otherwise — every utility keeps every caller's
+/// row, no functionality is narrowed, and neither the registry nor coverage
+/// mentions a cut.
+#[test]
+fn a_registry_of_ten_times_its_triggers_stays_transitive() {
+    let (callers, depth) = (3, 9);
+    let src = chain(callers, depth);
+    let files = [("src/Relay.cs", src.as_str())];
+    let (_, analysis) = analyzed(&files);
+    let walk = analysis.walk;
+    assert_eq!(walk.occurrences, callers);
+    assert_eq!(
+        walk.transitive_rows,
+        layer2::NEAREST_RATIO * walk.occurrences
+    );
+    assert!(!walk.nearest);
+    assert_eq!(walk.rows, walk.transitive_rows);
+    assert_eq!(analysis.triggers.len(), walk.transitive_rows);
+    for k in 1..=depth {
+        let f = holding(&analysis, &util(k), &run_of(k));
+        let members: Vec<&NodeKey> = rows_to(&analysis, &util(k), f)
+            .iter()
+            .map(|(_, r)| &r.trigger.member)
+            .collect();
+        let expected: Vec<NodeKey> = (1..=callers).map(go).collect();
+        assert_eq!(members, expected.iter().collect::<Vec<_>>(), "Util{k}");
+    }
+    assert!(analysis
+        .types
+        .iter()
+        .flat_map(|t| &t.context.functionalities)
+        .all(|f| f.narrowed.is_none()));
+
+    let g = layered(&files, 2, "en");
+    let text = registry_text(&g);
+    assert!(!text.contains("walk back stopped"), "{text}");
+    assert!(text.contains(
+        "One row per occurrence of a trigger and each functionality it leads to; nothing is \
+         merged. A row gives"
+    ));
+    assert!(g
+        .coverage
+        .bodies
+        .as_ref()
+        .is_some_and(|b| b.restricted_walk.is_none()));
+    let json = serde_json::to_string(&g.coverage).unwrap();
+    assert!(!json.contains("restricted_walk"));
+    assert!(g
+        .cards
+        .iter()
+        .all(|c| !c.contents.contains("walk back stops")));
+}

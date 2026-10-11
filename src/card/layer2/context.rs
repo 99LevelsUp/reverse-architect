@@ -59,7 +59,7 @@ use super::entry::{bodies, EntryKind, Place};
 use super::flow::{is_can_execute, Cond, DeadKind, Guarding, Occurrence, StepKind};
 use super::link::{Candidates, Links, Outcome};
 use super::resolve::{Scope, Unresolved};
-use super::triggers::{delegate_hosts, FunctionalityRef, PathState, Trigger, TriggerRow};
+use super::triggers::{delegate_hosts, FunctionalityRef, Narrowed, PathState, Trigger, TriggerRow};
 use super::TypeAnalysis;
 use crate::extract::bodies::{
     AccessPath, BodyKind, CallKind, Constant, DeclarationKind, PairedBy, ValueRef,
@@ -199,6 +199,11 @@ pub struct FunctionalityContext {
     /// The functionalities of other types its own triggers' flows are drawn
     /// at (R9), by type and key.
     pub refers: Vec<FunctionalityRef>,
+    /// Where the walk back from it stopped when the run kept only the
+    /// nearest functionality ([`super::triggers::NEAREST_RATIO`]): the rows
+    /// past those functionalities lead to them, not here. `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub narrowed: Option<Narrowed>,
 }
 
 /// What step 2b gives a type: the results and state of U4 and the context
@@ -622,13 +627,15 @@ impl CallerFacts {
 /// The context of every type and functionality, and the dead rows told
 /// (see the module docs). `results` are U4's, one per type in order; `facts`
 /// were taken from the index of callers ([`CallerFacts::new`]) over the same
-/// `types`.
+/// `types`; `narrowed` says where the walk back from each functionality
+/// stopped, when the run kept only the nearest one.
 pub(crate) fn compose(
     types: &[TypeAnalysis],
     results: Vec<TypeResults>,
     rows: &mut [TriggerRow],
     links: &Links<'_, '_>,
     facts: CallerFacts,
+    mut narrowed: BTreeMap<FunctionalityRef, Narrowed>,
 ) -> Vec<TypeContext> {
     let ix = links.index();
     let CallerFacts { hosts, inner } = facts;
@@ -674,6 +681,7 @@ pub(crate) fn compose(
                 flows: Vec::new(),
                 command_class: None,
                 refers: Vec::new(),
+                narrowed: narrowed.remove(&r),
             };
             if classes.contains(&r) {
                 let entries: BTreeSet<NodeKey> = f

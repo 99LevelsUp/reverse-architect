@@ -56,6 +56,25 @@
 //! functionality's own entry points that are triggers are rows of it too (a
 //! trigger whose code never leaves its type is still in the registry).
 //!
+//! # The nearest functionality (risk table of the plan, R-41)
+//!
+//! When the walk gives more than [`NEAREST_RATIO`] times as many rows as
+//! occurrences of triggers (distinct [`Trigger::identity`], rows of C# only),
+//! the run keeps only the way to the functionality nearest each trigger: a
+//! row whose path passes through a member of a core functionality G of a
+//! type that is neither the trigger's nor the target's leads to G instead —
+//! the first such member from the trigger on, its path cut before it and the
+//! member its one entry — and the functionalities reached past G lose the
+//! row. A row of G's own walk for the same trigger is kept over the one cut
+//! so; every occurrence keeps at least one row. Applied to the rows of the
+//! full walk, by the data, deterministically: the path of a row is the one
+//! the breadth-first walk recorded, so the nearest is nearest by the length
+//! of that path; a member of several functionalities of one type (none
+//! today: the clusters partition the members) counts for the least by type
+//! key, then functionality key, in code points. The functionality that lost
+//! a row says where the walk stopped ([`Narrowed`]), and the run says it
+//! was cut ([`WalkCounts`]). Below the ratio nothing changes.
+//!
 //! Every list is ordered (by key in code points, then place) and nothing
 //! iterates a hash map (KTD13).
 
@@ -67,6 +86,7 @@ use super::flow::written;
 use super::link::{weakest, Links};
 use super::resolve::{within, Index, Scope};
 use super::TypeAnalysis;
+use crate::card::explain::NAMED_IN_SENTENCE;
 use crate::extract::bodies::{AccessMode, AccessPath, BodyKind, Condition, MemberBody, PathRoot};
 use crate::graph::{Confidence, EdgeKind, NodeKey};
 use serde::Serialize;
@@ -991,15 +1011,72 @@ fn path_of(walk: &Walk<'_>, members: &BTreeSet<&NodeKey>, h: &Hit) -> Vec<Hop> {
     out
 }
 
+/// How many times as many rows as occurrences of triggers the walk may give
+/// before the run keeps only the nearest functionality (see the module docs).
+pub const NEAREST_RATIO: usize = 10;
+
+/// What the walk back gave the run (see the module docs): the rows of the
+/// full walk, the occurrences of triggers among them, the rows kept, and
+/// whether the rule of the nearest functionality cut them. Rows of C# only;
+/// the registry adds the rows of markup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WalkCounts {
+    pub transitive_rows: usize,
+    pub occurrences: usize,
+    pub rows: usize,
+    pub nearest: bool,
+}
+
+/// Where the walk back from a functionality stopped under the rule of the
+/// nearest functionality: the functionalities of other types its rows were
+/// moved to, the first [`NAMED_IN_SENTENCE`] by type and key, and how many.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Narrowed {
+    pub at: Vec<FunctionalityRef>,
+    pub total: usize,
+}
+
+/// The rows of every core functionality, what the walk gave, and where it
+/// stopped (see the module docs).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    /// Sorted for the registry (R11).
+    pub rows: Vec<TriggerRow>,
+    /// Empty unless the walk was cut ([`WalkCounts::nearest`]).
+    pub narrowed: BTreeMap<FunctionalityRef, Narrowed>,
+    pub walk: WalkCounts,
+}
+
+/// The order of the registry (R11): by kind, key, the file and place of the
+/// trigger, its member, then the functionality.
+fn registry_order(a: &TriggerRow, b: &TriggerRow) -> std::cmp::Ordering {
+    (
+        a.trigger.kind,
+        &a.trigger.key,
+        a.trigger.place.as_ref(),
+        &a.trigger.member,
+        &a.target,
+    )
+        .cmp(&(
+            b.trigger.kind,
+            &b.trigger.key,
+            b.trigger.place.as_ref(),
+            &b.trigger.member,
+            &b.target,
+        ))
+}
+
 /// The rows of every core functionality of `types` (see the module docs),
 /// sorted for the registry (R11): by kind, key, the file and place of the
-/// trigger, its member, then the functionality.
+/// trigger, its member, then the functionality — cut at the nearest
+/// functionality when the full walk gives more than [`NEAREST_RATIO`] times
+/// as many rows as occurrences.
 pub fn find(
     types: &[TypeAnalysis],
     links: &Links<'_, '_>,
     callers: &Callers,
     marks: &dyn DynamicMarks,
-) -> Vec<TriggerRow> {
+) -> Found {
     let corpus = Corpus::new(types, links, callers, marks);
     let mut out: Vec<TriggerRow> = types
         .iter()
@@ -1010,21 +1087,114 @@ pub fn find(
                 .collect::<Vec<_>>()
         })
         .collect();
-    out.sort_by(|a, b| {
-        (
-            a.trigger.kind,
-            &a.trigger.key,
-            a.trigger.place.as_ref(),
-            &a.trigger.member,
-            &a.target,
-        )
-            .cmp(&(
-                b.trigger.kind,
-                &b.trigger.key,
-                b.trigger.place.as_ref(),
-                &b.trigger.member,
-                &b.target,
-            ))
-    });
-    out
+    out.sort_by(registry_order);
+    // The identity is a prefix of the order: the occurrences are the runs of
+    // equal identities, counted without a copy of any.
+    let occurrences = usize::from(!out.is_empty())
+        + out
+            .windows(2)
+            .filter(|w| !w[0].trigger.same(&w[1].trigger))
+            .count();
+    let transitive_rows = out.len();
+    let mut walk = WalkCounts {
+        transitive_rows,
+        occurrences,
+        rows: transitive_rows,
+        nearest: false,
+    };
+    if transitive_rows <= NEAREST_RATIO * occurrences {
+        return Found {
+            rows: out,
+            narrowed: BTreeMap::new(),
+            walk,
+        };
+    }
+    let (rows, narrowed) = nearest(types, links.index(), out);
+    walk.rows = rows.len();
+    walk.nearest = true;
+    Found {
+        rows,
+        narrowed,
+        walk,
+    }
+}
+
+/// The rows of the full walk kept at the functionality nearest each trigger
+/// (see the module docs), sorted for the registry, and where each
+/// functionality's walk stopped.
+fn nearest(
+    types: &[TypeAnalysis],
+    ix: &Index<'_>,
+    rows: Vec<TriggerRow>,
+) -> (Vec<TriggerRow>, BTreeMap<FunctionalityRef, Narrowed>) {
+    // Every core functionality by type and key, and the one of each member.
+    let mut table: Vec<FunctionalityRef> = types
+        .iter()
+        .flat_map(|t| {
+            t.functionalities.iter().map(|f| FunctionalityRef {
+                ty: t.key.clone(),
+                key: f.key.clone(),
+            })
+        })
+        .collect();
+    table.sort();
+    let at: BTreeMap<&FunctionalityRef, usize> =
+        table.iter().enumerate().map(|(i, r)| (r, i)).collect();
+    let mut of: BTreeMap<&NodeKey, usize> = BTreeMap::new();
+    for t in types {
+        for f in &t.functionalities {
+            let r = FunctionalityRef {
+                ty: t.key.clone(),
+                key: f.key.clone(),
+            };
+            let i = at[&r];
+            for m in &f.members {
+                // The least by type and key, should a member be in several.
+                let j = of.entry(m).or_insert(i);
+                *j = (*j).min(i);
+            }
+        }
+    }
+
+    let mut cut: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut kept: Vec<(TriggerRow, bool)> = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let own_ty = ix.owner_of(&row.trigger.member);
+        let stop = row.path.iter().position(|hop| {
+            of.get(&hop.member)
+                .is_some_and(|&g| Some(&table[g].ty) != own_ty && table[g].ty != row.target.ty)
+        });
+        let Some(k) = stop else {
+            kept.push((row, false));
+            continue;
+        };
+        let g = of[&row.path[k].member];
+        if let Some(&from) = at.get(&row.target) {
+            cut.insert((from, g));
+        }
+        row.entries = vec![row.path[k].member.clone()];
+        row.path.truncate(k);
+        row.path.shrink_to_fit();
+        row.grade = weakest(row.path.iter().filter_map(|hop| hop.grade));
+        row.own = false;
+        row.target = table[g].clone();
+        kept.push((row, true));
+    }
+    // A row of the nearest functionality's own walk first, then one moved
+    // there; the sort is stable, so equal rows keep the order of the walk.
+    kept.sort_by(|a, b| registry_order(&a.0, &b.0).then(a.1.cmp(&b.1)));
+    kept.dedup_by(|b, a| a.0.trigger.same(&b.0.trigger) && a.0.target == b.0.target);
+
+    let mut narrowed: BTreeMap<FunctionalityRef, Narrowed> = BTreeMap::new();
+    for (from, g) in cut {
+        let n = narrowed.entry(table[from].clone()).or_insert(Narrowed {
+            at: Vec::new(),
+            total: 0,
+        });
+        if n.at.len() < NAMED_IN_SENTENCE {
+            n.at.push(table[g].clone());
+        }
+        n.total += 1;
+    }
+    (kept.into_iter().map(|(r, _)| r).collect(), narrowed)
 }

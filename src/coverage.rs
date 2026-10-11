@@ -470,6 +470,35 @@ pub struct Bodies {
     /// another was read.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub withheld: Vec<String>,
+    /// The walk back over the callers (plan 2b, KTD5) stopped at the
+    /// functionality nearest each trigger, because it gave more than ten
+    /// times as many rows as occurrences of triggers. Absent when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restricted_walk: Option<RestrictedWalk>,
+}
+
+/// What the walk back gave a run whose registry was cut at the nearest
+/// functionality: rows of C# only, the registry adds those of markup.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RestrictedWalk {
+    /// The rows the full, transitive walk gave.
+    pub transitive_rows: u64,
+    /// The distinct occurrences of triggers among them (kind, key, member,
+    /// place).
+    pub trigger_occurrences: u64,
+    /// The rows kept at the nearest functionality.
+    pub rows: u64,
+}
+
+impl RestrictedWalk {
+    /// What coverage says of the walk `walk`: `None` unless it was cut.
+    pub fn of(walk: &crate::card::layer2::WalkCounts) -> Option<RestrictedWalk> {
+        walk.nearest.then_some(RestrictedWalk {
+            transitive_rows: walk.transitive_rows as u64,
+            trigger_occurrences: walk.occurrences as u64,
+            rows: walk.rows as u64,
+        })
+    }
 }
 
 /// One body the second layer could pair with nothing.
@@ -525,6 +554,7 @@ pub fn bodies(layer: &crate::extract::bodies::BodyLayer) -> Bodies {
             .into_iter()
             .map(|k| k.as_str().to_string())
             .collect(),
+        restricted_walk: None,
     }
 }
 

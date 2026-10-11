@@ -87,7 +87,8 @@ pub use effects::{
 };
 pub use link::{Basis, Candidates, GradedLink, Links, Outcome, Resolution, Site};
 pub use triggers::{
-    DynamicMarks, FunctionalityRef, Hop, NoMarks, PathState, Trigger, TriggerKind, TriggerRow,
+    DynamicMarks, FunctionalityRef, Hop, Narrowed, NoMarks, PathState, Trigger, TriggerKind,
+    TriggerRow, WalkCounts, NEAREST_RATIO,
 };
 
 pub use cluster::{Functionality, FunctionalityName};
@@ -172,6 +173,11 @@ pub struct Analysis {
     /// `cards/triggers.md` lists (U7). A [`TriggerFlow::row`] is an index
     /// into it.
     pub triggers: Vec<TriggerRow>,
+    /// What the walk back gave the run, and whether it was cut at the
+    /// nearest functionality ([`triggers::NEAREST_RATIO`]): what the registry
+    /// and coverage admit. Not serialized: a count, not a finding.
+    #[serde(skip)]
+    pub walk: WalkCounts,
     /// Step 2c: the dynamic-call markers of the run (U6, U7) — what the
     /// `## Dynamic access` of a card (U8) and the registry's rows from markup
     /// (U9) read. Empty from [`analyze`] and [`analyze_with`]; [`analyze_run`]
@@ -232,10 +238,11 @@ pub fn analyze_with(
     // One walk for 2a's entry points and 2b's links: the external index's
     // relation at an access first (R-25).
     let links = Links::new(&ix, ceiling);
-    let (types, triggers) = analyze_in(graph, layer, &links, marks);
+    let (types, triggers, walk) = analyze_in(graph, layer, &links, marks);
     Analysis {
         types,
         triggers,
+        walk,
         dynamic: DynamicAccess::default(),
     }
 }
@@ -249,13 +256,14 @@ pub fn analyze_run(graph: &Graph, layer: &BodyLayer, ceiling: usize) -> Analysis
     let ix = Index::new(graph, layer);
     let links = Links::new(&ix, ceiling);
     let dynamic = DynamicAccess::build(graph, &links);
-    let (mut types, triggers) = analyze_in(graph, layer, &links, &dynamic);
+    let (mut types, triggers, walk) = analyze_in(graph, layer, &links, &dynamic);
     for t in &mut types {
         t.dynamic.lines = dynamic.lines_of(&t.key);
     }
     Analysis {
         types,
         triggers,
+        walk,
         dynamic,
     }
 }
@@ -267,7 +275,7 @@ fn analyze_in(
     layer: &BodyLayer,
     links: &Links<'_, '_>,
     marks: &dyn DynamicMarks,
-) -> (Vec<TypeAnalysis>, Vec<TriggerRow>) {
+) -> (Vec<TypeAnalysis>, Vec<TriggerRow>, WalkCounts) {
     let ix = links.index();
     // Over the whole graph, every language's types: a comment is copied from
     // wherever it was written first.
@@ -305,15 +313,19 @@ fn analyze_in(
         let flow_results = FlowResults::new(graph, links, &callers);
         types.iter().map(|t| flow_results.of_type(t)).collect()
     };
-    let mut triggers = triggers::find(&types, links, &callers, marks);
+    let triggers::Found {
+        rows: mut triggers,
+        narrowed,
+        walk,
+    } = triggers::find(&types, links, &callers, marks);
     // The index of callers is the largest structure of step 2b: what the
     // composition still reads of it is taken, and it is dropped before the
     // flows are composed.
     let facts = context::CallerFacts::new(&types, &callers, ix);
     drop(callers);
-    let contexts = context::compose(&types, results, &mut triggers, links, facts);
+    let contexts = context::compose(&types, results, &mut triggers, links, facts, narrowed);
     for (t, c) in types.iter_mut().zip(contexts) {
         t.context = c;
     }
-    (types, triggers)
+    (types, triggers, walk)
 }

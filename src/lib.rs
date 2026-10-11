@@ -222,6 +222,14 @@ pub fn generate_reporting(
     let mut analysis = bodies
         .as_ref()
         .map(|layer| card::layer2::analyze_run(&graph, layer, config.ambiguity_ceiling));
+    // A diagnostic for measuring a large repository: what the walk back gave,
+    // whether or not it was cut. Never part of the corpus.
+    if let (Some(a), Some(_)) = (&analysis, std::env::var_os("RA_DIAG_WALK")) {
+        eprintln!(
+            "diag walk: transitive_rows={} trigger_occurrences={} rows={} restricted={}",
+            a.walk.transitive_rows, a.walk.occurrences, a.walk.rows, a.walk.nearest
+        );
+    }
     if let Some(analysis) = &analysis {
         card::add_layer2_keywords(&mut card_set, &insight, analysis);
     }
@@ -409,6 +417,9 @@ pub fn generate_reporting(
         section
             .plugins
             .retain(|id| present.contains(id) || component.contains(id.as_str()));
+        section.restricted_walk = analysis
+            .as_ref()
+            .and_then(|a| coverage::RestrictedWalk::of(&a.walk));
         section
     });
     coverage.markup = markup;
