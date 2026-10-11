@@ -161,6 +161,11 @@ class Case:
     used_for_card_tuning: bool
     prompt_names_location: bool
 
+    @property
+    def prompt_text(self) -> str:
+        """What the agent is given to work on: the case's prompt."""
+        return self.prompt.strip()
+
 
 @dataclass(frozen=True)
 class Place:
@@ -227,6 +232,11 @@ class Question:
     kontrolni: bool
     fakta: tuple[Fact, ...]
     zakazana_tvrzeni: tuple[ForbiddenClaim, ...]
+
+    @property
+    def prompt_text(self) -> str:
+        """What the agent is given to work on: the question's `dotaz`."""
+        return self.dotaz.strip()
 
     def places(self) -> list[tuple[str, Place]]:
         """Every place of the question with a label naming its fact or claim."""
