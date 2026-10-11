@@ -601,7 +601,7 @@ fn output_from_ops(
         name_refs,
         blocks,
     } = declarations;
-    let opaque = withheld_keys(&ops, prefixes);
+    let opaque = withheld_keys(file, &ops, prefixes);
     // The key a node keeps; `None` for a withheld key this file does not
     // declare, which nothing here can rename consistently and so drops.
     let rekey = |key: String| -> Option<String> {
@@ -777,11 +777,14 @@ fn withholds(key: &str, prefixes: &SecretPrefixes) -> bool {
 }
 
 /// Each symbol key of `ops` that [`withholds`] the local part of, mapped to
-/// an opaque key: its part up to the `#` kept, so the key still names its
-/// file and plugin, and `withheld~<n>` after it, `n` counting such keys in
+/// an opaque key: its part up to the first `#` kept, so the key still names
+/// its plugin and its namespace or file, and `withheld~<mark>~<n>` after it.
+/// `mark` is [`withheld_mark`] of `file`, so two files whose keys share a
+/// head — the files of one C# namespace, two paths that agree up to a `#` —
+/// never give one opaque key to two symbols; `n` counts such keys in
 /// declaration order — the same file read twice gives the same keys. An
 /// opaque key another symbol of the file already uses moves to the next `n`.
-fn withheld_keys(ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, String> {
+fn withheld_keys(file: &str, ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, String> {
     let declared: HashSet<&str> = ops
         .iter()
         .filter_map(|op| match op {
@@ -790,6 +793,7 @@ fn withheld_keys(ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, Strin
         })
         .collect();
     let mut opaque = HashMap::new();
+    let mut mark: Option<String> = None;
     let mut n = 0usize;
     for op in ops {
         let Op::Symbol(sym) = op else {
@@ -799,9 +803,10 @@ fn withheld_keys(ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, Strin
             continue;
         }
         let head = sym.key.split_once('#').map_or("", |(head, _)| head);
+        let mark = mark.get_or_insert_with(|| withheld_mark(file));
         let key = loop {
             n += 1;
-            let key = format!("{head}#withheld~{n}");
+            let key = format!("{head}#withheld~{mark}~{n}");
             if !declared.contains(key.as_str()) {
                 break key;
             }
@@ -809,6 +814,17 @@ fn withheld_keys(ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<String, Strin
         opaque.insert(sym.key.clone(), key);
     }
     opaque
+}
+
+/// What tells one file's opaque keys from another's: the first eight hex
+/// digits of the SHA-256 of its repository path as the graph keys it
+/// (`/`-separated) — stable across runs and platforms, and not the path
+/// itself, which a C# key does not otherwise spell.
+fn withheld_mark(file: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut mark = format!("{:x}", Sha256::digest(file.as_bytes()));
+    mark.truncate(8);
+    mark
 }
 
 /// One type relation a declaration names, buffered until the whole repo has been
@@ -4636,5 +4652,106 @@ public class Other {
                 .all(|r| !r.owner_mapped && r.owner.as_str() == "web/a.ts"),
             "{records:?}"
         );
+    }
+
+    /// Tokens of a provider's shape, as the redaction tests spell them.
+    const WITHHELD_A: &str = "ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1";
+    const WITHHELD_B: &str = "ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5";
+
+    fn symbols(keys: &[&str]) -> Vec<Op> {
+        keys.iter()
+            .map(|k| {
+                Op::Symbol(crate::plugin::host::WireSymbol {
+                    key: k.to_string(),
+                    facts: Vec::new(),
+                    edges: Vec::new(),
+                })
+            })
+            .collect()
+    }
+
+    /// Review of the 2c fixes: two C# files of one namespace, each declaring
+    /// a type named by a token, give two nodes — an opaque key counted per
+    /// file alone was `N#withheld~1` in both, and the graph merged the two
+    /// types into one. The keys hold no token and no path, and a second run
+    /// gives the same keys.
+    #[test]
+    fn withheld_keys_of_two_files_of_one_namespace_are_two_nodes() {
+        let files = [
+            (
+                "src/A.cs",
+                format!("namespace N;\npublic class {WITHHELD_A} {{}}\n"),
+            ),
+            (
+                "src/B.cs",
+                format!("namespace N;\npublic class {WITHHELD_B} {{}}\n"),
+            ),
+        ];
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, s)| (*p, s.as_str())).collect();
+        let opaque = |g: &Graph| -> Vec<String> {
+            g.nodes_sorted()
+                .iter()
+                .map(|n| n.key.as_str().to_string())
+                .filter(|k| k.starts_with("sym:csharp:N#withheld~"))
+                .collect()
+        };
+        let g = usage_graph(&files, 8);
+        let mut expected = vec![
+            format!("sym:csharp:N#withheld~{}~1", withheld_mark("src/A.cs")),
+            format!("sym:csharp:N#withheld~{}~1", withheld_mark("src/B.cs")),
+        ];
+        expected.sort();
+        assert_ne!(expected[0], expected[1]);
+        assert_eq!(opaque(&g), expected);
+        assert!(g
+            .nodes_sorted()
+            .iter()
+            .all(|n| !n.key.as_str().contains("ghp_")));
+        assert_eq!(opaque(&usage_graph(&files, 8)), expected);
+    }
+
+    /// The same for a markup file's key, whose head is the path up to its
+    /// first `#`: two files under one directory named with a `#` share the
+    /// head, and still give two keys — the same ones on every read.
+    #[test]
+    fn withheld_keys_of_two_paths_agreeing_up_to_a_hash_differ() {
+        let p = SecretPrefixes::default();
+        let a = "Acme#Keys/A.xaml";
+        let b = "Acme#Keys/B.xaml";
+        let of = |file: &str, token: &str| {
+            let key = format!("sym:xaml:{file}#{token}");
+            let keys = withheld_keys(file, &symbols(&[&key]), &p);
+            assert_eq!(keys.len(), 1, "{key} is not withheld: {keys:?}");
+            keys[&key].clone()
+        };
+        let (ka, kb) = (of(a, WITHHELD_A), of(b, WITHHELD_A));
+        assert!(ka.starts_with("sym:xaml:Acme#withheld~"), "{ka}");
+        assert!(kb.starts_with("sym:xaml:Acme#withheld~"), "{kb}");
+        assert_ne!(ka, kb);
+        assert_eq!(of(a, WITHHELD_A), ka);
+        let mark = withheld_mark(a);
+        assert_eq!(mark.len(), 8);
+        assert!(mark
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_eq!(ka, format!("sym:xaml:Acme#withheld~{mark}~1"));
+    }
+
+    /// A symbol the file already declares under the opaque key the counter
+    /// would give moves the withheld key on to the next number; the declared
+    /// key stays as it is.
+    #[test]
+    fn a_withheld_key_skips_an_opaque_key_the_file_already_declares() {
+        let p = SecretPrefixes::default();
+        let file = "src/A.cs";
+        let mark = withheld_mark(file);
+        let taken = format!("sym:csharp:N#withheld~{mark}~1");
+        let secret = format!("sym:csharp:N#{WITHHELD_A}");
+        let other = format!("sym:csharp:N#{WITHHELD_B}");
+        let keys = withheld_keys(file, &symbols(&[&taken, &secret, &other]), &p);
+        assert_eq!(keys.len(), 2, "{keys:?}");
+        assert_eq!(keys[&secret], format!("sym:csharp:N#withheld~{mark}~2"));
+        assert_eq!(keys[&other], format!("sym:csharp:N#withheld~{mark}~3"));
+        assert!(!keys.contains_key(&taken));
     }
 }

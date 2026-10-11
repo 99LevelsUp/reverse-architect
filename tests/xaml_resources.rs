@@ -442,8 +442,15 @@ fn rendered(g: &reverse_architect::Generated) -> Vec<(String, String)> {
     out
 }
 
+/// The mark of a file's opaque keys: the first eight hex digits of the
+/// SHA-256 of its path.
+fn mark(file: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(file.as_bytes()))[..8].to_string()
+}
+
 fn opaque(n: usize) -> NodeKey {
-    NodeKey::new(format!("sym:xaml:{KEYS}#withheld~{n}"))
+    NodeKey::new(format!("sym:xaml:{KEYS}#withheld~{}~{n}", mark(KEYS)))
 }
 
 /// Review of 2c (KTD16): a key a plugin builds from a resource's `x:Key`
@@ -491,7 +498,8 @@ fn a_resource_key_the_secret_filter_withholds_is_an_opaque_key_everywhere() {
     assert!(
         artifacts
             .iter()
-            .any(|(label, text)| label.starts_with("card ") && text.contains("withheld~1")),
+            .any(|(label, text)| label.starts_with("card ")
+                && text.contains(&format!("withheld~{}~1", mark(KEYS)))),
         "no card titled by the brush's opaque key"
     );
     for (label, text) in &artifacts {

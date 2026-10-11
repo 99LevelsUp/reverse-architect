@@ -232,7 +232,14 @@ pub(crate) use treesitter::NamesHandoff;
 /// misses exactly those records. The first layer's records are written as
 /// before, and a run without `--detail-level` writes byte for byte what it
 /// did — so no record of any phase could be served stale by this change.
-pub(crate) const CACHE_VERSION: u32 = 10;
+///
+/// v11 (the reviews of step 2c): the host now rewrites what a plugin hands
+/// it for the first layer before the per-file record is written — a symbol
+/// key whose local part the secret filter withholds becomes an opaque key
+/// unique to its file, and a withheld name no longer resolves a reference.
+/// The plugin's digest does not change for a third-party plugin, so a record
+/// written before could still hold the raw key; the bump retires every one.
+pub(crate) const CACHE_VERSION: u32 = 11;
 
 /// Errors an extractor can raise. All readable; never a panic.
 #[derive(Debug, thiserror::Error)]
