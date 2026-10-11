@@ -237,7 +237,8 @@ impl Gather {
             .entry(callee.clone())
             .or_default()
             .entry(caller.clone())
-            .or_default()
+            // Most callers have one piece of evidence: no room for four.
+            .or_insert_with(|| Vec::with_capacity(1))
             .push(Evidence { via, grade });
     }
 
@@ -460,6 +461,12 @@ impl Callers {
                             evidence.sort_by(|a, b| {
                                 (a.via.rank(), a.via.place()).cmp(&(b.via.rank(), b.via.place()))
                             });
+                            // Most callers have one or two pieces of
+                            // evidence, and a list grown by pushing keeps
+                            // room for four: millions of callers in a large
+                            // repository make that slack the bulk of the
+                            // index.
+                            evidence.shrink_to_fit();
                             let grade = evidence.iter().map(|e| e.grade).min()?;
                             Some(Caller {
                                 member,

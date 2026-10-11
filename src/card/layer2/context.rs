@@ -275,6 +275,19 @@ fn inner_calls(
     out
 }
 
+/// The candidates a flow's step shows: those up to the ceiling and how many
+/// more. The ones past the ceiling are kept by the index of callers alone
+/// ([`Candidates::past`]); a step never names them, and a name that is not a
+/// member's own (`Add`, `Dispose`) has thousands of them, which every shared
+/// part reaching that call would copy.
+fn shown(c: &Candidates) -> Candidates {
+    Candidates {
+        shown: c.shown.clone(),
+        more: c.more,
+        past: Vec::new(),
+    }
+}
+
 /// The parameters a method declares, in order: name and type as written.
 fn parameters(ix: &super::Index<'_>, method: &NodeKey) -> Vec<(String, String)> {
     let Some(pb) = ix
@@ -525,13 +538,13 @@ impl Composer<'_, '_, '_> {
                     Outcome::Ambiguous { reason } => FlowStepKind::UnresolvedContinuation {
                         path: site.path.clone(),
                         reason: reason.clone(),
-                        candidates: r.candidates.clone(),
+                        candidates: shown(&r.candidates),
                     },
                     Outcome::Unresolved { reason } if !r.candidates.is_empty() => {
                         FlowStepKind::UnresolvedContinuation {
                             path: site.path.clone(),
                             reason: reason.clone(),
-                            candidates: r.candidates.clone(),
+                            candidates: shown(&r.candidates),
                         }
                     }
                     Outcome::Unresolved { .. } => continue,
@@ -573,17 +586,52 @@ impl Composer<'_, '_, '_> {
     }
 }
 
+/// What the composition reads of the index of callers, taken from it once
+/// the triggers are found, so the index — the largest structure of step 2b —
+/// is dropped before the flows are composed.
+pub(crate) struct CallerFacts {
+    /// The command classes' invokers and the members that bind them
+    /// ([`delegate_hosts`]).
+    hosts: BTreeMap<NodeKey, BTreeMap<NodeKey, Place>>,
+    /// What each member of a functionality leads to inside it
+    /// ([`inner_calls`]): by type and functionality, in their order.
+    inner: Vec<Vec<BTreeMap<NodeKey, BTreeSet<NodeKey>>>>,
+}
+
+impl CallerFacts {
+    pub(crate) fn new(
+        types: &[TypeAnalysis],
+        callers: &Callers,
+        ix: &super::Index<'_>,
+    ) -> CallerFacts {
+        CallerFacts {
+            hosts: delegate_hosts(callers),
+            inner: types
+                .iter()
+                .map(|t| {
+                    t.functionalities
+                        .iter()
+                        .map(|f| inner_calls(callers, ix, f))
+                        .collect()
+                })
+                .collect(),
+        }
+    }
+}
+
 /// The context of every type and functionality, and the dead rows told
-/// (see the module docs). `results` are U4's, one per type in order.
+/// (see the module docs). `results` are U4's, one per type in order; `facts`
+/// were taken from the index of callers ([`CallerFacts::new`]) over the same
+/// `types`.
 pub(crate) fn compose(
     types: &[TypeAnalysis],
     results: Vec<TypeResults>,
     rows: &mut [TriggerRow],
     links: &Links<'_, '_>,
-    callers: &Callers,
+    facts: CallerFacts,
 ) -> Vec<TypeContext> {
     let ix = links.index();
-    let hosts = delegate_hosts(callers);
+    let CallerFacts { hosts, inner } = facts;
     let mut classes: BTreeSet<FunctionalityRef> = BTreeSet::new();
     for t in types {
         for f in &t.functionalities {
@@ -605,9 +653,9 @@ pub(crate) fn compose(
     let mut dead: Vec<(usize, NodeKey, Place)> = Vec::new();
     let mut referring: Vec<(usize, Vec<usize>)> = Vec::new();
     let mut out = Vec::new();
-    for (t, type_results) in types.iter().zip(results) {
+    for ((t, type_results), inner) in types.iter().zip(results).zip(inner) {
         let mut functionalities = Vec::new();
-        for f in &t.functionalities {
+        for (f, inner) in t.functionalities.iter().zip(inner) {
             let r = FunctionalityRef {
                 ty: t.key.clone(),
                 key: f.key.clone(),
@@ -617,7 +665,7 @@ pub(crate) fn compose(
                 t,
                 f,
                 results: type_results.of(&f.key),
-                inner: inner_calls(callers, ix, f),
+                inner,
             };
             let targeting = by_target.get(&r).cloned().unwrap_or_default();
             let mut fc = FunctionalityContext {

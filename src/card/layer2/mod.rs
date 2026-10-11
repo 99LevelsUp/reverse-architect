@@ -301,10 +301,17 @@ fn analyze_in(
 
     // Step 2b, once a run.
     let callers = Callers::new(graph, links);
-    let flow_results = FlowResults::new(graph, links, &callers);
-    let results: Vec<TypeResults> = types.iter().map(|t| flow_results.of_type(t)).collect();
+    let results: Vec<TypeResults> = {
+        let flow_results = FlowResults::new(graph, links, &callers);
+        types.iter().map(|t| flow_results.of_type(t)).collect()
+    };
     let mut triggers = triggers::find(&types, links, &callers, marks);
-    let contexts = context::compose(&types, results, &mut triggers, links, &callers);
+    // The index of callers is the largest structure of step 2b: what the
+    // composition still reads of it is taken, and it is dropped before the
+    // flows are composed.
+    let facts = context::CallerFacts::new(&types, &callers, ix);
+    drop(callers);
+    let contexts = context::compose(&types, results, &mut triggers, links, facts);
     for (t, c) in types.iter_mut().zip(contexts) {
         t.context = c;
     }

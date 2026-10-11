@@ -92,13 +92,18 @@ fn is_hierarchical(key: &str) -> bool {
 /// (`a/b/c`, never `c`), and every intermediate directory must exist as its own
 /// `Module` node. A synthetic root node is *not* required — top-level modules
 /// hang under `.` implicitly.
+///
+/// Shared, not owned: a key is cloned into every edge, every caller and every
+/// row of the second layer that names it, and a clone is a count, not a copy
+/// of the text. Compared, ordered, hashed and serialized by its text, exactly
+/// as a `String` is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct NodeKey(String);
+pub struct NodeKey(std::sync::Arc<str>);
 
 impl NodeKey {
     /// Build a key, normalizing OS path separators to `/` for portability.
     pub fn new(value: impl Into<String>) -> Self {
-        NodeKey(value.into().replace('\\', "/"))
+        NodeKey(value.into().replace('\\', "/").into())
     }
 
     pub fn as_str(&self) -> &str {

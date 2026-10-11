@@ -70,7 +70,9 @@ use super::TypeAnalysis;
 use crate::extract::bodies::{AccessMode, AccessPath, BodyKind, Condition, MemberBody, PathRoot};
 use crate::graph::{Confidence, EdgeKind, NodeKey};
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 /// The kinds of trigger (R13), in the order the registry lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -148,8 +150,13 @@ pub enum PathState {
         place: Place,
     },
     /// Only weak callers lead to the root: the members they are, by key.
+    ///
+    /// One list per root, shared by every row that reaches that root: a root
+    /// a name past the ceiling calls has hundreds of weak callers, and the
+    /// walk is transitive, so the same root is the row of hundreds of
+    /// functionalities — a list copied into each row grew with their product.
     Unresolved {
-        callers: Vec<NodeKey>,
+        callers: Arc<[NodeKey]>,
     },
 }
 
@@ -439,6 +446,9 @@ struct Corpus<'a, 'i, 'l> {
     hosts_of: BTreeMap<NodeKey, BTreeMap<NodeKey, Place>>,
     /// Every member a construction bound to a delegate is written in.
     hosts: BTreeSet<NodeKey>,
+    /// The lists of weak callers of the unresolved roots, each once
+    /// ([`PathState::Unresolved`]).
+    weak_lists: RefCell<BTreeSet<Arc<[NodeKey]>>>,
 }
 
 /// One trigger the walk met, and the members it leads to F through.
@@ -512,14 +522,23 @@ struct Ways {
 impl Ways {
     /// The state of a root these callers make: active when none passes
     /// control, unresolved when only weak ones do, `None` when a strong one
-    /// does.
-    fn root(&self) -> Option<PathState> {
+    /// does. The list of weak callers is taken from `shared` when an equal
+    /// one is there, so every row with the same weak callers holds one list.
+    fn root(&self, shared: &RefCell<BTreeSet<Arc<[NodeKey]>>>) -> Option<PathState> {
         if !self.any {
             Some(PathState::Active)
         } else if !self.strong {
-            Some(PathState::Unresolved {
-                callers: self.weak.iter().cloned().collect(),
-            })
+            let weak: Vec<NodeKey> = self.weak.iter().cloned().collect();
+            let mut shared = shared.borrow_mut();
+            let callers = match shared.get(weak.as_slice()) {
+                Some(list) => Arc::clone(list),
+                None => {
+                    let list: Arc<[NodeKey]> = weak.into();
+                    shared.insert(Arc::clone(&list));
+                    list
+                }
+            };
+            Some(PathState::Unresolved { callers })
         } else {
             None
         }
@@ -604,6 +623,7 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
             gestures,
             hosts_of,
             hosts,
+            weak_lists: RefCell::new(BTreeSet::new()),
         }
     }
 
@@ -715,8 +735,10 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
             let ways = self.ways(&mut walk, &x, start);
             let rootable = !marked && (!start || identities.contains(&x));
             let reached = self.hosts_of.contains_key(&x) || self.gestures.contains_key(&x);
-            if let (true, false, Some(state)) = (rootable, reached, ways.root()) {
-                walk.hit(external(ix, &x), &x, None, state);
+            if rootable && !reached {
+                if let Some(state) = ways.root(&self.weak_lists) {
+                    walk.hit(external(ix, &x), &x, None, state);
+                }
             }
         }
 
@@ -963,6 +985,9 @@ fn path_of(walk: &Walk<'_>, members: &BTreeSet<&NodeKey>, h: &Hit) -> Vec<Hop> {
         }
         at = next.clone();
     }
+    // Kept on every row of the registry, which a large repository has
+    // millions of: no slack from the pushes above.
+    out.shrink_to_fit();
     out
 }
 

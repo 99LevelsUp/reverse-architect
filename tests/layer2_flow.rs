@@ -1099,7 +1099,7 @@ fn many_homonyms_over_the_ceiling_take_one_entry_per_referencing_member() {
         assert_eq!(
             row.state,
             PathState::Unresolved {
-                callers: goes.clone()
+                callers: goes.clone().into()
             },
             "{execute:?}"
         );
@@ -2152,7 +2152,7 @@ fn a_member_called_by_name_alone_is_an_unresolved_entry() {
     assert_eq!(
         row.state,
         PathState::Unresolved {
-            callers: vec![store.clone()]
+            callers: vec![store.clone()].into()
         }
     );
     assert!(analysis
