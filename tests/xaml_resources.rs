@@ -358,3 +358,202 @@ fn a_run_without_the_xaml_component_resolves_nothing_by_name() {
         .iter()
         .all(|f| f.kind != FactKind::UnresolvedReference)));
 }
+
+/// Three tokens of a provider's shape, as the redaction tests spell them.
+const TOKEN_A: &str = "ghp_Sm7Tp2Pw9Rd4Xk8Lq3Vn6Bz1";
+const TOKEN_B: &str = "ghp_Lq4Wm8Zt2Xv6Nb1Kp9Rs3Dy7Hc5";
+const TOKEN_C: &str = "ghp_Q7rT2mX9vB4nL6kP1sD8fH3jW5zC0aE";
+
+const KEYS: &str = "Acme.Keys/Keys.xaml";
+
+/// A dictionary keyed by tokens: a brush keyed `A`, a template keyed `C`
+/// with a named element and a button whose content and a style's setter
+/// name the resource `B`, which nothing declares.
+fn keyed_by_tokens() -> String {
+    r#"<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <SolidColorBrush x:Key="@A@" Color="Red"/>
+    <ControlTemplate x:Key="@C@" TargetType="Button">
+        <Border x:Name="PART_Root">
+            <Button Command="{Binding Save}" Content="{StaticResource @B@}"/>
+        </Border>
+    </ControlTemplate>
+    <Style x:Key="Plain" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource @B@}"/>
+    </Style>
+</ResourceDictionary>
+"#
+    .replace("@A@", TOKEN_A)
+    .replace("@B@", TOKEN_B)
+    .replace("@C@", TOKEN_C)
+}
+
+/// A run with the second layer over the dictionary keyed by tokens; the
+/// directory lives as long as the run.
+fn run_keyed_by_tokens() -> (tempfile::TempDir, Config, reverse_architect::Generated) {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    let xaml = keyed_by_tokens();
+    init_repo_with_files(
+        &repo,
+        "Alice",
+        &[
+            (
+                "Acme.Keys/Acme.Keys.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+            ),
+            (KEYS, &xaml),
+        ],
+    );
+    let config = Config {
+        detail_level: Some(2),
+        ..with_xaml(&repo, &dir.path().join("out"))
+    };
+    let generated = reverse_architect::generate(&config).unwrap();
+    (dir, config, generated)
+}
+
+/// Every rendered artifact of a run, as (label, contents): the views, the
+/// cards, the details, the maps, the registry of triggers, the manifest in
+/// both its forms, the sites and the coverage.
+fn rendered(g: &reverse_architect::Generated) -> Vec<(String, String)> {
+    use reverse_architect::{coverage, manifest};
+    let files = |label: &str, files: &[reverse_architect::render::RenderedFile]| {
+        files
+            .iter()
+            .map(|f| (format!("{label} {}", f.path), f.contents.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut out = files("view", &g.corpus.files);
+    out.extend(files("card", &g.cards));
+    out.extend(files("detail", &g.details));
+    out.extend(files("map", &g.maps));
+    out.extend(files("registry", g.triggers.as_slice()));
+    out.push(("manifest.json".into(), manifest::to_json(&g.manifest)));
+    out.push(("strings".into(), manifest::to_strings_json(&g.manifest)));
+    out.push(("nodes".into(), manifest::to_nodes_jsonl(&g.manifest)));
+    out.push(("edges".into(), manifest::to_edges_jsonl(&g.manifest)));
+    out.push((
+        "documents".into(),
+        manifest::to_documents_jsonl(&g.manifest),
+    ));
+    out.push(("sites".into(), manifest::to_sites_jsonl(&g.graph)));
+    out.push(("coverage.json".into(), coverage::to_json(&g.coverage)));
+    out
+}
+
+fn opaque(n: usize) -> NodeKey {
+    NodeKey::new(format!("sym:xaml:{KEYS}#withheld~{n}"))
+}
+
+/// Review of 2c (KTD16): a key a plugin builds from a resource's `x:Key`
+/// spells the key, and a declared card is titled by its key. A key whose
+/// local part the secret filter withholds becomes an opaque one, in
+/// declaration order, for every node and edge of its file — and no token
+/// reaches the cards, the manifest, the details, the views or the cache, in
+/// the first run or in the one the cache serves.
+#[test]
+fn a_resource_key_the_secret_filter_withholds_is_an_opaque_key_everywhere() {
+    let (dir, config, generated) = run_keyed_by_tokens();
+    let graph = &generated.graph;
+    // The brush, the template and its named element; the style keeps its key.
+    for n in 1..=3 {
+        assert!(graph.node(&opaque(n)).is_some(), "no node {:?}", opaque(n));
+    }
+    assert!(graph.node(&opaque(4)).is_none());
+    assert!(graph
+        .node(&NodeKey::new(format!("sym:xaml:{KEYS}#Plain")))
+        .is_some());
+    assert_eq!(
+        texts(graph, &opaque(3), FactKind::SymbolName),
+        ["PART_Root"]
+    );
+    let leaks = |graph: &Graph| -> Vec<String> {
+        let nodes = graph.nodes_sorted();
+        let edges = graph.edges_sorted();
+        nodes
+            .iter()
+            .map(|n| n.key.as_str())
+            .chain(edges.iter().flat_map(|e| [e.from.as_str(), e.to.as_str()]))
+            .filter(|k| k.contains("ghp_"))
+            .map(str::to_string)
+            .collect()
+    };
+    assert!(leaks(graph).is_empty(), "{:?}", leaks(graph));
+    // The template still owns its element, under the opaque keys.
+    assert!(graph
+        .edges_sorted()
+        .iter()
+        .any(|e| e.from == &opaque(2) && e.to == &opaque(3)));
+
+    // A declared card is titled by its key: the opaque one.
+    let artifacts = rendered(&generated);
+    assert!(
+        artifacts
+            .iter()
+            .any(|(label, text)| label.starts_with("card ") && text.contains("withheld~1")),
+        "no card titled by the brush's opaque key"
+    );
+    for (label, text) in &artifacts {
+        for token in [TOKEN_A, TOKEN_B, TOKEN_C] {
+            assert!(!text.contains(token), "{token} reached {label}");
+        }
+    }
+    let out = &config.corpus_dir;
+    assert!(out.join(".ra-cache").is_dir(), "the run kept no cache");
+    for token in [TOKEN_A, TOKEN_B, TOKEN_C] {
+        assert!(
+            !cache_holds(out, token),
+            "{token} reached {}",
+            out.display()
+        );
+    }
+    let again = reverse_architect::generate(&config).unwrap();
+    assert!(leaks(&again.graph).is_empty(), "{:?}", leaks(&again.graph));
+    assert_eq!(
+        again
+            .graph
+            .nodes_sorted()
+            .iter()
+            .map(|n| n.key.as_str().to_string())
+            .collect::<Vec<_>>(),
+        graph
+            .nodes_sorted()
+            .iter()
+            .map(|n| n.key.as_str().to_string())
+            .collect::<Vec<_>>()
+    );
+    for token in [TOKEN_A, TOKEN_B, TOKEN_C] {
+        assert!(
+            !cache_holds(out, token),
+            "{token} reached {}",
+            out.display()
+        );
+    }
+    drop(dir);
+}
+
+/// Review of 2c: two different withheld names redact to one marker, and a
+/// marker is no name. The setter and the button name `B`, which nothing
+/// declares; the brush declares `A`. Neither resolves to the brush: the file
+/// admits one unresolved reference, its text the marker's.
+#[test]
+fn two_different_withheld_names_never_resolve_to_each_other() {
+    let (_dir, _config, generated) = run_keyed_by_tokens();
+    let graph = &generated.graph;
+    let brush = opaque(1);
+    assert!(graph
+        .edges_sorted()
+        .iter()
+        .all(|e| e.edge.kind != EdgeKind::References || e.to != &brush));
+    assert!(links(
+        graph,
+        &NodeKey::new(format!("sym:xaml:{KEYS}#Plain")),
+        EdgeKind::References
+    )
+    .is_empty());
+    assert_eq!(
+        texts(graph, &NodeKey::new(KEYS), FactKind::UnresolvedReference),
+        ["[redacted: provider token — see the source anchor]: no xaml:resource declares this name"]
+    );
+}

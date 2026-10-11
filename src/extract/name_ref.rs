@@ -24,6 +24,12 @@
 //! table does not name only itself. A reference never resolves to the node it
 //! comes from.
 //!
+//! A name the secret filter withheld — on either side — is the filter's
+//! marker, which two different secrets share, so it is no candidate and a
+//! reference that spells it resolves to nothing: it is admitted as an
+//! unresolved reference, whatever the file declares. A file that declares
+//! such a name outside every block is a variant by its path alone.
+//!
 //! # Scopes (plan 2c, KTD5)
 //!
 //! The candidates are looked for scope by scope, nearest first, and the first
@@ -76,6 +82,7 @@
 //! the position of their name, then key; references in file order, then in
 //! the order the plugin reported them.
 
+use super::external::REDACTION_MARKER;
 use super::resolve::table::NamePositions;
 use super::TrackedFile;
 use crate::graph::{
@@ -479,6 +486,7 @@ fn collect_candidates(
 ) -> Collected {
     let mut by_name: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
     let mut top_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut unknown_top: BTreeSet<String> = BTreeSet::new();
     // Every list is sorted below and the names go into sets: no order of the
     // graph's.
     for node in graph.nodes_unordered() {
@@ -505,11 +513,22 @@ fn collect_candidates(
             .unwrap_or(0);
         let at = at_of(&file, &node.key).unwrap_or((line, 0));
         let block = symbol_blocks.get(&node.key).copied();
+        // A name the secret filter withheld is its marker, and two different
+        // withheld names share one: it is no name to match, and a file that
+        // declares one outside every block has no name set to compare.
+        let withheld = name.contains(REDACTION_MARKER);
         if block.is_none() {
-            top_names
-                .entry(file.clone())
-                .or_default()
-                .insert(name.to_string());
+            if withheld {
+                unknown_top.insert(file.clone());
+            } else {
+                top_names
+                    .entry(file.clone())
+                    .or_default()
+                    .insert(name.to_string());
+            }
+        }
+        if withheld {
+            continue;
         }
         by_name
             .entry(name.to_string())
@@ -524,6 +543,9 @@ fn collect_candidates(
     }
     for list in by_name.values_mut() {
         list.sort_by(|a, b| (&a.file, a.at, &a.key).cmp(&(&b.file, b.at, &b.key)));
+    }
+    for file in &unknown_top {
+        top_names.remove(file);
     }
     (by_name, top_names)
 }

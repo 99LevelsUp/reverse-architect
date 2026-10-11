@@ -349,12 +349,14 @@ pub fn markup_state(
 /// run's plugins that claim XAML, `bodies` the second layer when the run has
 /// one, `sites` how the second layer's markup places ended and `unparsed` the
 /// files with a markup extension the plugin could not take apart (both read
-/// only with the second layer). `None` for a run with neither a plugin for
-/// XAML nor the second layer.
+/// only with the second layer). `symlinks` are the tracked symlinks: File
+/// nodes no pass reads, which are no XAML file read whatever their name.
+/// `None` for a run with neither a plugin for XAML nor the second layer.
 pub fn markup(
     graph: &Graph,
     languages: &Languages,
     plugins: &[String],
+    symlinks: &BTreeSet<String>,
     bodies: Option<&crate::extract::bodies::BodyLayer>,
     sites: Option<MarkupSites>,
     unparsed: &[UnparsedMarkup],
@@ -370,7 +372,7 @@ pub fn markup(
             continue;
         }
         let path = node.key.as_str();
-        if languages.name_for(path) != Some(MARKUP_LANGUAGE) {
+        if languages.name_for(path) != Some(MARKUP_LANGUAGE) || symlinks.contains(path) {
             continue;
         }
         files += 1;
@@ -1647,12 +1649,25 @@ mod tests {
     fn the_section_is_absent_without_xaml_and_the_second_layer() {
         let graph = Graph::new();
         let languages = Languages::bundled();
-        assert_eq!(markup(&graph, &languages, &[], None, None, &[]), None);
+        let none = BTreeSet::new();
+        assert_eq!(
+            markup(&graph, &languages, &[], &none, None, None, &[]),
+            None
+        );
         let unparsed = [UnparsedMarkup {
             path: "a.xaml".into(),
             count: 1,
         }];
-        let off = markup(&graph, &languages, &["xaml".into()], None, None, &unparsed).unwrap();
+        let off = markup(
+            &graph,
+            &languages,
+            &["xaml".into()],
+            &none,
+            None,
+            None,
+            &unparsed,
+        )
+        .unwrap();
         assert_eq!(off.state, MarkupState::SecondLayerOff);
         assert_eq!(off.sites, None);
         // Read only with the second layer, like the markup places.

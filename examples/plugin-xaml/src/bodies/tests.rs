@@ -692,6 +692,72 @@ fn an_extension_that_cannot_be_parsed_is_tagged_on_its_element() {
     assert!(EMITS.contains(&UNPARSED_MARKUP));
 }
 
+/// Review of 2c: a resource that is neither a style nor a template has no
+/// body — unless it holds an extension the parser cannot take apart, which
+/// would otherwise go unsaid. Then it is a body paired with its declaration,
+/// its nodes carrying that tag and nothing else; one inside a style's own
+/// resources too, apart from the style's body.
+#[test]
+fn a_resource_with_an_extension_that_cannot_be_parsed_is_a_body_of_that_tag_alone() {
+    let source = "<ResourceDictionary xmlns:x=\"http://schemas.microsoft.com/winfx/2006/xaml\">\n\
+        <SolidColorBrush x:Key=\"Accent\" Color=\"{DynamicResource\" Opacity=\"{Binding Level}\"/>\n\
+        <SolidColorBrush x:Key=\"Ink\" Color=\"{DynamicResource Base}\"/>\n\
+        <ContextMenu x:Key=\"Menu\">\n<MenuItem Header=\"Open\" Command=\"{Binding Open\"/>\n</ContextMenu>\n\
+        <Style x:Key=\"Plain\" TargetType=\"Button\">\n<Style.Resources>\n\
+        <SolidColorBrush x:Key=\"Inner\" Color=\"{StaticResource Base\"/>\n</Style.Resources>\n\
+        <Setter Property=\"Background\" Value=\"Red\"/>\n</Style>\n\
+        </ResourceDictionary>\n";
+    let declared = declarations("F.xaml", source.as_bytes(), &|_| false).expect("valid XAML");
+    let declared = symbol_names(&declared);
+    let file = read(source);
+    let kind_of = |member: &MemberBody| {
+        declared
+            .iter()
+            .find(|(_, p)| *p == member.name_position)
+            .and_then(|(k, _)| *k)
+    };
+    // `Accent`, `Menu`, the style and `Inner`; `Ink` reads in full.
+    let kinds: Vec<_> = file.members.iter().map(kind_of).collect();
+    assert_eq!(
+        kinds,
+        [
+            Some("xaml:resource"),
+            Some("xaml:resource"),
+            Some("xaml:style"),
+            Some("xaml:resource")
+        ]
+    );
+    let accent = body(&file, source, "Accent");
+    assert_eq!(names(accent), ["body"]);
+    assert_eq!(
+        tags(&accent.nodes[0], UNPARSED_MARKUP),
+        [(Some("Color"), vec![])]
+    );
+    assert!(accent.nodes[0].tags.len() == 1 && accent.tags.is_empty());
+    assert!(accent.accesses.is_empty() && accent.literals.is_empty());
+    assert!(accent.subscriptions.is_empty());
+    let menu = body(&file, source, "Menu\"");
+    assert_eq!(names(menu), ["body", "MenuItem"]);
+    assert!(menu.nodes[0].tags.is_empty());
+    assert_eq!(
+        tags(&menu.nodes[1], UNPARSED_MARKUP),
+        [(Some("Command"), vec![])]
+    );
+    assert!(menu.nodes[1].tags.len() == 1 && menu.literals.is_empty());
+    let inner = body(&file, source, "Inner");
+    assert_eq!(
+        tags(&inner.nodes[0], UNPARSED_MARKUP),
+        [(Some("Color"), vec![])]
+    );
+    // The style's body holds neither the inner resource nor its tag.
+    let style = body(&file, source, "Plain");
+    assert!(style
+        .nodes
+        .iter()
+        .all(|n| n.tags.iter().all(|t| t.name != UNPARSED_MARKUP)));
+    assert_eq!(read(source), read(source));
+}
+
 #[test]
 fn the_same_file_gives_the_same_bodies() {
     assert_eq!(read(VIEW), read(VIEW));

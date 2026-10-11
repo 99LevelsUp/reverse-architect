@@ -133,6 +133,7 @@ pub fn generate_reporting(
         registry,
         bodies,
         corpus_extensions,
+        symlinks,
     } = build_graph(config, progress)?;
     // The one profile flows into BOTH projections, so the corpus and the manifest
     // always agree on the selected view set (KTD-C5).
@@ -263,6 +264,7 @@ pub fn generate_reporting(
         &graph,
         registry.languages(),
         &markup_plugins,
+        &symlinks,
         bodies.as_ref(),
         analysis.as_ref().map(|a| a.dynamic.site_counts()),
         analysis.as_ref().map_or(&[][..], |a| a.dynamic.unparsed()),
@@ -478,11 +480,14 @@ pub struct Built {
     pub registry: extract::Registry,
     /// The second layer, for a run with `--detail-level` (plan 2a, U4).
     pub bodies: Option<extract::bodies::BodyLayer>,
-    /// The text after the last dot of every tracked path, read once: whether
-    /// the corpus holds a file a plugin claims
+    /// The text after the last dot of every tracked path that is not a
+    /// symlink, read once: whether the corpus holds a file a plugin claims
     /// ([`plugin::Plugin::claims_any`]) decides whether the plugin declares
     /// its kinds and whether it counts for XAML coverage.
     pub corpus_extensions: std::collections::BTreeSet<String>,
+    /// The tracked symlinks, by key: File nodes whose content no pass reads,
+    /// so XAML coverage does not count them as XAML files.
+    pub symlinks: std::collections::BTreeSet<String>,
 }
 
 /// Open the repository and build its merged fact graph from `config`: the
@@ -501,11 +506,18 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     // reason, not halfway through the walk. Their kinds are declared next, so
     // the cache below and every extractor read one vocabulary (U19).
     let plugins = plugin::PluginSet::with_declared(&config.plugins)?;
-    let corpus_extensions: std::collections::BTreeSet<String> = repo
-        .tracked_files()?
+    // Of the files the extractors read: a symlink's blob is its target's
+    // path, which no pass reads, so a tracked `.xaml` link neither activates
+    // the plugin nor counts as a XAML file read.
+    let (links, read): (Vec<_>, Vec<_>) = repo
+        .tracked_files_with_paths()?
+        .into_iter()
+        .partition(|tf| tf.is_symlink);
+    let corpus_extensions: std::collections::BTreeSet<String> = read
         .iter()
-        .filter_map(|key| key.rsplit_once('.').map(|(_, ext)| ext.to_string()))
+        .filter_map(|tf| tf.key.rsplit_once('.').map(|(_, ext)| ext.to_string()))
         .collect();
+    let symlinks: std::collections::BTreeSet<String> = links.into_iter().map(|tf| tf.key).collect();
     plugins.declare_vocabularies(&mut graph, &corpus_extensions)?;
     // The second layer (plan 2a, U4: KTD7): only a run with a detail level
     // loads the body component, and only such a run records it among the
@@ -615,5 +627,6 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
         registry,
         bodies,
         corpus_extensions,
+        symlinks,
     })
 }

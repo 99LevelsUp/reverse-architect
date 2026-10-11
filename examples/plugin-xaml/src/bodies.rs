@@ -10,8 +10,9 @@
 //! An element that pass 1 declares as a resource of its own (a style, a
 //! template or any other resource in a `*.Resources` block) is not part of
 //! the body around it: a style or template has its own body, any other
-//! resource none. An inline template (a `ListBox.ItemTemplate` with no key)
-//! is part of the body it is written in.
+//! resource none — unless it holds a markup extension this pass could not
+//! take apart (below). An inline template (a `ListBox.ItemTemplate` with no
+//! key) is part of the body it is written in.
 //!
 //! **Tags on a body.** `target-type` on a style or template with
 //! `TargetType`, the type qualified by the CLR namespace of its `xmlns`
@@ -84,7 +85,14 @@
 //! `{`, not with the `{}` escape) that the parser cannot take apart
 //! (`Text="{Binding Title"`) gives no access and no literal; its element
 //! carries `unparsed-markup` with the attribute's name as the value, so the
-//! loss is said rather than silent.
+//! loss is said rather than silent. So that no such value goes unsaid in a
+//! resource that is neither a style nor a template (`<SolidColorBrush
+//! x:Key="Accent" Color="{DynamicResource"/>`), one that holds any is a body
+//! of its own, paired with its declaration like a style's, with its element
+//! nodes and those tags alone: no access, subscription, literal or other tag.
+//! A value on an element of no body — in a file without `x:Class`, its root
+//! and what lies outside every resource, such as a merged dictionary — is
+//! still not read.
 
 use crate::declare::{local_name, resource, resource_ref, view_class, STYLE, TEMPLATE};
 use crate::parse::{markup, parse, split_prefix, ArgValue, Doc, Element, Error, Markup};
@@ -162,10 +170,12 @@ pub fn bodies(source: &[u8]) -> Result<FileBodies, Error> {
     let class = view_class(&doc);
     let mut members = Vec::new();
     for index in 0..doc.elements.len() {
+        // The name position, the target type and whether the element is a
+        // resource other than a style or a template.
         let opened = if index == 0 && class.is_some() {
             class
                 .clone()
-                .map(|c| (c.start, doc.text(&c).trim().to_string()))
+                .map(|c| (c.start, doc.text(&c).trim().to_string(), false))
         } else {
             match resource(&doc, index) {
                 Some((kind, _, name_at)) if kind == STYLE || kind == TEMPLATE => {
@@ -174,12 +184,13 @@ pub fn bodies(source: &[u8]) -> Result<FileBodies, Error> {
                         .attr(element, "TargetType")
                         .and_then(|a| type_of_value(&doc, index, &a.value))
                         .map(|t| t.clr_name());
-                    Some((name_at, target.unwrap_or_default()))
+                    Some((name_at, target.unwrap_or_default(), false))
                 }
-                _ => None,
+                Some((_, _, name_at)) => Some((name_at, String::new(), true)),
+                None => None,
             }
         };
-        let Some((name_at, target)) = opened else {
+        let Some((name_at, target, other)) = opened else {
             continue;
         };
         let mut body = Body {
@@ -192,6 +203,9 @@ pub fn bodies(source: &[u8]) -> Result<FileBodies, Error> {
             literals: Vec::new(),
         };
         body.walk();
+        if other && !body.unparsed_only() {
+            continue;
+        }
         let (line, column) = doc.position(name_at);
         let tags = if target.is_empty() {
             Vec::new()
@@ -508,6 +522,20 @@ impl<'a> Body<'_, 'a> {
                 }
             }
         }
+    }
+
+    /// Cuts a walked body down to its nodes and their `unparsed-markup`
+    /// tags, and says whether one is left: the body of a resource that is
+    /// neither a style nor a template, which has none of its own (see the
+    /// module documentation).
+    fn unparsed_only(&mut self) -> bool {
+        self.accesses.clear();
+        self.subscriptions.clear();
+        self.literals.clear();
+        for node in &mut self.nodes {
+            node.tags.retain(|t| t.name == UNPARSED_MARKUP);
+        }
+        self.nodes.iter().any(|n| !n.tags.is_empty())
     }
 
     /// An element's name as a type name (`Acme.Views.ViewA`, `Button`,
