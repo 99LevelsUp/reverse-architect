@@ -81,13 +81,23 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 5 decides the handler a markup body
+/// conversion of a model raises it: 6 withholds a key-shaped handler of a
+/// markup body that does not end in a word ([`key_shaped_handler`]), 5
+/// decides the handler a markup body
 /// subscribes like a literal and filters every subscription's texts (plan 2c,
 /// review), 4 cuts key-shaped words out of a quoted
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 5;
+pub const BODY_REDACTION_VERSION: u32 = 6;
+
+/// Whether a markup handler's name is a key-shaped word ([`without_long_tokens`])
+/// whose part after the last `_` is not letters alone — a random token the
+/// plugin took for a method's name, not a designer's `control_EventName`.
+fn key_shaped_handler(name: &str) -> bool {
+    let tail = name.rsplit('_').next().unwrap_or(name);
+    without_long_tokens(name).1 && !tail.chars().all(|c| c.is_ascii_alphabetic())
+}
 
 /// The detail levels `--detail-level` accepts. The level is a choice of
 /// rendering (KTD7): it decides what later units show, not what this pass
@@ -1201,8 +1211,10 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
         // A markup body's handler is an attribute's value the plugin took for
         // a method's name (XAML does not say which attribute is an event), so
         // it is decided like a literal of that attribute: by the event's name
-        // and by its own shape. Not by the key-shaped word: a designer's
-        // handler name (`comboBox1_SelectedIndexChanged`) is shaped like one.
+        // and by its own shape. A key-shaped word withholds it only when the
+        // part after its last `_` is not letters alone: a designer's handler
+        // name (`comboBox1_SelectedIndexChanged`) is shaped like a key but
+        // ends in the event's name, a random token does not.
         // A C# handler is a name the syntax spells and goes through the filter
         // below alone.
         if member.kind != BodyKind::Markup {
@@ -1215,6 +1227,7 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
             let name = handler.segments.join(".");
             let Some(pattern) = named_secret(&subscription.event, &name)
                 .or_else(|| secret_pattern(&name, prefixes))
+                .or_else(|| key_shaped_handler(&name).then_some("long token"))
             else {
                 continue;
             };
@@ -2209,6 +2222,8 @@ mod tests {
                 subscription(None, "Click", "OnSave"),
                 subscription(None, "SelectionChanged", "comboBox1_SelectedIndexChanged"),
                 subscription(None, "PasswordChanged", "OnPasswordChanged"),
+                subscription(None, "Tag", "k3J9xQ8vLm2_Rz7Tp4Wn6Yb1Hc5Dg0Fa"),
+                subscription(None, "Loaded", "dataGridView1_CellValueChanged"),
             ],
         );
         // Another text of the file that quotes a withheld handler loses it.
@@ -2222,6 +2237,11 @@ mod tests {
         assert_eq!(handler_of(&model, 2), "OnSave");
         assert_eq!(handler_of(&model, 3), "comboBox1_SelectedIndexChanged");
         assert_eq!(handler_of(&model, 4), "OnPasswordChanged");
+        // A random key-shaped token goes; a designer's name, key-shaped but
+        // ending in the event's name, stays.
+        assert!(!text.contains("k3J9xQ8vLm2_Rz7Tp4Wn6Yb1Hc5Dg0Fa"), "{text}");
+        assert_eq!(handler_of(&model, 5), withheld("long token"));
+        assert_eq!(handler_of(&model, 6), "dataGridView1_CellValueChanged");
         assert_eq!(model.members[0].subscriptions[0].event, "Tag");
     }
 
