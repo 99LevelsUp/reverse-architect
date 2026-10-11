@@ -2592,9 +2592,34 @@ fn sequence_blocks(text: &str) -> Vec<&str> {
         .collect()
 }
 
+/// A text of a sequence diagram as Mermaid parses it: each `#name;` / `#NN;`
+/// entity is swapped for a placeholder without a `;` first.
+fn without_mermaid_entities(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('#') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at + 1..];
+        let word = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(tail.len());
+        if word > 0 && tail[word..].starts_with(';') {
+            out.push_str("ENTITY");
+            rest = &tail[word + 1..];
+        } else {
+            out.push('#');
+            rest = tail;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// A sequence diagram is valid: every participant is declared once as `pN`,
 /// every message joins two declared participants, and no text holds a raw
-/// `;`, `<`, `>` or `"`. Its messages.
+/// `;`, `<`, `>`, `"` or `&` once Mermaid's own entities are set aside (an
+/// HTML entity such as `&lt;` ends in `;`, which ends the statement). Its
+/// messages.
 fn valid_sequence(block: &str) -> Vec<&str> {
     let mut declared: Vec<&str> = Vec::new();
     let mut messages = Vec::new();
@@ -2603,7 +2628,8 @@ fn valid_sequence(block: &str) -> Vec<&str> {
         if let Some(rest) = line.strip_prefix("participant ") {
             let (id, name) = rest.split_once(" as ").expect("an alias");
             assert!(!declared.contains(&id), "{id} twice:\n{block}");
-            for raw in [';', '<', '>', '"'] {
+            let name = without_mermaid_entities(name);
+            for raw in [';', '<', '>', '"', '&'] {
                 assert!(!name.contains(raw), "raw {raw:?}: {line}");
             }
             declared.push(id);
@@ -2612,7 +2638,8 @@ fn valid_sequence(block: &str) -> Vec<&str> {
         let (arrow, text) = line.split_once(": ").expect("a message");
         let (from, to) = arrow.split_once("->>").expect("an arrow");
         assert!(declared.contains(&from) && declared.contains(&to), "{line}");
-        for raw in [';', '<', '>', '"'] {
+        let text = without_mermaid_entities(text);
+        for raw in [';', '<', '>', '"', '&'] {
             assert!(!text.contains(raw), "raw {raw:?}: {line}");
         }
         messages.push(line);

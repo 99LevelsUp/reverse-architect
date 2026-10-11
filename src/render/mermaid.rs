@@ -179,19 +179,22 @@ pub(crate) fn sequence_block(
 }
 
 /// [`escape_label`] for the text of a sequence diagram, which is not quoted:
-/// a `;` there ends the statement, so it becomes an entity too. One pass over
+/// a `;` there ends the statement. An HTML entity (`&lt;`) ends in `;` too and
+/// would cut the text in two, so every metacharacter becomes Mermaid's own
+/// entity (`#lt;`, `#59;`): Mermaid swaps those for placeholders before it
+/// parses and turns them back into HTML entities in the drawing. One pass over
 /// the characters, so no entity this introduces is escaped again.
 pub(crate) fn escape_message(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '&' => out.push_str("&amp;"),
-            '#' => out.push_str("&#35;"),
-            '\\' => out.push_str("&#92;"),
-            '"' => out.push_str("&quot;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            ';' => out.push_str("&#59;"),
+            '&' => out.push_str("#amp;"),
+            '#' => out.push_str("#35;"),
+            '\\' => out.push_str("#92;"),
+            '"' => out.push_str("#quot;"),
+            '<' => out.push_str("#lt;"),
+            '>' => out.push_str("#gt;"),
+            ';' => out.push_str("#59;"),
             '\n' | '\r' => out.push(' '),
             c => out.push(c),
         }
@@ -306,9 +309,58 @@ mod tests {
         assert_eq!(
             out,
             "```mermaid\nsequenceDiagram\n    participant p0 as EditorView\n    \
-             participant p1 as A&lt;B&gt;\n    p0->>p1: Run(a&#59;b) -&gt; x &#35;1\n    \
+             participant p1 as A#lt;B#gt;\n    p0->>p1: Run(a#59;b) -#gt; x #35;1\n    \
              p1->>p1: self\n```\n"
         );
+    }
+
+    /// What Mermaid does to a sequence diagram's text before it parses: each
+    /// `#name;` / `#NN;` entity becomes a placeholder without a `;`.
+    fn without_mermaid_entities(line: &str) -> String {
+        let mut out = String::new();
+        let mut rest = line;
+        while let Some(at) = rest.find('#') {
+            out.push_str(&rest[..at]);
+            let tail = &rest[at + 1..];
+            let word = tail
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(tail.len());
+            if word > 0 && tail[word..].starts_with(';') {
+                out.push_str("ENTITY");
+                rest = &tail[word + 1..];
+            } else {
+                out.push('#');
+                rest = tail;
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn no_text_of_a_sequence_diagram_ends_its_statement_early() {
+        // A generic type, a condition with `&&`, a quote, a hash and a `;`:
+        // every one used to leave an HTML entity whose `;` cut the line.
+        let out = sequence_block(
+            &["Cache<Key, List<Value>>".to_string(), "Solver".to_string()],
+            &[(
+                0,
+                1,
+                "Solve(Func<Proxy>) when a && b; \"x\" #1 \\ n".to_string(),
+            )],
+        );
+        for line in out.lines().skip(2).filter(|l| *l != "```") {
+            let plain = without_mermaid_entities(line);
+            assert!(!plain.contains(';'), "a `;` ends the statement: {line}");
+            for raw in ['<', '"', '&', '\\'] {
+                assert!(!plain.contains(raw), "raw {raw:?}: {line}");
+            }
+            assert!(
+                !plain.replacen("->>", "", 1).contains('>'),
+                "raw `>`: {line}"
+            );
+            assert!(!line.contains("&lt;") && !line.contains("&#"), "{line}");
+        }
     }
 
     #[test]
