@@ -710,6 +710,58 @@ class BindingTest(CheckCase):
         self.assertEqual(claim_result.status, card_check.CLAIM_UNBOUND)
         self.assertIn("nemá žádný blok vázaný", claim_result.reasons[0])
 
+    # -- a preselected document and a fact with several places: the bound blocks are merged --
+
+    def merge_types(self):
+        filler = "".join(f"- Vedlejší věta číslo {n} o něčem jiném — `{EXT}:100-110`\n"
+                         for n in range(500))
+        body = ("## Run\n\n"
+                f"- První věta — `{EXT}:30-35`\n"
+                f"- Prostřední věta — `{EXT}:44`\n"
+                f"- Třetí věta — `{EXT}:55`\n"
+                f"- Sdílená věta — `{EXT}:30-35`, `{EXT}:55`\n" + filler)
+        self.assertGreater(len(body.encode("utf-8")), 16 * 1024)
+        return [TypeSpec("ExternalCheck", EXT, 3, 120, (("Run()", 20, 60),),
+                         card=card("ExternalCheck", EXT, 3, 120, body))]
+
+    def merged_texts(self, radky):
+        catalog = make_catalog(question_json([
+            fact("f", "Cokoli", [place(EXT, "ExternalCheck.Run()", radky=r) for r in radky])]))
+        measurement, runner = self.check(catalog, [], types=self.merge_types())
+        unit = unit_of(measurement, "f", doc_id("ExternalCheck"), "vyvojar")
+        self.assertEqual(unit.mode, MODE_BOUND)
+        self.assertEqual(unit.block_count, len(unit.blocks))
+        return [b["text"] for b in unit.blocks], unit, runner
+
+    def test_blocks_of_two_places_are_both_judged_in_document_order_without_duplicates(self):
+        texts, unit, runner = self.merged_texts(["30-35", 55])
+        self.assertEqual(len(texts), len(set(texts)))
+        self.assertEqual(len(texts), 3)
+        self.assertIn("První věta", texts[0])
+        self.assertIn("Třetí věta", texts[1])
+        self.assertIn("Sdílená věta", texts[2])
+        self.assertFalse(any("Prostřední" in t or "Vedlejší" in t for t in texts))
+        sent = [c for c in runner.calls if any("První věta" in b for b in c.blocks)]
+        self.assertTrue(sent)
+        self.assertEqual(sent[0].blocks, [judge_text(b["title"], b["section"], b["text"])
+                                          for b in unit.blocks])
+
+    def test_a_block_binding_to_both_places_is_judged_once(self):
+        texts, _, _ = self.merged_texts(["30-35", 55])
+        self.assertEqual(sum("Sdílená věta" in t for t in texts), 1)
+        # the same place twice is one set of blocks, not two
+        doubled, _, _ = self.merged_texts([55, 55])
+        single, _, _ = self.merged_texts([55])
+        self.assertEqual(doubled, single)
+
+    def test_the_merged_order_does_not_depend_on_the_order_of_the_places(self):
+        forward, _, _ = self.merged_texts(["30-35", 44, 55])
+        backward, _, _ = self.merged_texts([55, 44, "30-35"])
+        self.assertEqual(forward, backward)
+        self.assertEqual(len(forward), 4)
+        self.assertIn("První věta", forward[0])
+        self.assertIn("Prostřední věta", forward[1])
+
 
 class JudgeContextTest(CheckCase):
     """The judge reads a block with its document title and section heading (KTD4)."""
