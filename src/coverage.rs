@@ -735,6 +735,12 @@ pub struct DeclaredExclusion {
     /// In words, so the number above cannot be read as a coverage gap. The same
     /// discipline `not_structural_because` and `ResolvedIndex.summary` follow.
     pub note: String,
+    /// Keys of declared containers the module tree cannot hold, because their
+    /// parent is no container of it ([`Graph::orphan_containers`], R-30). They
+    /// stay in the graph and the manifest; the backbone views leave them out.
+    /// Absent when there is none, so a corpus without one keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub orphan_containers: Vec<String>,
 }
 
 /// What the run was told about the index, and what consuming it came to.
@@ -1271,6 +1277,7 @@ fn declared_exclusion(graph: &Graph) -> Option<DeclaredExclusion> {
                declared kind were not parsed by any language extractor and are not counted \
                here; their absence from `files` is not a coverage gap."
             .to_string(),
+        orphan_containers: graph.orphan_containers(),
     })
 }
 

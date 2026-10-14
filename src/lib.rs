@@ -620,6 +620,12 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     progress.phase("merge", None);
     graph::merge(&mut graph, registry.ranks());
     progress.phase_done();
+    // A declared container the module tree cannot hold is a plugin's data
+    // error: named here, held back by the views, listed in coverage (R-30).
+    for key in graph.orphan_containers() {
+        let parent = key.rfind('/').map_or(".", |at| &key[..at]).to_string();
+        eprintln!("{}", graph::GraphError::OrphanContainer { key, parent });
+    }
     Ok(Built {
         repo,
         graph,

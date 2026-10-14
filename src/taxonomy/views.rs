@@ -492,9 +492,14 @@ fn overview_instances(graph: &Graph) -> Vec<Instance> {
         .count();
     // Exclude the synthetic root module `.` so the count matches the module
     // structure view, which lists only real directories.
+    let held = held_back(graph);
     let module_count = nodes
         .iter()
-        .filter(|n| graph.node_role(n.kind) == StructuralRole::Container && n.key.as_str() != ".")
+        .filter(|n| {
+            graph.node_role(n.kind) == StructuralRole::Container
+                && n.key.as_str() != "."
+                && !held.contains(n.key.as_str())
+        })
         .count();
 
     let mut out = vec![Instance::new(format!(
@@ -575,6 +580,7 @@ pub(crate) fn module_structure_instances(graph: &Graph) -> Vec<Instance> {
     // sub-modules). One pass over the edge set — `edges_sorted` sorts the whole
     // set, so it must not be called per module.
     let mut direct_entries: BTreeMap<&str, usize> = BTreeMap::new();
+    let held = held_back(graph);
     let edges = graph.edges_sorted();
     for e in &edges {
         // The TARGET too. Two reviewers found this independently in RG2, and they
@@ -583,7 +589,8 @@ pub(crate) fn module_structure_instances(graph: &Graph) -> Vec<Instance> {
         // not, so one view's prose counted an `Opaque` child that the same view's
         // diagram, its child list and its file count all excluded. The earlier
         // fix closed three of four readers of the same question.
-        if graph.edge_role(e.edge.kind) == LinkRole::Containment && takes_part(graph, e.to.as_str())
+        if graph.edge_role(e.edge.kind) == LinkRole::Containment
+            && takes_part(graph, &held, e.to.as_str())
         {
             *direct_entries.entry(e.from.as_str()).or_insert(0) += 1;
         }
@@ -599,7 +606,10 @@ pub(crate) fn module_structure_instances(graph: &Graph) -> Vec<Instance> {
     // whole key — the per-level order (R3).
     let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for node in graph.nodes_sorted() {
-        if graph.node_role(node.kind) != StructuralRole::Container || node.key.as_str() == "." {
+        if graph.node_role(node.kind) != StructuralRole::Container
+            || node.key.as_str() == "."
+            || held.contains(node.key.as_str())
+        {
             continue;
         }
         let key = node.key.as_str().to_string();
@@ -612,7 +622,8 @@ pub(crate) fn module_structure_instances(graph: &Graph) -> Vec<Instance> {
     // ancestor prefix of every file, so this holds by construction — a gap is a
     // generator bug, never silently re-parented or dropped. Cheap insurance in
     // debug builds (also covered by an explicit test). The synthetic root `.` is
-    // exempt; see `parent_closed`.
+    // exempt; see `parent_closed`. A declared container is a plugin's data, not
+    // the generator's: one without a parent is held back above (R-30).
     debug_assert!(
         parent_closed(graph),
         "module-structure tree has an orphan: a module whose parent dir is not a module node"
@@ -697,11 +708,18 @@ fn push_module_subtree(
 /// backbone views identically to one with it. Demanding the node made the debug
 /// assert fire on a graph that produced correct output, which is a trap for any
 /// caller building a graph outside this crate.
+///
+/// Core modules only (R-30): a declared container's parent is a plugin's
+/// data, which [`Graph::orphan_containers`] judges and the views hold back,
+/// not a generator bug to stop a debug build on.
 fn parent_closed(graph: &Graph) -> bool {
     let modules: BTreeSet<&str> = graph
         .nodes_sorted()
         .iter()
-        .filter(|n| graph.node_role(n.kind) == StructuralRole::Container)
+        .filter(|n| {
+            graph.node_role(n.kind) == StructuralRole::Container
+                && !matches!(n.kind, NodeKind::Declared(_))
+        })
         .map(|n| n.key.as_str())
         .collect();
     modules.iter().filter(|k| **k != ".").all(|k| {
@@ -725,11 +743,35 @@ fn parent_closed(graph: &Graph) -> bool {
 /// Only a node that EXISTS and declared itself `Opaque` is held back.
 ///
 /// Core kinds all carry a backbone role, so this holds nothing back in any
-/// corpus this tool builds today (R4).
-fn takes_part(graph: &Graph, key: &str) -> bool {
-    graph
-        .node(&NodeKey::new(key))
-        .is_none_or(|n| graph.node_role(n.kind) != StructuralRole::Opaque)
+/// corpus this tool builds today (R4). Nor does `held` ([`held_back`]), which
+/// is empty unless a plugin declared a container the tree cannot hold.
+fn takes_part(graph: &Graph, held: &BTreeSet<String>, key: &str) -> bool {
+    !held.contains(key)
+        && graph
+            .node(&NodeKey::new(key))
+            .is_none_or(|n| graph.node_role(n.kind) != StructuralRole::Opaque)
+}
+
+/// What the backbone views hold back although its role would admit it
+/// (R-30): every declared container [`Graph::orphan_containers`] names, and
+/// each ancestor of one that is no node — a prefix the leaves beneath an
+/// orphan would otherwise credit as a module of its own in the ranking.
+/// Asked once per view, like [`any_declared_leaf`], never per key.
+fn held_back(graph: &Graph) -> BTreeSet<String> {
+    let mut held = BTreeSet::new();
+    for key in graph.orphan_containers() {
+        let mut end = key.len();
+        while let Some(at) = key[..end].rfind('/') {
+            let up = &key[..at];
+            if graph.node(&NodeKey::new(up)).is_some() {
+                break;
+            }
+            held.insert(up.to_string());
+            end = at;
+        }
+        held.insert(key);
+    }
+    held
 }
 
 /// `entry`/`entries` for the direct-entry count (R5 normative wording).
@@ -800,11 +842,14 @@ fn module_structure_diagram(graph: &Graph) -> Option<String> {
     // default for a declared kind, so that asymmetry would have been the FIRST
     // thing a plugin author met. Core kinds all carry a backbone role, so this
     // changes no existing diagram (R4).
+    let held = held_back(graph);
     let edges: Vec<(&str, &str)> = graph
         .edges_sorted()
         .iter()
         .filter(|e| graph.edge_role(e.edge.kind) == LinkRole::Containment)
-        .filter(|e| takes_part(graph, e.from.as_str()) && takes_part(graph, e.to.as_str()))
+        .filter(|e| {
+            takes_part(graph, &held, e.from.as_str()) && takes_part(graph, &held, e.to.as_str())
+        })
         .map(|e| (e.from.as_str(), e.to.as_str()))
         .collect();
     crate::render::mermaid::diagram(&edges)
@@ -815,6 +860,7 @@ fn module_structure_diagram(graph: &Graph) -> Option<String> {
 /// keys, so a dependency shows as `dep:<eco>:<name>`; the human name lives in the
 /// authoritative instances prose. `None` when no manifest declares a dependency.
 fn dependencies_diagram(graph: &Graph) -> Option<String> {
+    let held = held_back(graph);
     let edges: Vec<(&str, &str)> = graph
         .edges_sorted()
         .iter()
@@ -822,7 +868,9 @@ fn dependencies_diagram(graph: &Graph) -> Option<String> {
         // Both endpoints, exactly as the containment diagram does. Without it
         // this picture draws a node `dependencies_instances` never lists — the
         // same prose/diagram disagreement, one view over.
-        .filter(|e| takes_part(graph, e.from.as_str()) && takes_part(graph, e.to.as_str()))
+        .filter(|e| {
+            takes_part(graph, &held, e.from.as_str()) && takes_part(graph, &held, e.to.as_str())
+        })
         .map(|e| (e.from.as_str(), e.to.as_str()))
         .collect();
     crate::render::mermaid::diagram(&edges)
@@ -839,6 +887,7 @@ fn plural(n: usize) -> &'static str {
 /// The immediate children of the root module, sorted.
 fn top_level_entries(graph: &Graph) -> Vec<String> {
     let root = NodeKey::new(".");
+    let held = held_back(graph);
     let mut entries: Vec<String> = graph
         .edges_sorted()
         .iter()
@@ -846,7 +895,7 @@ fn top_level_entries(graph: &Graph) -> Vec<String> {
         // The TARGET too, not just the edge. Found by U6's own fixture: with the
         // edge alone filtered, an `Opaque` node the module tree left out was
         // still listed here as a top-level entry (R9).
-        .filter(|e| takes_part(graph, e.to.as_str()))
+        .filter(|e| takes_part(graph, &held, e.to.as_str()))
         .map(|e| e.to.as_str().to_string())
         .collect();
     entries.sort();
@@ -914,9 +963,10 @@ fn largest_modules(graph: &Graph, n: usize) -> Vec<(String, usize)> {
     // that RANKS the result is the one that owes the reader consistency — an
     // `Opaque` node ranked as a largest module while the module tree omits it
     // was the second half of the same leak the diagram had.
+    let held = held_back(graph);
     let mut ranked: Vec<(String, usize)> = recursive_module_file_counts(graph)
         .into_iter()
-        .filter(|(key, _)| takes_part(graph, key))
+        .filter(|(key, _)| takes_part(graph, &held, key))
         .collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     ranked.truncate(n);

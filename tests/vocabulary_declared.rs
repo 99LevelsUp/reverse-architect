@@ -635,6 +635,72 @@ fn a_declared_edge_binds_the_tree_only_in_the_containment_role() {
     );
 }
 
+/// R-30. A declared container whose parent is no container is no module of the
+/// tree: the host leaves it — and every container beneath it — out of each
+/// backbone view, says so in coverage, and keeps the anchored one beside it.
+/// Before, a debug build stopped on the tree's own assert and a release build
+/// left it out of the tree while the overview still counted it.
+#[test]
+fn an_orphan_declared_container_stays_out_of_every_view_and_coverage_names_it() {
+    let mut g = Graph::new();
+    let dir = g
+        .declare_node_kind(
+            "open",
+            "schema",
+            StructuralRole::Container,
+            CardPolicy::None,
+        )
+        .unwrap();
+    let leaf = g
+        .declare_node_kind("open", "table", StructuralRole::Leaf, CardPolicy::None)
+        .unwrap();
+    let holds = g
+        .declare_edge_kind("open", "holds", LinkRole::Containment)
+        .unwrap();
+    g.ensure_node(NodeKey::new("."), NodeKind::Module).unwrap();
+    for (key, kind) in [
+        ("sales", dir),
+        ("sales/invoice", leaf),
+        ("ghost/rooms", dir),
+        ("ghost/rooms/east", dir),
+        ("ghost/rooms/east/item", leaf),
+    ] {
+        g.ensure_node(NodeKey::new(key), NodeKind::Declared(kind))
+            .unwrap();
+    }
+    for (from, to) in [
+        (".", "sales"),
+        ("sales", "sales/invoice"),
+        ("ghost/rooms", "ghost/rooms/east"),
+        ("ghost/rooms/east", "ghost/rooms/east/item"),
+    ] {
+        g.add_edge(
+            &NodeKey::new(from),
+            &NodeKey::new(to),
+            Edge::new(EdgeKind::Declared(holds), prov(from)),
+        );
+    }
+    merge(&mut g, &ranked("declared", 10));
+
+    let orphans = vec!["ghost/rooms".to_string(), "ghost/rooms/east".to_string()];
+    assert_eq!(g.orphan_containers(), orphans);
+    for path in ["module-structure.md", "overview.md", "entry-points.md"] {
+        let text = view(&g, path);
+        assert!(!text.contains("ghost"), "{path}: {text}");
+    }
+    assert!(module_structure(&g).contains("sales"));
+    assert!(
+        view(&g, "overview.md").contains("across 1 module."),
+        "{}",
+        view(&g, "overview.md")
+    );
+    let coverage = build_coverage(&g, None, &Languages::bundled(), None);
+    assert_eq!(
+        coverage.declared_kinds_excluded.unwrap().orphan_containers,
+        orphans
+    );
+}
+
 /// U6 step 4: coverage excludes declared kinds, and says so by name.
 ///
 /// The exclusion itself is the right call — coverage measures how far the

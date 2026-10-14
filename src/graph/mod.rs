@@ -55,6 +55,11 @@ pub enum GraphError {
          (no leading or trailing separator, no empty segment, no backslash)"
     )]
     NonHierarchicalContainer { key: String },
+    #[error(
+        "node key {key:?} is in the Container role but its parent {parent:?} is no container \
+         of the module tree; it is left out of the backbone views (coverage names it)"
+    )]
+    OrphanContainer { key: String, parent: String },
 }
 
 /// Whether a key has the shape the module tree walk requires: `/`-separated,
@@ -63,12 +68,15 @@ pub enum GraphError {
 /// This is the *shape* half of the `NodeKey` precondition. The other half —
 /// every intermediate level exists as its own node — is a whole-graph property
 /// that cannot be judged at insertion time, because nothing fixes the order in
-/// which an extractor emits. `taxonomy::views::parent_closed` judges that one,
-/// and since U6 it asks for the `Container` ROLE rather than for
-/// `NodeKind::Module` — so a declared container is parent-checked on exactly the
-/// same terms as a core module. That is the whole of the closure half: a
-/// `debug_assert`, silent in release, which is the treatment core modules have
-/// always had and not something U6 invented for declared kinds.
+/// which an extractor emits. [`Graph::orphan_containers`] judges it over the
+/// whole graph. U6 had a declared container checked like a core module, by
+/// the `debug_assert` in `taxonomy::views::parent_closed`; but a declared
+/// container comes from a plugin's data, and a debug build stopping on it
+/// while a release build quietly dropped it from the tree was a weakness of
+/// the host (R-30). So that assert now holds for core modules only, which the
+/// file tree builds closed, and an orphan declared container is a named error
+/// ([`GraphError::OrphanContainer`]), left out of every backbone view and
+/// named in coverage.
 ///
 /// The backslash clause is deliberately kept though it cannot fire through
 /// [`NodeKey::new`], which normalizes `\` to `/` and is the only constructor —
@@ -1592,6 +1600,36 @@ impl Graph {
     #[must_use]
     pub fn node_role(&self, kind: NodeKind) -> StructuralRole {
         vocabulary::node_role(kind, &self.vocabulary)
+    }
+
+    /// The keys of declared nodes in the `Container` role that the module
+    /// tree cannot hold (R-30), in key order: a container whose parent — its
+    /// key cut at the last `/`, `.` for none — is no container the tree
+    /// holds. Transitive: a container beneath one of these is one too.
+    ///
+    /// The closure half of the key precondition ([`is_hierarchical`] is the
+    /// shape half), judged over the whole graph because nothing fixes the
+    /// order nodes arrive in. A core module is never named: the file tree
+    /// builds every ancestor, and `taxonomy::views::parent_closed` asserts it.
+    #[must_use]
+    pub fn orphan_containers(&self) -> Vec<String> {
+        // Key order puts every parent before its children: a parent's key is
+        // a prefix of theirs.
+        let mut held: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let mut orphans = Vec::new();
+        for node in self.nodes_sorted() {
+            if self.node_role(node.kind) != StructuralRole::Container {
+                continue;
+            }
+            let key = node.key.as_str();
+            let parent = key.rfind('/').map_or(".", |at| &key[..at]);
+            if key == "." || parent == "." || held.contains(parent) {
+                held.insert(key);
+            } else if matches!(node.kind, NodeKind::Declared(_)) {
+                orphans.push(key.to_string());
+            }
+        }
+        orphans
     }
 
     /// The part an edge kind plays in the backbone views (R9, KTD6).
