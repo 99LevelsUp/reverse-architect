@@ -248,7 +248,11 @@ pub(crate) use treesitter::NamesHandoff;
 /// The same bump retires what a third-party plugin's v11 record holds from
 /// before `66f1e99` (a source key a reference by name resolved to, stored
 /// before that fix), which went unbumped on the branch of step 2c.
-pub(crate) const CACHE_VERSION: u32 = 12;
+///
+/// v13 (R-42): an opaque key's mark of its file grows from eight hex digits
+/// to sixteen. A v12 record holds the short mark, and served beside fresh
+/// records it would give one run keys of both widths.
+pub(crate) const CACHE_VERSION: u32 = 13;
 
 /// Errors an extractor can raise. All readable; never a panic.
 #[derive(Debug, thiserror::Error)]

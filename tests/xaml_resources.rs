@@ -442,11 +442,11 @@ fn rendered(g: &reverse_architect::Generated) -> Vec<(String, String)> {
     out
 }
 
-/// The mark of a file's opaque keys: the first eight hex digits of the
+/// The mark of a file's opaque keys: the first sixteen hex digits of the
 /// SHA-256 of its path.
 fn mark(file: &str) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(file.as_bytes()))[..8].to_string()
+    format!("{:x}", Sha256::digest(file.as_bytes()))[..16].to_string()
 }
 
 fn opaque(n: usize) -> NodeKey {

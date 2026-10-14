@@ -826,14 +826,16 @@ fn withheld_keys(file: &str, ops: &[Op], prefixes: &SecretPrefixes) -> HashMap<S
     opaque
 }
 
-/// What tells one file's opaque keys from another's: the first eight hex
+/// What tells one file's opaque keys from another's: the first sixteen hex
 /// digits of the SHA-256 of its repository path as the graph keys it
 /// (`/`-separated) — stable across runs and platforms, and not the path
-/// itself, which a C# key does not otherwise spell.
+/// itself, which a C# key does not otherwise spell. Sixteen, not eight: two
+/// paths of one large repository sharing 32 bits is a birthday away (R-42);
+/// sharing 64 is not.
 fn withheld_mark(file: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut mark = format!("{:x}", Sha256::digest(file.as_bytes()));
-    mark.truncate(8);
+    mark.truncate(16);
     mark
 }
 
@@ -4740,7 +4742,7 @@ public class Other {
         assert_ne!(ka, kb);
         assert_eq!(of(a, WITHHELD_A), ka);
         let mark = withheld_mark(a);
-        assert_eq!(mark.len(), 8);
+        assert_eq!(mark.len(), 16);
         assert!(mark
             .bytes()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
