@@ -8,8 +8,10 @@ cd "$(dirname "$0")"
 : "${WASI_SDK_PATH:?set WASI_SDK_PATH to a wasi-sdk 34 directory}"
 export CC_wasm32_wasip2="$WASI_SDK_PATH/bin/clang"
 export AR_wasm32_wasip2="$WASI_SDK_PATH/bin/llvm-ar"
-export CFLAGS_wasm32_wasip2="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot"
 root="$(cd .. && pwd)"
+# The grammars are C, which RUSTFLAGS never reaches: clang keeps their paths
+# under the cargo registry (`$HOME/.cargo/registry/…`) unless told to map them too.
+export CFLAGS_wasm32_wasip2="--sysroot=$WASI_SDK_PATH/share/wasi-sysroot -ffile-prefix-map=$root=/ra -ffile-prefix-map=$HOME=/home"
 export RUSTFLAGS="--remap-path-prefix=$root=/ra --remap-path-prefix=$HOME=/home"
 : "${CARGO_BUILD_JOBS:=3}"
 export CARGO_BUILD_JOBS

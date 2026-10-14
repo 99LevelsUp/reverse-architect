@@ -9,9 +9,12 @@ if (-not $Sdk) { $Sdk = "D:\tools\wasi-sdk-34.0-x86_64-windows" }
 $env:WASI_SDK_PATH = $Sdk
 $env:CC_wasm32_wasip2 = "$Sdk\bin\clang.exe"
 $env:AR_wasm32_wasip2 = "$Sdk\bin\llvm-ar.exe"
-$env:CFLAGS_wasm32_wasip2 = "--sysroot=$Sdk/share/wasi-sysroot"
 # Reproducible bytes: no absolute paths of this checkout in the artifact.
 $root = (Resolve-Path "$PSScriptRoot\..").Path
+# The grammars are C, which RUSTFLAGS never reaches: clang keeps their paths
+# under the cargo registry (`$env:USERPROFILE\.cargo\registry\…`) unless told
+# to map them too.
+$env:CFLAGS_wasm32_wasip2 = "--sysroot=$Sdk/share/wasi-sysroot -ffile-prefix-map=$root=/ra -ffile-prefix-map=$env:USERPROFILE=/home"
 $env:RUSTFLAGS = "--remap-path-prefix=$root=/ra --remap-path-prefix=$env:USERPROFILE=/home"
 if (-not $env:CARGO_BUILD_JOBS) { $env:CARGO_BUILD_JOBS = "3" }
 New-Item -ItemType Directory -Force prebuilt | Out-Null
