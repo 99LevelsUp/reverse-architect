@@ -779,6 +779,7 @@ fn a_secret_known_only_by_its_field_name_is_withheld_without_the_second_layer() 
                  \x20       private const string SmtpPassword = \"saltmarshowl\";\n\
                  \x20       private const string SmtpHost = \"mail.orbit.test\";\n\
                  \x20       private const string lblPassword = \"Zadejte heslo\";\n\
+                 \x20       public bool Login(string user, string smtpPassword = \"\") { return true; }\n\
                  \x20   }\n\
                  }\n",
             ),
@@ -806,8 +807,10 @@ fn a_secret_known_only_by_its_field_name_is_withheld_without_the_second_layer() 
         .find(|(label, _)| label == "manifest.json")
         .unwrap()
         .1;
-    // The declaration stays, its value withheld inside its quotes.
+    // The declaration stays, its value withheld inside its quotes; an empty
+    // value withholds nothing and says nothing was.
     for kept in [
+        r#"string smtpPassword = \"\")"#,
         r#"private const string SmtpPassword = \"[redacted: password — see the source anchor]\";"#,
         r#"RELAY_PASSWORD = \"[redacted: password — see the source anchor]\";"#,
         "mail.orbit.test",

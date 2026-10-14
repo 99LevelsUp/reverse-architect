@@ -2635,9 +2635,11 @@ pub(super) fn literal_secrets(
 /// withholds replaced by the marker of its pattern, its quotes kept. The
 /// same decision as for the literal's anchor, so a value only its name
 /// calls a secret (`const string SmtpPassword = "…"`) is withheld here too
-/// (R-20), where the pattern table alone never sees it. `None` when nothing
-/// is withheld or the host has no lexer for the language of `path`: the
-/// text then stays byte for byte as it was.
+/// (R-20), where the pattern table alone never sees it. An empty literal
+/// (`string smtpPassword = ""`, a parameter's default) holds no value, and a
+/// marker there would claim one was withheld. `None` when nothing is
+/// withheld or the host has no lexer for the language of `path`: the text
+/// then stays byte for byte as it was.
 pub(super) fn withhold_literals(
     path: &str,
     text: &str,
@@ -2647,7 +2649,12 @@ pub(super) fn withhold_literals(
         return None;
     }
     let segs = segments(Lang::from_path(path)?, text);
-    let withheld = literal_secrets(text, &segs, &LineIndex::new(text), prefixes);
+    let mut withheld = literal_secrets(text, &segs, &LineIndex::new(text), prefixes);
+    for (seg, pattern) in segs.iter().zip(&mut withheld) {
+        if seg.start == seg.end {
+            *pattern = None;
+        }
+    }
     if withheld.iter().all(Option::is_none) {
         return None;
     }
