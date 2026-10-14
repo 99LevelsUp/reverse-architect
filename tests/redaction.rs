@@ -791,10 +791,29 @@ fn a_secret_known_only_by_its_field_name_is_withheld_without_the_second_layer() 
                  \x20   private static final String RELAY_PASSWORD = \"fernbrookvale\";\n\
                  }\n",
             ),
+            // The type after the name (`name: Type = …`): the name, not the
+            // type, says what the value is.
+            (
+                "src/queue.ts",
+                "export class Queue {\n\
+                 \x20 private smtpPassword: string = \"heathrowanpine\";\n\
+                 \x20 role: 'admin' | 'user' = 'admin';\n\
+                 }\n",
+            ),
+            (
+                "src/notify.py",
+                "def send(host: str = \"mail.orbit.test\", smtp_password: str = \"mossgravelwren\"):\n\
+                 \x20   return host\n",
+            ),
         ],
     );
     let artifacts = all_artifacts(repo.path(), out.path());
-    for secret in ["saltmarshowl", "fernbrookvale"] {
+    for secret in [
+        "saltmarshowl",
+        "fernbrookvale",
+        "heathrowanpine",
+        "mossgravelwren",
+    ] {
         let leaked: Vec<&str> = artifacts
             .iter()
             .filter(|(_, c)| c.contains(secret))
@@ -813,6 +832,10 @@ fn a_secret_known_only_by_its_field_name_is_withheld_without_the_second_layer() 
         r#"string smtpPassword = \"\")"#,
         r#"private const string SmtpPassword = \"[redacted: password — see the source anchor]\";"#,
         r#"RELAY_PASSWORD = \"[redacted: password — see the source anchor]\";"#,
+        r#"private smtpPassword: string = \"[redacted: password — see the source anchor]\""#,
+        r#"smtp_password: str = \"[redacted: password — see the source anchor]\""#,
+        "role: 'admin' | 'user' = 'admin'",
+        r#"host: str = \"mail.orbit.test\""#,
         "mail.orbit.test",
         "Zadejte heslo",
     ] {

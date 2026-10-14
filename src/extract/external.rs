@@ -2788,10 +2788,15 @@ fn line_secret_patterns(
 /// A C# property gives its value the same way past its accessors — an
 /// initializer `Password { get; set; } = "…"` or an expression body
 /// `Password => "…"` — and is the other common place a credential sits.
+///
+/// A binding whose type follows its name — a TypeScript field or parameter
+/// `smtpPassword: string = "…"`, a Python one `smtp_password: str = "…"` —
+/// is assigned to the name before the `:`, not to the type before the `=`.
 fn assigned_name(code: &str) -> Option<&str> {
     static RE: OnceLock<Regex> = OnceLock::new();
     static PROPERTY: OnceLock<Regex> = OnceLock::new();
     static DEFINE: OnceLock<Regex> = OnceLock::new();
+    static TYPED: OnceLock<Regex> = OnceLock::new();
     // Every shape ends in a separator or starts with `#`; anything else is
     // turned away before a pattern runs — most literals are not assigned.
     let end = code.trim_end();
@@ -2817,6 +2822,17 @@ fn assigned_name(code: &str) -> Option<&str> {
     });
     let define = DEFINE
         .get_or_init(|| Regex::new(r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s+$").unwrap());
+    // The type is read as anything but a separator, a bracket or a quote, so
+    // a binding of a parameter list never reaches back past its comma.
+    if end.ends_with('=') && !end.ends_with("==") {
+        let typed = TYPED.get_or_init(|| {
+            Regex::new(r#"([\p{L}_][\p{L}\p{N}_]*)\s*[?!]?\s*:\s*[^=:;,(){}"'`]+?\s*=\s*$"#)
+                .unwrap()
+        });
+        if let Some(caps) = typed.captures(code) {
+            return Some(caps.get(1)?.as_str());
+        }
+    }
     let caps = if ends_assigning {
         re.captures(code)?
     } else {

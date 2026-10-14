@@ -252,7 +252,12 @@ pub(crate) use treesitter::NamesHandoff;
 /// v13 (R-42): an opaque key's mark of its file grows from eight hex digits
 /// to sixteen. A v12 record holds the short mark, and served beside fresh
 /// records it would give one run keys of both widths.
-pub(crate) const CACHE_VERSION: u32 = 13;
+///
+/// v14 (the review of R-20): a binding whose type follows its name
+/// (`smtpPassword: string = "…"`) is assigned to the name, so its literal is
+/// withheld in the anchors and in the signature alike. A v13 record of such a
+/// file holds the value.
+pub(crate) const CACHE_VERSION: u32 = 14;
 
 /// Errors an extractor can raise. All readable; never a panic.
 #[derive(Debug, thiserror::Error)]
