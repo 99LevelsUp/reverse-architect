@@ -1613,6 +1613,15 @@ impl Graph {
     /// builds every ancestor, and `taxonomy::views::parent_closed` asserts it.
     #[must_use]
     pub fn orphan_containers(&self) -> Vec<String> {
+        // Every view asks, and no bundled plugin declares a container: a
+        // corpus without one does not pay for a sorted walk of its graph.
+        if !self
+            .vocabulary
+            .node_declarations()
+            .any(|(_, decl)| decl.role == StructuralRole::Container)
+        {
+            return Vec::new();
+        }
         // Key order puts every parent before its children: a parent's key is
         // a prefix of theirs.
         let mut held: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
