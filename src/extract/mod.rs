@@ -240,7 +240,15 @@ pub(crate) use treesitter::NamesHandoff;
 /// unique to its file, and a withheld name no longer resolves a reference.
 /// The plugin's digest does not change for a third-party plugin, so a record
 /// written before could still hold the raw key; the bump retires every one.
-pub(crate) const CACHE_VERSION: u32 = 11;
+///
+/// v12 (R-20): the host also withholds, in a member's signature, a literal
+/// the first layer withholds by the name it is given (`const string
+/// SmtpPassword = "…"`) — before the per-file record is written, and no
+/// plugin's digest moves with it, so a v11 record would serve the value.
+/// The same bump retires what a third-party plugin's v11 record holds from
+/// before `66f1e99` (a source key a reference by name resolved to, stored
+/// before that fix), which went unbumped on the branch of step 2c.
+pub(crate) const CACHE_VERSION: u32 = 12;
 
 /// Errors an extractor can raise. All readable; never a panic.
 #[derive(Debug, thiserror::Error)]

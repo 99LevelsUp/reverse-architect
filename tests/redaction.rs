@@ -759,6 +759,64 @@ fn a_field_initializer_does_not_travel_in_the_signature() {
     );
 }
 
+/// A value only the name of its field calls a secret — no keyword at a word
+/// boundary, no token shape — travels in the field's signature as well as in
+/// the literal, and the first layer withholds it there too (R-20).
+#[test]
+fn a_secret_known_only_by_its_field_name_is_withheld_without_the_second_layer() {
+    let repo = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    init_repo_with_files(
+        repo.path(),
+        "Alice",
+        &[
+            (
+                "src/Mailer.cs",
+                "namespace Orbit.Mail\n\
+                 {\n\
+                 \x20   public class Mailer\n\
+                 \x20   {\n\
+                 \x20       private const string SmtpPassword = \"saltmarshowl\";\n\
+                 \x20       private const string SmtpHost = \"mail.orbit.test\";\n\
+                 \x20       private const string lblPassword = \"Zadejte heslo\";\n\
+                 \x20   }\n\
+                 }\n",
+            ),
+            (
+                "src/Relay.java",
+                "package orbit.mail;\n\
+                 \n\
+                 public class Relay {\n\
+                 \x20   private static final String RELAY_PASSWORD = \"fernbrookvale\";\n\
+                 }\n",
+            ),
+        ],
+    );
+    let artifacts = all_artifacts(repo.path(), out.path());
+    for secret in ["saltmarshowl", "fernbrookvale"] {
+        let leaked: Vec<&str> = artifacts
+            .iter()
+            .filter(|(_, c)| c.contains(secret))
+            .map(|(label, _)| label.as_str())
+            .collect();
+        assert!(leaked.is_empty(), "R-20: `{secret}` reached {leaked:?}");
+    }
+    let manifest = &artifacts
+        .iter()
+        .find(|(label, _)| label == "manifest.json")
+        .unwrap()
+        .1;
+    // The declaration stays, its value withheld inside its quotes.
+    for kept in [
+        r#"private const string SmtpPassword = \"[redacted: password — see the source anchor]\";"#,
+        r#"RELAY_PASSWORD = \"[redacted: password — see the source anchor]\";"#,
+        "mail.orbit.test",
+        "Zadejte heslo",
+    ] {
+        assert!(manifest.contains(kept), "`{kept}` must stay: {manifest}");
+    }
+}
+
 #[test]
 fn ordinary_prose_and_code_survive_the_filter() {
     // Over-redaction is the intended failure direction, but it must not eat the

@@ -2630,6 +2630,40 @@ pub(super) fn literal_secrets(
     out
 }
 
+/// A declaration's text as a plugin hands it — a field's signature holds
+/// its initializer — with the content of every literal [`literal_secrets`]
+/// withholds replaced by the marker of its pattern, its quotes kept. The
+/// same decision as for the literal's anchor, so a value only its name
+/// calls a secret (`const string SmtpPassword = "…"`) is withheld here too
+/// (R-20), where the pattern table alone never sees it. `None` when nothing
+/// is withheld or the host has no lexer for the language of `path`: the
+/// text then stays byte for byte as it was.
+pub(super) fn withhold_literals(
+    path: &str,
+    text: &str,
+    prefixes: &SecretPrefixes,
+) -> Option<String> {
+    if !text.contains(['"', '\'', '`']) {
+        return None;
+    }
+    let segs = segments(Lang::from_path(path)?, text);
+    let withheld = literal_secrets(text, &segs, &LineIndex::new(text), prefixes);
+    if withheld.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    for (seg, pattern) in segs.iter().zip(&withheld) {
+        if let Some(pattern) = pattern {
+            out.push_str(&text[at..seg.start]);
+            out.push_str(&super::bodies::withheld(pattern));
+            at = seg.end;
+        }
+    }
+    out.push_str(&text[at..]);
+    Some(out)
+}
+
 /// The name a literal is assigned to ([`assigned_name`]), read from the
 /// code segment right before it: what precedes the literal on its line. A
 /// literal that starts its line — nothing but indentation before it, or

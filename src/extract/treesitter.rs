@@ -651,6 +651,16 @@ fn output_from_ops(
                 }
             }
         }
+        // A field's signature holds its initializer, and the pattern table
+        // above reads the text without the name the value is given to: a
+        // literal only `SmtpPassword` calls a secret passed it (R-20).
+        if kind == FactKind::SymbolSignature {
+            if let FactValue::Text(t) = &mut fact.value {
+                if let Some(kept) = super::external::withhold_literals(file, t, prefixes) {
+                    *t = kept;
+                }
+            }
+        }
         let skips = super::external::cut_doc_long_tokens(&mut fact);
         Some((fact, skips))
     };
