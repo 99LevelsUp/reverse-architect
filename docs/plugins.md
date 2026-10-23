@@ -170,7 +170,7 @@ Under 0.4, `bodies` returns a `file-notes` record from the new `notes` interface
 - **`comments`**: every ordinary comment of the file (`//` and `/* */`, never a doc comment), with its `place`, its `text` without the comment markers, and its `kind`: `prose` for words written for a reader, `code` for code that was commented out. The component decides the kind by a fixed rule of its own.
 - **`roles`**: the general role of a literal in its language, by the index of its member body in `file-bodies.members` and the literal's id there: `key` (the key of an indexer or a dictionary, `p["BOOK"]`), `compared` (a constant a value is compared against) or `attribute-arg` (an argument of an attribute). Roles that belong to a domain, such as the name of a directive, are a domain plugin's to name, not the contract's.
 
-The host redacts the text of a comment like every other text of `bodies`: do not filter it yourself. A 0.3 component's bodies arrive with no comments and no roles.
+The host redacts the text of a comment like every other text of `bodies`: do not filter it yourself. A 0.3 component's bodies arrive with no comments and no roles. This version of the host accepts both and does not show them on any card yet.
 
 ## References by name
 

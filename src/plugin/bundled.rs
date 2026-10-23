@@ -56,8 +56,8 @@ pub fn load_body_component((id, bytes): (&str, &[u8])) -> Result<Plugin, PluginE
 }
 
 /// The body component `id` of [`BODY_COMPONENTS`], loaded once per process
-/// on first use — each on its own, so a run compiles only the components it
-/// reads with, and a run without the second layer (`--detail-level`) none. A
+/// on first use — each on its own, so a run compiles none that a declared
+/// plugin replaces, and a run without the second layer (`--detail-level`) none. A
 /// session borrows its plugin for the run, hence the `'static` borrow, as
 /// [`bundled`] hands out. An id outside the table is a caller's bug, and a
 /// bundled component that fails to load is a broken build: both panic.

@@ -22,7 +22,7 @@
 //! does not declare or declares twice.
 //!
 //! Limits: a written type name is matched by its last segment against the
-//! C# types the first layer declares — every one, a type whose bodies the
+//! types of a profiled language the first layer declares — every one, a type whose bodies the
 //! second layer could not read too — without `using`s, so a name two types
 //! share stays unresolved; a qualified name (`System.Timers.Timer`) takes
 //! only a type whose namespace and enclosing types end with its qualifier,
