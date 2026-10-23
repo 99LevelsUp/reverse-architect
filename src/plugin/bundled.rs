@@ -42,40 +42,41 @@ pub const BUNDLED: [(&str, &[u8]); 8] = [
 /// [`BUNDLED`] on purpose: the first layer never loads them, so a run without
 /// the second layer (`--detail-level`) is exactly what it was.
 pub const BODY_COMPONENTS: [(&str, &[u8]); 1] = [(
-    "csharp-body",
+    CSHARP_BODY_ID,
     include_bytes!("../../plugins/prebuilt/csharp-body.wasm"),
 )];
 
-/// Load the body component `id`, the way [`load_one`] loads a bundled plugin.
-pub fn load_body_component(id: &str) -> Result<Plugin, PluginError> {
-    let (_, bytes) = BODY_COMPONENTS
-        .iter()
-        .find(|(i, _)| *i == id)
-        .unwrap_or_else(|| panic!("no body component `{id}`"));
+/// The id of the component that reads the bodies of C# members.
+pub const CSHARP_BODY_ID: &str = "csharp-body";
+
+/// Load one entry of [`BODY_COMPONENTS`], the way [`load_one`] loads a
+/// bundled plugin.
+pub fn load_body_component((id, bytes): (&str, &[u8])) -> Result<Plugin, PluginError> {
     Plugin::load(&format!("bundled:{id}"), bytes)
 }
 
-/// [`BODY_COMPONENTS`], loaded once per process on first use — only by a run
-/// with the second layer (`--detail-level`), so a run without it never
-/// compiles them. A session borrows its plugin for the run, hence the
-/// `'static` borrow, as [`bundled`] hands out. A bundled component that fails
-/// to load is a broken build, so it panics with the reason, as there.
-pub fn body_components() -> &'static [Plugin] {
-    static PLUGINS: OnceLock<Vec<Plugin>> = OnceLock::new();
-    PLUGINS.get_or_init(|| {
-        BODY_COMPONENTS
-            .iter()
-            .map(|(id, _)| {
-                let plugin = load_body_component(id)
-                    .unwrap_or_else(|e| panic!("bundled plugin `{id}` is broken: {e}"));
-                assert_eq!(
-                    plugin.id(),
-                    *id,
-                    "the bundled body component `{id}` describes itself under another id"
-                );
-                plugin
-            })
-            .collect()
+/// The body component `id` of [`BODY_COMPONENTS`], loaded once per process
+/// on first use — each on its own, so a run compiles only the components it
+/// reads with, and a run without the second layer (`--detail-level`) none. A
+/// session borrows its plugin for the run, hence the `'static` borrow, as
+/// [`bundled`] hands out. An id outside the table is a caller's bug, and a
+/// bundled component that fails to load is a broken build: both panic.
+pub fn body_component(id: &str) -> &'static Plugin {
+    static PLUGINS: [OnceLock<Plugin>; BODY_COMPONENTS.len()] =
+        [const { OnceLock::new() }; BODY_COMPONENTS.len()];
+    let at = BODY_COMPONENTS
+        .iter()
+        .position(|(c, _)| *c == id)
+        .unwrap_or_else(|| panic!("no body component `{id}`"));
+    PLUGINS[at].get_or_init(|| {
+        let plugin = load_body_component(BODY_COMPONENTS[at])
+            .unwrap_or_else(|e| panic!("bundled plugin `{id}` is broken: {e}"));
+        assert_eq!(
+            plugin.id(),
+            id,
+            "the bundled body component `{id}` describes itself under another id"
+        );
+        plugin
     })
 }
 
@@ -173,8 +174,8 @@ mod tests {
     fn the_csharp_body_component_loads_as_contract_0_3_serving_bodies_only() {
         use crate::plugin::host::Contract;
         use crate::plugin::manifest::Pass;
-        let p = load_body_component("csharp-body").unwrap();
-        assert_eq!(p.id(), "csharp-body");
+        let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
+        assert_eq!(p.id(), CSHARP_BODY_ID);
         assert_eq!(p.contract(), Contract::V0_3);
         assert_eq!(p.manifest().passes, [Pass::Bodies]);
         for kind in ["member-access", "invocation", "key-compare", "menu-item"] {
@@ -185,7 +186,7 @@ mod tests {
             );
         }
         assert_eq!(p.manifest().language_for("cs"), Some("csharp"));
-        assert!(BUNDLED.iter().all(|(id, _)| *id != "csharp-body"));
+        assert!(BUNDLED.iter().all(|(id, _)| *id != CSHARP_BODY_ID));
     }
 
     /// The bodies of a C# file, read through the sandbox: the model comes
@@ -196,7 +197,7 @@ mod tests {
         use crate::plugin::host::{BodyNodeKind, PluginError, WireConfig};
         use std::collections::HashSet;
         use std::sync::Arc;
-        let p = load_body_component("csharp-body").unwrap();
+        let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
         let mut s = p.session(Arc::new(HashSet::new())).unwrap();
 
         let src = "class EditorView {\n    void OnKeyDown(KeyEventArgs e) {\n        if (e.Key == Key.F4) Check();\n    }\n}\n";

@@ -453,11 +453,11 @@ fn body_components(
         .readers()
         .iter()
         .map(|r| {
-            let plugin = options.plugins.iter().find(|p| p.id() == r.id).or_else(|| {
-                plugin::bundled::body_components()
-                    .iter()
-                    .find(|c| r.component && c.id() == r.id)
-            });
+            let plugin = options
+                .plugins
+                .iter()
+                .find(|p| p.id() == r.id)
+                .or_else(|| r.component.then(|| plugin::bundled::body_component(&r.id)));
             card::triggers::BodyComponent {
                 languages: r.languages.clone(),
                 emits: plugin

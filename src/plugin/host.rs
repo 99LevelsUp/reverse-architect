@@ -1968,6 +1968,20 @@ mod tests {
         assert!(matches!(&err, PluginError::PassNotServed { .. }), "{err}");
     }
 
+    /// 0.4 binds its `types` to 0.3's (`mod v4`), which holds only while the
+    /// two interfaces are the same text.
+    #[test]
+    fn the_types_of_0_4_are_the_types_of_0_3_word_for_word() {
+        fn types(wit: &str) -> &str {
+            let start = wit.find("interface types {").expect("a types interface");
+            let end = wit[start..].find("\n}\n").expect("its end") + start;
+            &wit[start..end]
+        }
+        let v3 = include_str!("../../wit-v3/extractor.wit");
+        let v4 = include_str!("../../wit-v4/extractor.wit");
+        assert_eq!(types(v3), types(v4));
+    }
+
     /// A 0.3 component's bodies come back with nothing beside them: 0.3 has
     /// no comments and no roles to say.
     #[test]

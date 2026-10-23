@@ -872,9 +872,10 @@ fn names_any(written: &str, params: &[String]) -> bool {
 /// `Acme.Views`); a generic arity or a duplicate's suffix is not part of a
 /// type's name here.
 fn qualified_by(key: &NodeKey, qualifier: &str) -> bool {
-    let Some((profile, (namespace, path))) =
-        profile::of_key(key).and_then(|p| Some((p, p.split(key)?)))
-    else {
+    let Some(profile) = profile::of_key(key) else {
+        return false;
+    };
+    let Some((namespace, path)) = profile.split(key) else {
         return false;
     };
     let enclosing = path.rsplit_once('.').map_or("", |(outer, _)| outer);

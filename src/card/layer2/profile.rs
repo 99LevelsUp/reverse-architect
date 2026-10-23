@@ -30,11 +30,11 @@ pub struct Profile {
     /// The extension of the files its bodies are read from.
     extension: &'static str,
     /// The symbol kinds the analysis reads functionalities of.
-    pub analyzed: &'static [&'static str],
+    analyzed: &'static [&'static str],
     /// What joins the segments of a key's container.
     separator: &'static str,
     /// The kinds of entry point the language's idioms are read for.
-    pub entries: &'static [EntryKind],
+    entries: &'static [EntryKind],
 }
 
 /// C#: types in namespaces, the idioms of WPF and MVVM among its entry
@@ -86,6 +86,12 @@ impl Profile {
         container.split(self.separator)
     }
 
+    /// Whether the analysis reads functionalities of a type of the symbol
+    /// kind `kind` (`class`).
+    pub fn analyzes(&self, kind: &str) -> bool {
+        self.analyzed.contains(&kind)
+    }
+
     /// Whether the language's idioms are read for entry points of `kind`.
     pub fn seeds(&self, kind: EntryKind) -> bool {
         self.entries.contains(&kind)
@@ -100,7 +106,6 @@ mod tests {
     fn a_key_finds_the_profile_of_its_language_and_none_without_one() {
         assert_eq!(of_key(&NodeKey::new("sym:csharp:Acme#View")), Some(&CSHARP));
         assert_eq!(of_key(&NodeKey::new("sym:python:pkg#View")), None);
-        // A prefix of a language is not the language.
         assert_eq!(of_key(&NodeKey::new("sym:csharpish:Acme#View")), None);
     }
 

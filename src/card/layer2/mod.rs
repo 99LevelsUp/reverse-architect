@@ -284,9 +284,8 @@ fn analyze_in(
         .read_types()
         .into_iter()
         .filter(|ty| {
-            let analyzed = profile::of_key(ty).map_or(&[][..], |p| p.analyzed);
             ix.symbol(ty)
-                .is_some_and(|s| analyzed.contains(&s.kind.as_str()))
+                .is_some_and(|s| profile::of_key(ty).is_some_and(|p| p.analyzes(&s.kind)))
                 && layer.layer_of(ty) == SecondLayer::Present
         })
         .map(|ty| {

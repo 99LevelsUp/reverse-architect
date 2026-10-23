@@ -1371,9 +1371,11 @@ impl BodyPass {
     /// The pass of a run at `level` over `plugins`, with every bundled body
     /// component none of `plugins` has the id of.
     pub fn new(level: u8, plugins: &PluginSet) -> BodyPass {
-        let components = crate::plugin::bundled::body_components()
+        let components = crate::plugin::bundled::BODY_COMPONENTS
             .iter()
-            .filter(|c| !plugins.iter().any(|p| p.id() == c.id()))
+            .map(|(id, _)| *id)
+            .filter(|id| !plugins.iter().any(|p| p.id() == *id))
+            .map(crate::plugin::bundled::body_component)
             .collect();
         BodyPass {
             level,
@@ -1499,9 +1501,8 @@ fn read_file(
     };
     match session.bodies(path, source) {
         Ok(file) => {
-            // What contract 0.4 says beside the model — comments, the roles
-            // of literals — is not part of the second layer yet.
-            let mut model = FileBodies::from(file.model);
+            let crate::plugin::host::Bodies { model, .. } = file;
+            let mut model = FileBodies::from(model);
             redact_bodies(&mut model, path, source, prefixes);
             quote_comments(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
