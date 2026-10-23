@@ -272,6 +272,10 @@ pub struct Bodies {
     /// Type shapes, typed members and declaration metas whose name position
     /// is no declaration's.
     pub unpaired_declarations: u64,
+    /// Literal roles a 0.4 component reported for a member body or a literal
+    /// its model does not have, dropped. Absent when none were.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub dropped_literal_roles: u64,
     /// Every file the `bodies` pass failed on: it keeps its first layer and
     /// loses its second.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -331,6 +335,10 @@ pub struct FailedBodies {
     pub reason: String,
 }
 
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
 /// The second layer's section of coverage, read off the run's model.
 pub fn bodies(layer: &crate::extract::bodies::BodyLayer) -> Bodies {
     let counts = layer.counts();
@@ -352,6 +360,10 @@ pub fn bodies(layer: &crate::extract::bodies::BodyLayer) -> Bodies {
             })
             .collect(),
         unpaired_declarations: counts.unpaired_declarations,
+        dropped_literal_roles: layer
+            .files()
+            .map(|(_, f)| u64::from(f.model.notes.dropped_roles))
+            .sum(),
         failed: layer
             .failures()
             .map(|(path, f)| FailedBodies {

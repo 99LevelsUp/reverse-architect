@@ -81,7 +81,9 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 7 decides a key-shaped markup handler by
+/// conversion of a model raises it: 8 keeps what a 0.4 component says beside
+/// the model ([`Notes`]): its comments filtered like a quoted comment and its
+/// literal roles checked against the model, 7 decides a key-shaped markup handler by
 /// its digits rather than by its last segment ([`key_shaped_handler`]), 6
 /// withholds a key-shaped handler of a markup body that does not end in a
 /// word, 5
@@ -91,7 +93,7 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 7;
+pub const BODY_REDACTION_VERSION: u32 = 8;
 
 /// The digits a key-shaped markup handler needs before it is taken for a
 /// token ([`key_shaped_handler`]).
@@ -613,6 +615,114 @@ pub struct FileBodies {
     pub typed_members: Vec<TypedName>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub metas: Vec<DeclarationMeta>,
+    /// What a 0.4 component says beside the model; empty for a 0.3 one.
+    #[serde(default, skip_serializing_if = "Notes::is_empty")]
+    pub notes: Notes,
+}
+
+/// What a component says about a file beside its model of bodies (contract
+/// 0.4, `file-notes`): the ordinary comments, redacted, and the roles of
+/// literals that point at a literal of the model.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Notes {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<Comment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<LiteralRole>,
+    /// Roles whose member body or literal the model does not have, dropped
+    /// rather than attached to another literal.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dropped_roles: u32,
+}
+
+impl Notes {
+    pub fn is_empty(&self) -> bool {
+        self.comments.is_empty() && self.roles.is_empty() && self.dropped_roles == 0
+    }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// One ordinary comment (`comment`), its text redacted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Comment {
+    pub place: Range,
+    pub text: String,
+    pub kind: CommentKind,
+}
+
+/// What a comment holds, by the component's rule (`comment-kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CommentKind {
+    Prose,
+    Code,
+}
+
+/// The general role of one literal of the model (`literal-role`): the index
+/// of its member body in [`FileBodies::members`] and its id there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiteralRole {
+    pub member: u32,
+    pub literal: u32,
+    pub role: RoleKind,
+}
+
+/// The general roles a literal plays (`role-kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RoleKind {
+    Key,
+    Compared,
+    AttributeArg,
+}
+
+/// The notes of `model` from what a component returned beside it. A role
+/// is kept only when the model has its member body and that body a literal
+/// of its id — literal ids equal their index — and the rest are counted.
+fn notes_of(
+    comments: Vec<w::BodyComment>,
+    roles: Vec<w::LiteralRole>,
+    model: &FileBodies,
+) -> Notes {
+    let mut notes = Notes {
+        comments: comments
+            .into_iter()
+            .map(|c| Comment {
+                place: c.place.into(),
+                text: c.text,
+                kind: match c.kind {
+                    w::CommentKind::Prose => CommentKind::Prose,
+                    w::CommentKind::Code => CommentKind::Code,
+                },
+            })
+            .collect(),
+        roles: Vec::new(),
+        dropped_roles: 0,
+    };
+    for r in roles {
+        let literal = model
+            .members
+            .get(r.member as usize)
+            .and_then(|m| m.literals.get(r.literal as usize))
+            .filter(|l| l.id == r.literal);
+        if literal.is_none() {
+            notes.dropped_roles += 1;
+            continue;
+        }
+        notes.roles.push(LiteralRole {
+            member: r.member,
+            literal: r.literal,
+            role: match r.role {
+                w::LiteralRoleKind::Key => RoleKind::Key,
+                w::LiteralRoleKind::Compared => RoleKind::Compared,
+                w::LiteralRoleKind::AttributeArg => RoleKind::AttributeArg,
+            },
+        });
+    }
+    notes
 }
 
 // ---- From the bindings ----
@@ -1015,6 +1125,7 @@ impl From<w::FileBodies> for FileBodies {
             members: f.members.into_iter().map(Into::into).collect(),
             typed_members: typed_names(f.typed_members),
             metas: f.metas.into_iter().map(Into::into).collect(),
+            notes: Notes::default(),
         }
     }
 }
@@ -1286,6 +1397,20 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
         }
         filter.tags(&mut meta.tags);
     }
+    // A comment's text is cut like a quoted comment ([`quote_comments`]): a
+    // key-shaped word withholds it whole.
+    // A text the block filter leaves alone stays as written, its line breaks
+    // too.
+    for comment in &mut model.notes.comments {
+        let (blocked, changed) = redact_secret_block(&comment.text, prefixes);
+        if changed {
+            comment.text = blocked;
+        }
+        filter.text(&mut comment.text);
+        if without_long_tokens(&comment.text).1 {
+            comment.text = withheld("long token");
+        }
+    }
 }
 
 /// The comment written right after each call argument of a model, attached
@@ -1501,8 +1626,13 @@ fn read_file(
     };
     match session.bodies(path, source) {
         Ok(file) => {
-            let crate::plugin::host::Bodies { model, .. } = file;
+            let w::Bodies {
+                model,
+                comments,
+                roles,
+            } = file;
             let mut model = FileBodies::from(model);
+            model.notes = notes_of(comments, roles, &model);
             redact_bodies(&mut model, path, source, prefixes);
             quote_comments(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
@@ -2151,6 +2281,15 @@ mod tests {
                 }],
                 tags: vec![tag(text)],
             }],
+            notes: Notes {
+                comments: vec![Comment {
+                    place: range(),
+                    text: format!("the key is {text}"),
+                    kind: CommentKind::Prose,
+                }],
+                roles: Vec::new(),
+                dropped_roles: 0,
+            },
         }
     }
 
@@ -2161,13 +2300,13 @@ mod tests {
             redact_bodies(&mut model, "src/View.xaml", b"", &prefixes());
             let text = serde_json::to_string(&model).unwrap();
             assert!(!text.contains(secret), "{text}");
-            // Fourteen texts: the condition and its `other` node, the value
+            // Fifteen texts: the condition and its `other` node, the value
             // and the argument of three tags, the literal, the `nameof`, the
             // attribute's argument, the subscription's event, source and
-            // handler.
+            // handler, and the comment of contract 0.4.
             assert_eq!(
                 text.matches(ra_redact::REDACTION_MARKER).count(),
-                14,
+                15,
                 "{text}"
             );
         }
@@ -2211,6 +2350,7 @@ mod tests {
             }],
             typed_members: Vec::new(),
             metas: Vec::new(),
+            notes: Notes::default(),
         }
     }
 
@@ -2713,5 +2853,47 @@ mod tests {
             bundled.plugin_for("src/EditorView.cs").unwrap(),
             body_component(CSHARP_BODY_ID)
         ));
+    }
+
+    /// A literal role is kept only when the model has its member body and
+    /// that body a literal of its id; the others are counted, never attached
+    /// to another literal. Comments come through with their kind.
+    #[test]
+    fn a_literal_role_outside_the_model_is_dropped_and_counted() {
+        let model = model_with("x");
+        let role = |member: u32, literal: u32| w::LiteralRole {
+            member,
+            literal,
+            role: w::LiteralRoleKind::Key,
+        };
+        let comment = w::BodyComment {
+            place: w::BodyRange {
+                start: w::BodyPosition { line: 4, column: 5 },
+                end: w::BodyPosition {
+                    line: 4,
+                    column: 22,
+                },
+            },
+            text: "var x = Load(1);".into(),
+            kind: w::CommentKind::Code,
+        };
+        let notes = notes_of(
+            vec![comment],
+            vec![role(0, 0), role(0, 1), role(3, 0)],
+            &model,
+        );
+        assert_eq!(
+            notes.roles,
+            [LiteralRole {
+                member: 0,
+                literal: 0,
+                role: RoleKind::Key,
+            }]
+        );
+        assert_eq!(notes.dropped_roles, 2);
+        assert_eq!(notes.comments.len(), 1);
+        assert_eq!(notes.comments[0].kind, CommentKind::Code);
+        assert_eq!(notes.comments[0].place, Range::from([4, 5, 4, 22]));
+        assert!(Notes::default().is_empty() && !notes.is_empty());
     }
 }
