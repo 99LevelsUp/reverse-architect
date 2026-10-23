@@ -3836,3 +3836,76 @@ fn a_layered_run_leaves_the_plain_runs_details_views_and_maps_as_they_were() {
     };
     assert_eq!(type_cards(&plain), type_cards(&layered));
 }
+
+// ---- The reference of the second layer (plan vrstva 3, U1) ----
+
+/// Every file a run over `repo` with `--detail-level 3` writes into `out`, on
+/// `threads` worker threads.
+fn reference_run(repo: &Path, out: &Path, threads: usize) -> Vec<(String, Vec<u8>)> {
+    Command::cargo_bin("reverse-architect")
+        .unwrap()
+        .env("RAYON_NUM_THREADS", threads.to_string())
+        .arg(repo)
+        .arg("--out")
+        .arg(out)
+        .arg("--detail-level")
+        .arg("3")
+        .assert()
+        .success();
+    output_files(out)
+}
+
+/// The six-grammar fixture with every C# fixture of the analyses beside it.
+fn layered_reference_files() -> Vec<(&'static str, &'static str)> {
+    let mut files = common::six_grammar::files();
+    files.extend([
+        ("src/l2/Views.cs", EDITOR_VIEWS),
+        ("src/l2/ViewModels.cs", EDITOR_MODELS),
+        ("src/l2/Commands.cs", COMMANDS),
+        ("src/l2/Shapes.cs", SHAPES),
+        ("src/l2/Clusters.cs", CLUSTERS),
+        ("src/l2/Flow.cs", FLOW),
+        ("src/l2/Check.cs", CHECK),
+        ("src/l2/Copies.cs", COPIES),
+        ("src/l2/CopiesPart.cs", COPIES_PART),
+    ]);
+    files
+}
+
+/// What a run with the second layer writes is pinned: the analyses become
+/// language profiles (plan vrstva 3, KTD1) without a byte of the C# output
+/// moving, and a unit that means to move it re-pins this on purpose.
+#[test]
+fn a_layered_run_writes_the_pinned_bytes_on_one_thread_and_on_many() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let files = layered_reference_files();
+    common::init_repo_with_files(&first.path().join("repo"), "Alice", &files);
+    common::init_repo_with_files(&second.path().join("checkout"), "Alice", &files);
+
+    let one = reference_run(&first.path().join("repo"), &first.path().join("corpus"), 1);
+    let many = reference_run(
+        &second.path().join("checkout"),
+        &second.path().join("out"),
+        8,
+    );
+    let card = |name: &str| -> String {
+        let path = format!("cards/type/{name}");
+        one.iter()
+            .find(|(p, _)| p.contains(&path))
+            .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default()
+    };
+    // Guard the guard: the pinned corpus holds the second layer's sections.
+    assert!(
+        one.iter().any(|(p, b)| p.starts_with("cards/type/")
+            && String::from_utf8_lossy(b).contains("\n## Functionality: ")),
+        "the fixture must produce cards with the second layer: {}",
+        card("EditorView")
+    );
+
+    let a = fingerprint(&one);
+    let b = fingerprint(&many);
+    assert_eq!(a, b, "the corpus depends on the thread count or the paths");
+    insta::assert_snapshot!("layer2_corpus_fingerprint", a);
+}
