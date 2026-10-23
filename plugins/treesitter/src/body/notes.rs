@@ -25,18 +25,20 @@
 //! One-line `//` comments that stand alone on consecutive lines are also
 //! classified together: when the joined run is code, every line of it is
 //! code, so a commented-out call split over lines (`// var q = db.Orders`,
-//! `// .ToList();`) does not leave fragments that read as prose. Otherwise,
-//! and for a run longer than [`CLASSIFY_MAX_BYTES`], each line keeps its own
+//! `// .ToList();`) does not leave fragments that read as prose. A run
+//! longer than [`CLASSIFY_MAX_BYTES`] is code on every line when any of its
+//! lines ends like code, without a parse. Otherwise each line keeps its own
 //! kind.
 //!
 //! # Literal roles
 //!
 //! - **key** — a string literal that is the subscript of an element access
 //!   (`p["BOOK"]`, `p?["BOOK"]`), or the first argument of a dictionary's
-//!   lookup or update ([`KEY_METHODS`]: `TryGetValue("K", out v)`). `Add` and
-//!   `TryAdd` name a dictionary only with a value beside the key, and
-//!   `Remove` only with the `out` value after it: `list.Add("x")` and
-//!   `list.Remove("x")` give no role;
+//!   lookup or update: [`KEY_METHODS`] on any receiver
+//!   (`TryGetValue("K", out v)`), [`DICTIONARY_METHODS`] only on a receiver
+//!   the file declares with a dictionary type (`map.Add("K", v)`), so
+//!   `list.Add("x")`, `logger.Add("x", 1)` and a call on a receiver of
+//!   unknown type give no role;
 //! - **compared** — a literal the model records as compared with a path
 //!   (`s == "X"`), a literal on either side of `==` or `!=` whatever the
 //!   other side is (`p["K"] == "V"`), and a literal that is a constant
@@ -51,7 +53,7 @@ use super::{
     argument_expression, is_string_literal, named_children, range, text, unparen, FileBodies,
 };
 use crate::ra::plugin::notes::{Comment, CommentKind, LiteralRole, RoleKind};
-use crate::ra::plugin::types::{LiteralContext, Range, ValueRef};
+use crate::ra::plugin::types::{LiteralContext, MemberBody, Range, ValueRef};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tree_sitter::{Node, ParseOptions, ParseState, Parser, Tree};
@@ -113,17 +115,21 @@ impl Budget {
     }
 }
 
-/// The methods whose first argument is the key of a dictionary, with the
-/// fewest arguments a dictionary's call has: `Add("k", v)`, `Remove("k", out
-/// v)`.
-const KEY_METHODS: &[(&str, usize)] = &[
-    ("TryGetValue", 1),
-    ("ContainsKey", 1),
-    ("GetValueOrDefault", 1),
-    ("TryAdd", 2),
-    ("Add", 2),
-    ("Remove", 2),
-];
+/// The methods whose first argument is the key of a dictionary, whatever the
+/// receiver: no list or set has them.
+const KEY_METHODS: &[&str] = &["TryGetValue", "ContainsKey", "GetValueOrDefault"];
+
+/// The methods whose first argument is the key of a dictionary only when the
+/// receiver is declared as one ([`is_dictionary_type`]): a list, a set or a
+/// logger has them too.
+const DICTIONARY_METHODS: &[&str] = &["Add", "TryAdd", "Remove"];
+
+/// Whether a type, as written, is a dictionary: its last name holds
+/// `Dictionary`, or it is `Hashtable` or `SortedList`.
+fn is_dictionary_type(type_name: &str) -> bool {
+    let last = type_name.rsplit('.').next().unwrap_or(type_name);
+    last.contains("Dictionary") || last == "Hashtable" || last == "SortedList"
+}
 
 /// A comment found in the file, before its kind is decided.
 struct Found {
@@ -173,8 +179,11 @@ pub(super) fn comments(root: Node, src: &[u8], grammar: &tree_sitter::Language) 
         let run_is_code = j - i > 1 && {
             let joined: Vec<&str> = found[i..j].iter().map(|f| f.text.as_str()).collect();
             let joined = joined.join("\n");
-            joined.len() <= CLASSIFY_MAX_BYTES
-                && kind_of(&joined, grammar, &mut budget) == CommentKind::Code
+            if joined.len() > CLASSIFY_MAX_BYTES {
+                joined.lines().any(ends_like_code)
+            } else {
+                kind_of(&joined, grammar, &mut budget) == CommentKind::Code
+            }
         };
         for f in &found[i..j] {
             out.push(Comment {
@@ -274,12 +283,32 @@ pub(super) fn kind_of(
 }
 
 /// Whether a line ends the way a statement or a block does, with `;` or `}`,
-/// a comment after it aside (`x = 1; // old`). A sentence ends otherwise, so
+/// a comment after it aside (`x = 1; // old`, `x = 1;/* old */`). A sentence
+/// ends otherwise, so
 /// prose is told apart without a parse, which in the sandbox costs several
 /// times more fuel for text that is not C# than for code.
 fn ends_like_code(line: &str) -> bool {
-    let line = line.split(" //").next().unwrap_or(line).trim_end();
-    line.ends_with(';') || line.ends_with('}')
+    let code = before_comment(line).trim_end();
+    code.ends_with(';') || code.ends_with('}')
+}
+
+/// `line` up to the `//` or `/*` that starts a comment in it, one inside a
+/// string or a character literal aside (`"http://x";`).
+fn before_comment(line: &str) -> &str {
+    let b = line.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < b.len() {
+        match (quote, b[i]) {
+            (Some(_), b'\\') => i += 1,
+            (Some(q), c) if c == q => quote = None,
+            (None, c @ (b'"' | b'\'')) => quote = Some(c),
+            (None, b'/') if matches!(b.get(i + 1), Some(b'/' | b'*')) => return &line[..i],
+            _ => {}
+        }
+        i += 1;
+    }
+    line
 }
 
 /// The parse of `text`, or `None` when it takes more than
@@ -338,13 +367,16 @@ pub(super) fn roles(root: Node, src: &[u8], model: &FileBodies) -> Vec<LiteralRo
             }
         }
         for invocation in &member.invocations {
-            let Some(name) = invocation.callee.segments.last() else {
+            let segments = &invocation.callee.segments;
+            let Some(name) = segments.last() else {
                 continue;
             };
-            let Some(&(_, fewest)) = KEY_METHODS.iter().find(|(k, _)| *k == name.as_str()) else {
-                continue;
-            };
-            if invocation.args.len() < fewest {
+            let keyed = KEY_METHODS.contains(&name.as_str())
+                || (DICTIONARY_METHODS.contains(&name.as_str())
+                    && segments.len() >= 2
+                    && declared_type(&segments[segments.len() - 2], member, model)
+                        .is_some_and(is_dictionary_type));
+            if !keyed {
                 continue;
             }
             if let Some(ValueRef::Literal(id)) = invocation
@@ -432,6 +464,18 @@ pub(super) fn roles(root: Node, src: &[u8], model: &FileBodies) -> Vec<LiteralRo
     roles.sort_by_key(|r| (r.member, r.literal, r.role as u8));
     roles.dedup_by_key(|r| (r.member, r.literal));
     roles
+}
+
+/// The type `name` is declared with: a local, a parameter or a pattern of
+/// `member`, else a field, a property or an event of the file. `None` when
+/// the file does not declare it, so a call on it gives no role.
+fn declared_type<'m>(name: &str, member: &'m MemberBody, model: &'m FileBodies) -> Option<&'m str> {
+    member
+        .typed_names
+        .iter()
+        .chain(&model.typed_members)
+        .find(|t| t.name == name)
+        .map(|t| t.type_name.as_str())
 }
 
 fn key(r: Range) -> (u32, u32, u32, u32) {
@@ -523,6 +567,9 @@ mod tests {
             "foreach (var o in orders) { Ship(o); }",
             "await SaveAsync(order, token);",
             "x = y + 1; // old",
+            "Save();// old",
+            "Save(); /* old */",
+            "var u = \"http://example.com\";",
         ];
         let prose = [
             "Vypnuto záměrně, viz ticket",
@@ -574,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn text_past_the_parse_limit_is_code_and_a_long_run_goes_line_by_line() {
+    fn text_past_the_parse_limit_is_code_and_so_is_a_long_run_that_ends_like_code() {
         let long = "x = 1; ".repeat(super::CLASSIFY_MAX_BYTES / 7 + 1);
         assert_eq!(kind(&long), CommentKind::Code);
         assert_eq!(kind(&"word ".repeat(1000)), CommentKind::Prose);
@@ -584,8 +631,15 @@ mod tests {
         }
         src.push_str("        // .ToList();\n    }\n}\n");
         let notes = read(&src);
-        assert_eq!(notes.comments[0].kind, CommentKind::Prose);
-        assert_eq!(notes.comments.last().unwrap().kind, CommentKind::Code);
+        assert!(notes.comments.iter().all(|c| c.kind == CommentKind::Code));
+        // A long run of prose stays prose line by line.
+        let mut src = String::from("class C {\n    void M() {\n");
+        for _ in 0..super::CLASSIFY_MAX_BYTES / 20 {
+            src.push_str("        // a long note, line after line\n");
+        }
+        src.push_str("    }\n}\n");
+        let notes = read(&src);
+        assert!(notes.comments.iter().all(|c| c.kind == CommentKind::Prose));
     }
 
     #[test]
@@ -618,14 +672,25 @@ mod tests {
     #[test]
     fn every_dictionary_method_keys_its_first_argument_and_a_list_call_keys_nothing() {
         let notes = read(&in_method(
-            "        p.TryGetValue(\"A\", out var a);\n        p.ContainsKey(\"B\");\n        p.GetValueOrDefault(\"C\");\n        p.TryAdd(\"D\", \"d-value\");\n        p.Add(\"E\", \"e-value\");\n        p.Remove(\"F\", out var f);\n        l.Add(\"G\");\n        l.Remove(\"H\");",
+            "        p.TryGetValue(\"A\", out var a);\n        p.ContainsKey(\"B\");\n        p.GetValueOrDefault(\"C\");\n        p.TryAdd(\"D\", \"d-value\");\n        p.Add(\"E\", \"e-value\");\n        p.Remove(\"F\", out var f);\n        p.Remove(\"F1\");\n        l.Add(\"G\");\n        l.Remove(\"H\");",
         ));
-        for k in ["A", "B", "C", "D", "E", "F"] {
+        for k in ["A", "B", "C", "D", "E", "F", "F1"] {
             assert_eq!(role_of(&notes, k), Some(RoleKind::Key), "{k}");
         }
         for none in ["d-value", "e-value", "G", "H"] {
             assert_eq!(role_of(&notes, none), None, "{none}");
         }
+    }
+
+    /// `Add` and `Remove` key a literal only on a receiver declared as a
+    /// dictionary: a field counts, a logger and an unknown receiver do not.
+    #[test]
+    fn an_update_keys_its_literal_only_on_a_declared_dictionary() {
+        let notes = read("class C {\n    private Dictionary<string, int> _map;\n    private Logger _log;\n    void M() {\n        _map.Add(\"FIELD\", 1);\n        this._map.Remove(\"THIS\");\n        _log.Add(\"LOGGED\", 1);\n        Other.Add(\"UNKNOWN\", 1);\n    }\n}\n");
+        assert_eq!(role_of(&notes, "FIELD"), Some(RoleKind::Key));
+        assert_eq!(role_of(&notes, "THIS"), Some(RoleKind::Key));
+        assert_eq!(role_of(&notes, "LOGGED"), None);
+        assert_eq!(role_of(&notes, "UNKNOWN"), None);
     }
 
     #[test]
