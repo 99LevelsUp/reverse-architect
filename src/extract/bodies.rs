@@ -1422,9 +1422,17 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
     for comment in &mut model.notes.comments {
         filter.text(&mut comment.text);
         filter.prose(&mut comment.text);
-        if without_long_tokens(&comment.text).1 {
-            comment.text = withheld("long token");
-        }
+        withhold_long_token(&mut comment.text);
+    }
+}
+
+/// The cut the first layer makes in a comment (`SourceSecrets`): a text that
+/// still holds a key-shaped word is withheld whole, since no reader could
+/// tell what it said once part of it is gone. Every comment text the host
+/// keeps ends with it — a quoted comment and a comment of contract 0.4.
+fn withhold_long_token(text: &mut String) {
+    if without_long_tokens(text).1 {
+        *text = withheld("long token");
     }
 }
 
@@ -1538,13 +1546,8 @@ pub fn quote_comments(
             let Some(comment) = comments.get(first).filter(|c| c.literal <= end) else {
                 continue;
             };
-            // The cut the first layer makes in a comment (`SourceSecrets`):
-            // a key-shaped word withholds the whole quote, which no reader
-            // could tell from a label once part of it is gone.
             let (mut text, _) = redact_secret_block(&comment.text, prefixes);
-            if without_long_tokens(&text).1 {
-                text = withheld("long token");
-            }
+            withhold_long_token(&mut text);
             literal.comment = Some(LiteralComment {
                 text,
                 place: Range {
