@@ -674,8 +674,11 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
     let password = "Wq8Tz3Lm6Rv1Np4K";
     let below = "Hd5Kp9Xs2Bv7Mn3Q";
     let token2 = "ghp_B8nM2kL5pQ9wX3zR7tY1vC4dF6hJ0sA";
+    // A value withheld for what it is assigned to, not for its shape, and
+    // repeated in the comment quoted after a call argument.
+    let assigned = "N4kP9rT2";
     let src = format!(
-        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        public string Token()\n        {{\n            // password: {password}\n            // rotate monthly\n            // password:\n            // {below}\n            /* backup key {token2} */\n            return \"{token}\";\n        }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
+        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        public string Token()\n        {{\n            // password: {password}\n            // rotate monthly\n            // password:\n            // {below}\n            /* backup key {token2} */\n            password = \"{assigned}\";\n            Use(\"ok\") /* {assigned} */;\n            return \"{token}\";\n        }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
     );
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
@@ -704,6 +707,10 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
         record.contains("rotate monthly"),
         "the comments were stored: {record}"
     );
+    // The quoted comment and the 0.4 comment both lose the assigned value.
+    // The first layer's comment anchor still quotes it (a gap of the first
+    // layer, outside this pass), so the walk below leaves it out.
+    assert!(!record.contains(assigned), "{record}");
     fn walk(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();

@@ -81,7 +81,10 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 8 keeps what a 0.4 component says beside
+/// conversion of a model raises it: 9 filters a quoted comment by the recipe
+/// of a 0.4 comment ([`Withheld::comment`]) — the withheld values and their
+/// spellings too, not only the shapes of a secret — 8 keeps what a 0.4
+/// component says beside
 /// the model ([`Notes`]): its comments filtered like a quoted comment and its
 /// literal roles checked against the model, 7 decides a key-shaped markup handler by
 /// its digits rather than by its last segment ([`key_shaped_handler`]), 6
@@ -93,7 +96,7 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 8;
+pub const BODY_REDACTION_VERSION: u32 = 9;
 
 /// The digits a key-shaped markup handler needs before it is taken for a
 /// token ([`key_shaped_handler`]).
@@ -1416,23 +1419,26 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
     // (`// password:` then `// hunter2`) and a key written as `//` lines are
     // read whole.
     filter_comment_runs(&mut model.notes.comments, prefixes);
-    // Then each text like any other, a withheld value it repeats in prose
-    // too, and like a quoted comment ([`quote_comments`]): a key-shaped word
-    // withholds it whole.
     for comment in &mut model.notes.comments {
-        filter.text(&mut comment.text);
-        filter.prose(&mut comment.text);
-        withhold_long_token(&mut comment.text);
+        filter.comment(&mut comment.text);
     }
+    quote_comments(model, path, source, &filter);
 }
 
-/// The cut the first layer makes in a comment (`SourceSecrets`): a text that
-/// still holds a key-shaped word is withheld whole, since no reader could
-/// tell what it said once part of it is gone. Every comment text the host
-/// keeps ends with it — a quoted comment and a comment of contract 0.4.
-fn withhold_long_token(text: &mut String) {
-    if without_long_tokens(text).1 {
-        *text = withheld("long token");
+impl Withheld<'_> {
+    /// The one recipe for every comment text the host keeps, a quoted
+    /// comment ([`quote_comments`]) and a comment of contract 0.4: filtered
+    /// like any other text, a withheld value it repeats in prose cut out
+    /// too, and the cut the first layer makes in a comment
+    /// (`SourceSecrets`) last — a text that still holds a key-shaped word is
+    /// withheld whole, since no reader could tell what it said once part of
+    /// it is gone.
+    fn comment(&self, text: &mut String) {
+        self.text(text);
+        self.prose(text);
+        if without_long_tokens(text).1 {
+            *text = withheld("long token");
+        }
     }
 }
 
@@ -1512,18 +1518,12 @@ fn replace_word(text: &str, word: &str, with: &str) -> String {
 /// ([`comments_after_literals`]), paired with a literal by place the way
 /// [`redact_bodies`] pairs the lexer's literals: the one whose content starts
 /// inside the model literal's place. A literal already withheld gets none,
-/// and every text goes through [`redact_secret_block`] with the run's
-/// prefixes; a text that still holds a key-shaped word
-/// ([`without_long_tokens`]) is withheld whole, as `long token`. A file the
-/// host has no lexer for gets none.
+/// and every text goes through the recipe of every kept comment
+/// ([`Withheld::comment`]). A file the host has no lexer for gets none.
+/// [`redact_bodies`] runs it last.
 ///
 /// What this adds to a stored model is part of [`BODY_REDACTION_VERSION`].
-pub fn quote_comments(
-    model: &mut FileBodies,
-    path: &str,
-    source: &[u8],
-    prefixes: &SecretPrefixes,
-) {
+fn quote_comments(model: &mut FileBodies, path: &str, source: &[u8], filter: &Withheld) {
     let Some(comments) = std::str::from_utf8(source)
         .ok()
         .and_then(|src| comments_after_literals(path, src))
@@ -1546,8 +1546,8 @@ pub fn quote_comments(
             let Some(comment) = comments.get(first).filter(|c| c.literal <= end) else {
                 continue;
             };
-            let (mut text, _) = redact_secret_block(&comment.text, prefixes);
-            withhold_long_token(&mut text);
+            let mut text = comment.text.clone();
+            filter.comment(&mut text);
             literal.comment = Some(LiteralComment {
                 text,
                 place: Range {
@@ -1718,7 +1718,6 @@ fn read_file(
             let mut model = FileBodies::from(model);
             model.notes = notes_of(comments, roles, &model);
             redact_bodies(&mut model, path, source, prefixes);
-            quote_comments(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
                 path: path.to_string(),
                 plugin: plugin.id().to_string(),
