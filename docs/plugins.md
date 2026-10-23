@@ -172,6 +172,8 @@ Under 0.4, `bodies` returns a `file-notes` record from the new `notes` interface
 
 The host redacts the text of a comment like every other text of `bodies`: do not filter it yourself. A 0.3 component's bodies arrive with no comments and no roles. This version of the host accepts both and does not show them on any card yet.
 
+The bundled `csharp-body` component sends `key` and `compared` but never `attribute-arg`: a role points at a literal of a member body, and the arguments of a C# attribute are not among them (they are the `attributes` of a declaration's meta).
+
 ## References by name
 
 A declaration can refer to another by its name alone (`{StaticResource K}`), when only the whole repository can say which declaration is meant. Report it as a `name-ref` in `file-declarations.name-refs`:
