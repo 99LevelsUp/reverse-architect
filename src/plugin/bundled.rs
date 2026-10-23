@@ -190,8 +190,10 @@ mod tests {
     }
 
     /// The bodies of a C# file, read through the sandbox: the model comes
-    /// back, a chain of 2 000 `else if`s and a sum of 5 000 operands fit the
-    /// guest's stack and its fuel, and the first layer's passes are refused.
+    /// back with the file's comments and the roles of its literals, a chain
+    /// of 2 000 `else if`s, a sum of 5 000 operands and 3 000 lines of
+    /// comments fit the guest's stack and its fuel, and the first layer's
+    /// passes are refused.
     #[test]
     fn the_csharp_body_component_reads_bodies_in_the_sandbox() {
         use crate::plugin::host::{BodyNodeKind, PluginError, WireConfig};
@@ -221,6 +223,54 @@ mod tests {
             .tags
             .iter()
             .any(|t| t.name == "key-compare" && t.value.as_deref() == Some("Key.F4")));
+
+        let keyed = "class C {\n    void M(Dictionary<string, int> p, string s) {\n        var b = p[\"BOOK\"];\n        if (s == \"X\") { Run(\"plain\"); }\n    }\n}\n";
+        let read = s.bodies("src/C.cs", keyed.as_bytes()).unwrap();
+        let literals = &read.model.members[0].literals;
+        let role_of = |value: &str| {
+            let id = literals.iter().find(|l| l.value == value).unwrap().id;
+            read.roles
+                .iter()
+                .find(|r| r.member == 0 && r.literal == id)
+                .map(|r| r.role)
+        };
+        use crate::plugin::host::LiteralRoleKind;
+        assert_eq!(role_of("BOOK"), Some(LiteralRoleKind::Key));
+        assert_eq!(role_of("X"), Some(LiteralRoleKind::Compared));
+        assert_eq!(role_of("plain"), None);
+
+        // Files that are all comments — code, prose, an ASCII table, and the
+        // last two with the `;` that makes the component parse them — short
+        // and long, on lines of their own or in one run of adjacent lines:
+        // classifying them leaves half the fuel the file's size buys.
+        for (unit, end) in [
+            ("if (x == null) return; Save(x); ", ""),
+            ("the old path broke paging; nobody ", ""),
+            ("| -- ; == } ~~ ", ""),
+            ("the old path broke paging; nobody ", ";"),
+            ("| -- ; == } ~~ ", ";"),
+        ] {
+            for (width, lines) in [(40usize, 3000usize), (400, 300), (2000, 60), (4000, 30)] {
+                for gap in ["\n", "\n\n"] {
+                    let line = unit.repeat(width / unit.len() + 1) + end;
+                    let mut f = String::from("class C {\n  void M() {\n");
+                    for _ in 0..lines {
+                        f.push_str(&format!("    // {line}{gap}"));
+                    }
+                    f.push_str("  }\n}\n");
+                    let read = s.bodies("src/F.cs", f.as_bytes());
+                    let cost = s.last_cost().unwrap();
+                    let shape = format!("{unit:?}{end} x {width} x {lines} {gap:?}");
+                    assert_eq!(read.map(|r| r.comments.len()).ok(), Some(lines), "{shape}");
+                    assert!(
+                        cost.fuel_used * 2 <= cost.fuel_budget,
+                        "{shape}: {} of {}",
+                        cost.fuel_used,
+                        cost.fuel_budget
+                    );
+                }
+            }
+        }
 
         let mut deep = String::from("class C {\n  int M(int x) {\n    if (x == 0) return 0;\n");
         for i in 1..2000 {

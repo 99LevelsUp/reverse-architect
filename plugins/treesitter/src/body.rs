@@ -96,6 +96,7 @@
 //! that are not text. A file that parses with syntax errors is read as far as
 //! it goes.
 
+use crate::ra::plugin::notes::FileNotes;
 use crate::ra::plugin::types::{
     AccessMode, AccessPath, Argument, Attribute, BaseType, BodyKind, BodyNode, CallKind, CompareOp,
     Condition, Constant, DeclarationKind, DeclarationMeta, Expr, FileBodies, FlowTarget, Handler,
@@ -103,7 +104,6 @@ use crate::ra::plugin::types::{
     Position, Range, StringLiteral, Subscription, SubscriptionMode, Tag, TypeShape, TypedName,
     ValueRef,
 };
-use crate::ra::plugin::notes::FileNotes;
 use crate::walkers::{parse, position, Language};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tree_sitter::Node;
