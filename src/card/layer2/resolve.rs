@@ -22,7 +22,7 @@
 //! does not declare or declares twice.
 //!
 //! Limits: a written type name is matched by its last segment against the
-//! C# types the first layer declares — every one, a type whose bodies the
+//! types of a profiled language the first layer declares — every one, a type whose bodies the
 //! second layer could not read too — without `using`s, so a name two types
 //! share stays unresolved; a qualified name (`System.Timers.Timer`) takes
 //! only a type whose namespace and enclosing types end with its qualifier,
@@ -30,15 +30,13 @@
 //! arguments only, optional parameters not counted.
 
 use super::link::Basis;
+use super::profile;
 use crate::extract::bodies::{
     AccessPath, BodyKind, BodyLayer, DeclarationKind, MemberBody, PairedBy, PathRoot,
 };
 use crate::graph::{Confidence, EdgeKind, FactKind, FactValue, Graph, NodeKey, NodeKind, SiteId};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
-
-/// What the key of a first-layer C# symbol starts with.
-const CSHARP_KEYS: &str = "sym:csharp:";
 
 /// The symbol kinds of a type.
 const TYPE_KINDS: &[&str] = &["class", "struct", "record", "interface", "enum"];
@@ -133,13 +131,15 @@ pub struct Index<'a> {
     pub layer: &'a BodyLayer,
     symbols: BTreeMap<NodeKey, Symbol>,
     members: BTreeMap<NodeKey, Vec<NodeKey>>,
-    /// Every C# type of the first layer by name — a type in a file whose
-    /// bodies were not read too, so that a name it shares stays ambiguous.
+    /// Every type of a profiled language of the first layer by name — a type
+    /// in a file whose bodies were not read too, so that a name it shares
+    /// stays ambiguous.
     types_named: BTreeMap<String, Vec<NodeKey>>,
-    /// The C# types the second layer read a part of, sorted by key.
+    /// The types the second layer read a part of in their profile's
+    /// language, sorted by key.
     read_types: Vec<NodeKey>,
     bases: BTreeMap<NodeKey, Vec<NodeKey>>,
-    /// The members of the C# types by name, each list sorted by key: the
+    /// The members of the read types by name, each list sorted by key: the
     /// candidates an access that stopped at a name is shown with (step 2b,
     /// KTD9) — never what it resolves to.
     members_named: BTreeMap<String, Vec<NodeKey>>,
@@ -219,20 +219,23 @@ impl<'a> Index<'a> {
         let mut types_named: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
         let mut read_types: Vec<NodeKey> = Vec::new();
         for (key, s) in &symbols {
-            if s.is_type() && key.as_str().starts_with(CSHARP_KEYS) {
+            let Some(profile) = profile::of_key(key) else {
+                continue;
+            };
+            if s.is_type() {
                 types_named
                     .entry(s.name.clone())
                     .or_default()
                     .push(key.clone());
-                if is_csharp(layer, key) {
+                if profile.reads(layer, key) {
                     read_types.push(key.clone());
                 }
             }
         }
-        let csharp: BTreeSet<&NodeKey> = read_types.iter().collect();
+        let read: BTreeSet<&NodeKey> = read_types.iter().collect();
         let mut members_named: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
         for (key, s) in &symbols {
-            if !s.is_type() && s.owner.as_ref().is_some_and(|o| csharp.contains(o)) {
+            if !s.is_type() && s.owner.as_ref().is_some_and(|o| read.contains(o)) {
                 members_named
                     .entry(s.name.clone())
                     .or_default()
@@ -304,9 +307,9 @@ impl<'a> Index<'a> {
         self.members.get(ty).map_or(&[], Vec::as_slice)
     }
 
-    /// Every C# type the analysis reads: one whose parts were read by the
-    /// second layer, sorted by key.
-    pub fn csharp_types(&self) -> Vec<&NodeKey> {
+    /// Every type the analysis reads: one of a profiled language whose parts
+    /// the second layer read, sorted by key.
+    pub fn read_types(&self) -> Vec<&NodeKey> {
         self.read_types.iter().collect()
     }
 
@@ -864,21 +867,20 @@ fn names_any(written: &str, params: &[String]) -> bool {
         .any(|word| params.iter().any(|p| p == word))
 }
 
-/// Whether the C# type `key` sits in a namespace and enclosing types whose
+/// Whether the type `key` sits in a container and enclosing types whose
 /// dotted path ends with `qualifier` (`Acme.Views#Editor` by `Views` and by
 /// `Acme.Views`); a generic arity or a duplicate's suffix is not part of a
 /// type's name here.
 fn qualified_by(key: &NodeKey, qualifier: &str) -> bool {
-    let Some((namespace, path)) = key
-        .as_str()
-        .strip_prefix(CSHARP_KEYS)
-        .and_then(|rest| rest.split_once('#'))
-    else {
+    let Some(profile) = profile::of_key(key) else {
+        return false;
+    };
+    let Some((namespace, path)) = profile.split(key) else {
         return false;
     };
     let enclosing = path.rsplit_once('.').map_or("", |(outer, _)| outer);
-    let container: Vec<&str> = namespace
-        .split('.')
+    let container: Vec<&str> = profile
+        .container_segments(namespace)
         .chain(enclosing.split('.'))
         .filter(|segment| !segment.is_empty())
         .map(|segment| segment.split(['<', '`', '~']).next().unwrap_or(segment))
@@ -887,28 +889,20 @@ fn qualified_by(key: &NodeKey, qualifier: &str) -> bool {
     container == qualifier || container.ends_with(&format!(".{qualifier}"))
 }
 
-/// The full name of the C# type `key` — its namespace, enclosing types and
+/// The full name of the type `key` — its container, enclosing types and
 /// name, dotted (`Acme.Views#Outer.Inner` is `Acme.Views.Outer.Inner`) — a
 /// generic arity or a duplicate's suffix left out, as [`qualified_by`] reads
-/// them. `None` for a key of no C# type.
+/// them. `None` for a key of no profiled language.
 pub fn full_name(key: &NodeKey) -> Option<String> {
-    let (namespace, path) = key.as_str().strip_prefix(CSHARP_KEYS)?.split_once('#')?;
-    let parts: Vec<&str> = namespace
-        .split('.')
+    let profile = profile::of_key(key)?;
+    let (namespace, path) = profile.split(key)?;
+    let parts: Vec<&str> = profile
+        .container_segments(namespace)
         .chain(path.split('.'))
         .filter(|segment| !segment.is_empty())
         .map(|segment| segment.split(['<', '`', '~']).next().unwrap_or(segment))
         .collect();
     (!parts.is_empty()).then(|| parts.join("."))
-}
-
-/// Whether a type's parts are C#: a part the second layer read from a `.cs`
-/// file (KTD6: the analyses read only C# bodies).
-pub fn is_csharp(layer: &BodyLayer, ty: &NodeKey) -> bool {
-    layer
-        .type_shapes_of(ty)
-        .iter()
-        .any(|(path, _)| path.ends_with(".cs"))
 }
 
 /// Whether `node` is `ancestor` or below it in `body`'s tree.

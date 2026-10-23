@@ -270,7 +270,7 @@ impl PluginSet {
 
     /// Record the plugins the second layer reads bodies with (plan 2a, U4:
     /// KTD9) — every plugin of the set that serves `bodies` and not the first
-    /// layer, and then `component`, the bundled body component the run adds
+    /// layer, and then `components`, the bundled body components the run adds
     /// for `--detail-level`. Called only for a run with the second layer, so a
     /// run without it records exactly what [`PluginSet::register_languages`]
     /// did and nothing more.
@@ -279,12 +279,12 @@ impl PluginSet {
     /// names the plugin that parses its declarations, and that stays the
     /// first layer's, so no language's contracts change. What they add is
     /// their count under their contract (`noise.plugins_by_contract`).
-    pub fn register_body_languages(&self, languages: &mut Languages, component: Option<&Plugin>) {
+    pub fn register_body_languages(&self, languages: &mut Languages, components: &[&Plugin]) {
         let body_only = self
             .iter()
             .filter(|p| !p.manifest().serves_layer_one() && p.manifest().serves(Pass::Bodies))
             .map(|p| -> &Plugin { p });
-        for plugin in body_only.chain(component) {
+        for plugin in body_only.chain(components.iter().copied()) {
             languages.record_plugin(
                 plugin.id(),
                 plugin.contract().word(),

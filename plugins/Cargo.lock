@@ -164,6 +164,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "probe4"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen 0.51.0",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -35,15 +35,17 @@
 //! The engine canonicalizes NaNs and disables relaxed SIMD, the two ways the
 //! same component could compute different bits on different CPUs.
 //!
-//! ## Three contract versions
+//! ## Four contract versions
 //!
 //! `wit/` holds `ra:plugin@0.1.0` and `wit-v2/` holds `ra:plugin@0.2.0`, both
 //! frozen; `wit-v3/` holds `ra:plugin@0.3.0`, which adds the `bodies` pass,
-//! declared node kinds for symbols and references by name. Each has its own
-//! bindings module below. A component is tried against 0.3, then 0.2, then
-//! 0.1, and runs under the first whose `extractor` it exports — so a plugin
-//! built against an older contract keeps working, and one built against a
-//! newer one is never mistaken for it.
+//! declared node kinds for symbols and references by name; `wit-v4/` holds
+//! `ra:plugin@0.4.0`, which adds the comments of a file and the roles of its
+//! literals beside the model of bodies. Each has its own bindings module
+//! below. A component is tried against 0.4, then 0.3, 0.2 and 0.1, and runs
+//! under the first whose `extractor` it exports — so a plugin built against
+//! an older contract keeps working, and one built against a newer one is
+//! never mistaken for it.
 //!
 //! The rest of the host speaks 0.2. A 0.1 plugin's output is lifted at this
 //! boundary ([`lift`]), where it gains the parts 0.2 adds as absent (no
@@ -52,7 +54,8 @@
 //! a symbol's node kind and block, the references by name, the lookup blocks —
 //! travels beside it in [`FileDeclarations`]. The one 0.3 shape that leaves
 //! this module as it is is the output of `bodies` ([`FileBodies`] and the
-//! records under it), which only the second layer reads.
+//! records under it), which only the second layer reads; 0.4 returns the
+//! same records and its notes beside them ([`Bodies`]).
 
 use super::manifest::{ManifestError, Pass, PluginLanguage, PluginManifest};
 use serde::{Deserialize, Serialize};
@@ -93,6 +96,19 @@ mod v3 {
     });
 }
 
+/// Bindings of `ra:plugin@0.4.0`. Its `types` interface is 0.3's word for
+/// word, so it is bound to 0.3's types: a 0.4 component's records are the
+/// very values a 0.3 one returns, and only `notes` is new.
+mod v4 {
+    wasmtime::component::bindgen!({
+        path: "wit-v4",
+        world: "language-plugin",
+        with: {
+            "ra:plugin/types@0.4.0": super::v3::ra::plugin::types,
+        },
+    });
+}
+
 pub use v2::ra::plugin::types::{
     Cardinality as WireCardinality, LinkRole as WireLinkRole, StructuralRole as WireStructuralRole,
 };
@@ -114,6 +130,21 @@ pub use v3::ra::plugin::types::{
     PathRoot, Position as BodyPosition, Range as BodyRange, StringLiteral, Subscription,
     SubscriptionMode, Tag as BodyTag, TypeShape, TypedName, ValueRef,
 };
+
+/// What `bodies` says beside the model under contract 0.4: the file's
+/// comments and the roles of its literals. Unredacted.
+pub use v4::ra::plugin::notes::{
+    Comment as BodyComment, CommentKind, LiteralRole, RoleKind as LiteralRoleKind,
+};
+
+/// What `bodies` returns for one file, in the host's shape: the model, and
+/// what only 0.4 says beside it — empty for a 0.3 plugin.
+#[derive(Debug, Clone)]
+pub struct Bodies {
+    pub model: FileBodies,
+    pub comments: Vec<BodyComment>,
+    pub roles: Vec<LiteralRole>,
+}
 
 /// What `declarations` returns for one file, in the host's shape.
 ///
@@ -190,11 +221,19 @@ pub enum Contract {
     /// `ra:plugin@0.3.0`: the `bodies` pass, declared node kinds for symbols,
     /// references by name.
     V0_3,
+    /// `ra:plugin@0.4.0`: the comments of a file and the roles of its
+    /// literals beside the model of bodies.
+    V0_4,
 }
 
 impl Contract {
     /// Every version this host loads, the one it tries first first.
-    pub const SUPPORTED: [Contract; 3] = [Contract::V0_3, Contract::V0_2, Contract::V0_1];
+    pub const SUPPORTED: [Contract; 4] = [
+        Contract::V0_4,
+        Contract::V0_3,
+        Contract::V0_2,
+        Contract::V0_1,
+    ];
 
     /// The short word artifacts record (`0.1`, `0.2`): the minor version is
     /// the whole of what a consumer can act on, since only a patch release is
@@ -204,6 +243,7 @@ impl Contract {
             Contract::V0_1 => "0.1",
             Contract::V0_2 => "0.2",
             Contract::V0_3 => "0.3",
+            Contract::V0_4 => "0.4",
         }
     }
 
@@ -213,6 +253,7 @@ impl Contract {
             Contract::V0_1 => "ra:plugin@0.1.0",
             Contract::V0_2 => "ra:plugin@0.2.0",
             Contract::V0_3 => "ra:plugin@0.3.0",
+            Contract::V0_4 => "ra:plugin@0.4.0",
         }
     }
 }
@@ -470,6 +511,14 @@ impl v3::ra::plugin::host::Host for State {
 
 impl v3::ra::plugin::types::Host for State {}
 
+impl v4::ra::plugin::host::Host for State {
+    fn path_exists(&mut self, key: String) -> bool {
+        self.paths.contains(&key)
+    }
+}
+
+impl v4::ra::plugin::notes::Host for State {}
+
 /// The process-wide engine. One per process: compiled code is tied to it, and
 /// its configuration is part of what makes a plugin's output deterministic.
 fn engine() -> &'static Engine {
@@ -490,6 +539,7 @@ enum Pre {
     V1(v1::LanguagePluginPre<State>),
     V2(v2::LanguagePluginPre<State>),
     V3(v3::LanguagePluginPre<State>),
+    V4(v4::LanguagePluginPre<State>),
 }
 
 impl Pre {
@@ -498,6 +548,7 @@ impl Pre {
             Pre::V1(_) => Contract::V0_1,
             Pre::V2(_) => Contract::V0_2,
             Pre::V3(_) => Contract::V0_3,
+            Pre::V4(_) => Contract::V0_4,
         }
     }
 }
@@ -507,6 +558,7 @@ enum Instance {
     V1(v1::LanguagePlugin),
     V2(v2::LanguagePlugin),
     V3(v3::LanguagePlugin),
+    V4(v4::LanguagePlugin),
 }
 
 /// A loaded, checked plugin, ready to hand out sessions.
@@ -542,13 +594,16 @@ impl Plugin {
         v1::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
         v2::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
         v3::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
+        v4::LanguagePlugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |s| s).map_err(link)?;
         // Failing here IS a missing import: every import is checked against
         // the linker, and nothing about exports is.
         let instance_pre = linker.instantiate_pre(&component).map_err(link)?;
         // Failing here is not: the imports were all satisfied, so what is
         // missing is the export the host would call. Newest first — a
         // component exporting two is newer than either alone could say.
-        let pre = if let Ok(pre) = v3::LanguagePluginPre::new(instance_pre.clone()) {
+        let pre = if let Ok(pre) = v4::LanguagePluginPre::new(instance_pre.clone()) {
+            Pre::V4(pre)
+        } else if let Ok(pre) = v3::LanguagePluginPre::new(instance_pre.clone()) {
             Pre::V3(pre)
         } else if let Ok(pre) = v2::LanguagePluginPre::new(instance_pre.clone()) {
             Pre::V2(pre)
@@ -581,6 +636,10 @@ impl Plugin {
                     .ra_plugin_extractor()
                     .call_describe(s)
                     .map(lower::manifest),
+                Instance::V4(i) => i
+                    .ra_plugin_extractor()
+                    .call_describe(s)
+                    .map(lower::manifest),
             })
             .map_err(|e| e.named(what))?
             .check()
@@ -596,6 +655,10 @@ impl Plugin {
                     .map(|v| v.map(lift::vocabulary)),
                 Instance::V2(i) => i.ra_plugin_extractor().call_declare(s),
                 Instance::V3(i) => i
+                    .ra_plugin_extractor()
+                    .call_declare(s)
+                    .map(|v| v.map(lower::vocabulary)),
+                Instance::V4(i) => i
                     .ra_plugin_extractor()
                     .call_declare(s)
                     .map(|v| v.map(lower::vocabulary)),
@@ -736,6 +799,7 @@ impl<'p> Session<'p> {
             Pre::V1(pre) => pre.instantiate(&mut store).map(Instance::V1),
             Pre::V2(pre) => pre.instantiate(&mut store).map(Instance::V2),
             Pre::V3(pre) => pre.instantiate(&mut store).map(Instance::V3),
+            Pre::V4(pre) => pre.instantiate(&mut store).map(Instance::V4),
         }
         .map_err(|e| PluginError::Trap {
             plugin: self.plugin.clone(),
@@ -811,10 +875,10 @@ impl<'p> Session<'p> {
 
     /// Refuse a pass the plugin does not serve, before the instance is
     /// touched — a refusal is not a trap, so the live instance stays.
-    /// `bodies` exists only under 0.3, whatever a manifest says.
+    /// `bodies` exists only from 0.3 on, whatever a manifest says.
     fn serving(&mut self, pass: Pass, file: &str) -> Result<(), PluginError> {
         self.last_cost = None;
-        let exists = pass != Pass::Bodies || matches!(self.pre, Pre::V3(_));
+        let exists = pass != Pass::Bodies || matches!(self.pre, Pre::V3(_) | Pre::V4(_));
         if exists && self.passes.contains(&pass) {
             Ok(())
         } else {
@@ -882,6 +946,14 @@ impl<'p> Session<'p> {
                     .call_declarations(s, path, source, &config)
                     .map(|r| r.map(lower::declarations))
             }
+            Instance::V4(i) => {
+                let config = v3::ra::plugin::types::Config {
+                    secret_prefixes: config.secret_prefixes.clone(),
+                };
+                i.ra_plugin_extractor()
+                    .call_declarations(s, path, source, &config)
+                    .map(|r| r.map(lower::declarations))
+            }
         })?;
         self.accepted(Pass::Declarations, path, returned)
     }
@@ -900,19 +972,43 @@ impl<'p> Session<'p> {
                 .ra_plugin_extractor()
                 .call_usages(s, path, source)
                 .map(|r| r.map(lower::usages)),
+            Instance::V4(i) => i
+                .ra_plugin_extractor()
+                .call_usages(s, path, source)
+                .map(|r| r.map(lower::usages)),
         })?;
         self.accepted(Pass::Usages, path, returned)
     }
 
-    /// The bodies of one file's members (contract 0.3), for the second layer.
-    /// Its own budget, computed as every other pass's; a trap, exhausted fuel
-    /// or memory fails this file and this pass only, and the session recovers
-    /// as it does after any failed call. An `err` from the plugin fails it the
-    /// same way and keeps the instance. The texts come back unredacted.
-    pub fn bodies(&mut self, path: &str, source: &[u8]) -> Result<FileBodies, PluginError> {
+    /// The bodies of one file's members (contract 0.3 and 0.4), for the
+    /// second layer, with what 0.4 says beside them. Its own budget, computed
+    /// as every other pass's; a trap, exhausted fuel or memory fails this file
+    /// and this pass only, and the session recovers as it does after any
+    /// failed call. An `err` from the plugin fails it the same way and keeps
+    /// the instance. The texts come back unredacted.
+    pub fn bodies(&mut self, path: &str, source: &[u8]) -> Result<Bodies, PluginError> {
         self.serving(Pass::Bodies, path)?;
         let returned = self.call(Self::budget(source.len()), path, |i, s| match i {
-            Instance::V3(i) => i.ra_plugin_extractor().call_bodies(s, path, source),
+            Instance::V3(i) => i
+                .ra_plugin_extractor()
+                .call_bodies(s, path, source)
+                .map(|r| {
+                    r.map(|model| Bodies {
+                        model,
+                        comments: Vec::new(),
+                        roles: Vec::new(),
+                    })
+                }),
+            Instance::V4(i) => i
+                .ra_plugin_extractor()
+                .call_bodies(s, path, source)
+                .map(|r| {
+                    r.map(|notes| Bodies {
+                        model: notes.bodies,
+                        comments: notes.comments,
+                        roles: notes.roles,
+                    })
+                }),
             Instance::V1(_) | Instance::V2(_) => {
                 unreachable!("`serving` refuses `bodies` below contract 0.3")
             }
@@ -1629,6 +1725,7 @@ mod tests {
             "{err}"
         );
         let message = err.to_string();
+        assert!(message.contains("ra:plugin@0.4.0"), "{message}");
         assert!(message.contains("ra:plugin@0.3.0"), "{message}");
         assert!(message.contains("ra:plugin@0.2.0"), "{message}");
         assert!(message.contains("ra:plugin@0.1.0"), "{message}");
@@ -1671,12 +1768,12 @@ mod tests {
     fn bodies_of_an_empty_file_are_an_empty_model() {
         let p = probe3();
         let mut s = p.session(Arc::new(HashSet::new())).unwrap();
-        let bodies = s.bodies("empty.probe3", b"").unwrap();
+        let bodies = s.bodies("empty.probe3", b"").unwrap().model;
         assert!(bodies.types.is_empty());
         assert!(bodies.members.is_empty());
         assert!(bodies.typed_members.is_empty());
         assert!(bodies.metas.is_empty());
-        let bodies = s.bodies("a.probe3", b"x").unwrap();
+        let bodies = s.bodies("a.probe3", b"x").unwrap().model;
         assert_eq!(bodies.members.len(), 1);
         assert!(matches!(
             bodies.members[0].nodes[0].kind,
@@ -1693,7 +1790,10 @@ mod tests {
         let mut s = p.session(Arc::new(HashSet::new())).unwrap();
         let err = s.bodies("loop.probe3", b"x").unwrap_err();
         assert!(matches!(err, PluginError::Fuel { .. }), "{err}");
-        assert_eq!(s.bodies("next.probe3", b"x").unwrap().members.len(), 1);
+        assert_eq!(
+            s.bodies("next.probe3", b"x").unwrap().model.members.len(),
+            1
+        );
         let config = WireConfig {
             secret_prefixes: Vec::new(),
         };
@@ -1741,7 +1841,10 @@ mod tests {
         let declared = s.declarations("next.probe3", b"x", &config).unwrap();
         assert_eq!(signature_of(&declared.ops), "prefixes:0");
         assert_eq!(s.usages("next.probe3", b"x").unwrap().usages.len(), 1);
-        assert_eq!(s.bodies("next.probe3", b"x").unwrap().members.len(), 1);
+        assert_eq!(
+            s.bodies("next.probe3", b"x").unwrap().model.members.len(),
+            1
+        );
     }
 
     /// A call's cost is its fuel and its memory, a successful call's as much
@@ -1807,6 +1910,87 @@ mod tests {
             "{err}"
         );
         assert_eq!(s.usages("a.probe", b"").unwrap().usages.len(), 1);
+    }
+
+    // ---- Contract 0.4 ----
+
+    const PROBE4: &[u8] = include_bytes!("../../plugins/prebuilt/probe4.wasm");
+
+    fn probe4() -> Plugin {
+        Plugin::load("probe4", PROBE4).expect("the probe4 component loads")
+    }
+
+    /// A 0.4 body component runs under 0.4, serves `bodies` alone and returns
+    /// the model with its comments, each told prose or code, and the role of
+    /// a literal beside it; the first layer's passes are refused before the
+    /// instance is touched.
+    #[test]
+    fn a_0_4_component_returns_its_comments_and_literal_roles_beside_the_model() {
+        let p = probe4();
+        assert_eq!(p.contract(), Contract::V0_4);
+        assert_eq!(p.manifest().passes, [Pass::Bodies]);
+        assert_eq!(p.manifest().language_for("probe4"), Some("probe4"));
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+
+        let bodies = s.bodies("a.probe4", b"x").unwrap();
+        assert_eq!(bodies.model.members.len(), 1);
+        assert_eq!(bodies.model.members[0].literals[0].value, "KEY");
+        let comments: Vec<(&str, CommentKind, u32)> = bodies
+            .comments
+            .iter()
+            .map(|c| (c.text.as_str(), c.kind, c.place.start.line))
+            .collect();
+        assert_eq!(
+            comments,
+            [
+                ("disabled on purpose, see the ticket", CommentKind::Prose, 1),
+                ("var x = Load(\"a\");", CommentKind::Code, 4),
+            ]
+        );
+        assert_eq!(
+            bodies
+                .roles
+                .iter()
+                .map(|r| (r.member, r.literal, r.role))
+                .collect::<Vec<_>>(),
+            [(0, 0, LiteralRoleKind::Key)]
+        );
+
+        let empty = s.bodies("empty.probe4", b"").unwrap();
+        assert!(empty.model.members.is_empty() && empty.comments.is_empty());
+        let err = s.bodies("refuse.probe4", b"x").unwrap_err();
+        assert!(matches!(&err, PluginError::Refused { .. }), "{err}");
+
+        let config = WireConfig {
+            secret_prefixes: Vec::new(),
+        };
+        let err = s.declarations("a.probe4", b"x", &config).unwrap_err();
+        assert!(matches!(&err, PluginError::PassNotServed { .. }), "{err}");
+    }
+
+    /// 0.4 binds its `types` to 0.3's (`mod v4`), which holds only while the
+    /// two interfaces are the same text.
+    #[test]
+    fn the_types_of_0_4_are_the_types_of_0_3_word_for_word() {
+        fn types(wit: &str) -> &str {
+            let start = wit.find("interface types {").expect("a types interface");
+            let end = wit[start..].find("\n}\n").expect("its end") + start;
+            &wit[start..end]
+        }
+        let v3 = include_str!("../../wit-v3/extractor.wit");
+        let v4 = include_str!("../../wit-v4/extractor.wit");
+        assert_eq!(types(v3), types(v4));
+    }
+
+    /// A 0.3 component's bodies come back with nothing beside them: 0.3 has
+    /// no comments and no roles to say.
+    #[test]
+    fn a_0_3_components_bodies_carry_no_comments_and_no_roles() {
+        let p = probe3();
+        let mut s = p.session(Arc::new(HashSet::new())).unwrap();
+        let bodies = s.bodies("a.probe3", b"x").unwrap();
+        assert_eq!(bodies.model.members.len(), 1);
+        assert!(bodies.comments.is_empty() && bodies.roles.is_empty());
     }
 
     /// What 0.2 cannot say arrives beside the ops: the symbol's node kind and

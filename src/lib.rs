@@ -453,10 +453,11 @@ fn body_components(
         .readers()
         .iter()
         .map(|r| {
-            let plugin = options.plugins.iter().find(|p| p.id() == r.id).or_else(|| {
-                (r.component && plugin::bundled::csharp_body().id() == r.id)
-                    .then(plugin::bundled::csharp_body)
-            });
+            let plugin = options
+                .plugins
+                .iter()
+                .find(|p| p.id() == r.id)
+                .or_else(|| r.component.then(|| plugin::bundled::body_component(&r.id)));
             card::triggers::BodyComponent {
                 languages: r.languages.clone(),
                 emits: plugin
@@ -529,7 +530,7 @@ pub fn build_graph(config: &Config, progress: &dyn progress::Progress) -> Result
     let mut languages = extract::languages::Languages::bundled();
     plugins.register_languages(&mut languages);
     if let Some(pass) = &body_pass {
-        plugins.register_body_languages(&mut languages, pass.component());
+        plugins.register_body_languages(&mut languages, pass.components());
     }
     let extract_options = extract::ExtractOptions {
         ambiguity_ceiling: config.ambiguity_ceiling,

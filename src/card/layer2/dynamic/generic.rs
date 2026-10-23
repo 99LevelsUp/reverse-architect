@@ -59,7 +59,7 @@ impl<'b, 'i, 'a> Builder<'b, 'i, 'a> {
             }
         }
         let mut out = Vec::new();
-        for ty in ix.csharp_types() {
+        for ty in ix.read_types() {
             // The interfaces of the type and of its line of bases, and the
             // interfaces those extend, each once.
             let mut faces: BTreeSet<&NodeKey> = BTreeSet::new();

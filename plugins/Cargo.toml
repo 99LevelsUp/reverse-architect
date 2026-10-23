@@ -6,7 +6,7 @@
 # wasm toolchain; rebuilding a plugin does — see `build.ps1` / `build.sh`.
 [workspace]
 resolver = "2"
-members = ["probe", "probe3", "treesitter"]
+members = ["probe", "probe3", "probe4", "treesitter"]
 
 [profile.release]
 opt-level = "s"

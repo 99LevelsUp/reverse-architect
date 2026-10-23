@@ -8,7 +8,8 @@ The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql)
 
 | Version | File | State |
 |---|---|---|
-| `ra:plugin@0.3.0` | [`wit-v3/extractor.wit`](../wit-v3/extractor.wit) | current: build new plugins against it |
+| `ra:plugin@0.4.0` | [`wit-v4/extractor.wit`](../wit-v4/extractor.wit) | current for a component that reads bodies |
+| `ra:plugin@0.3.0` | [`wit-v3/extractor.wit`](../wit-v3/extractor.wit) | current: build new first-layer plugins against it |
 | `ra:plugin@0.2.0` | [`wit-v2/extractor.wit`](../wit-v2/extractor.wit) | frozen, still loaded |
 | `ra:plugin@0.1.0` | [`wit/extractor.wit`](../wit/extractor.wit) | frozen, still loaded |
 
@@ -16,7 +17,9 @@ The shortest complete example is [`examples/plugin-sql`](../examples/plugin-sql)
 
 0.3 keeps everything 0.2 says and adds a third pass over a file, `bodies`, and what a declaration could not say before (see [What 0.3 adds](#what-03-adds)). It is a new version for the same reason: extending a record is an incompatible type change.
 
-**A 0.1 or 0.2 plugin keeps working unchanged.** The host offers every contract's imports to every component and then looks at what it exports: it tries `ra:plugin/extractor` of 0.3 first, then 0.2, then 0.1, and runs the component under the first it finds. New plugins should target 0.3; 0.2 and 0.1 plugins need no change. A component that exports none of them ends the run with a version mismatch that names the versions the host wanted and what the component exports. A 0.1 plugin's output is lifted to the 0.2 shape at the boundary, with no column and no context, which is all 0.1 could say. Its usages are then resolved as before the rules existed: by name only. `examples/plugin-sql` is a 0.1 plugin and the bundled SQL plugin, so every run exercises this path. `coverage.json` reports, per language, the contract its plugin ran under, and counts the plugins per contract version.
+0.4 keeps every record of 0.3 word for word and adds, beside the model of bodies, the file's ordinary comments and the roles of its literals (see [What 0.4 adds](#what-04-adds)). Only a component that reads bodies needs it.
+
+**A 0.1 or 0.2 plugin keeps working unchanged.** The host offers every contract's imports to every component and then looks at what it exports: it tries `ra:plugin/extractor` of 0.4 first, then 0.3, 0.2 and 0.1, and runs the component under the first it finds. New first-layer plugins should target 0.3 and new body components 0.4; 0.3, 0.2 and 0.1 plugins need no change. A component that exports none of them ends the run with a version mismatch that names the versions the host wanted and what the component exports. A 0.1 plugin's output is lifted to the 0.2 shape at the boundary, with no column and no context, which is all 0.1 could say. Its usages are then resolved as before the rules existed: by name only. `examples/plugin-sql` is a 0.1 plugin and the bundled SQL plugin, so every run exercises this path. `coverage.json` reports, per language, the contract its plugin ran under, and counts the plugins per contract version.
 
 **Only C# supplies context today.** The other bundled languages except SQL, which stays on 0.1, and XAML, which runs under 0.3, run under 0.2 but leave `context` empty, so the rules do not run on their usages.
 
@@ -30,7 +33,7 @@ The world exports five functions and imports one (`bodies` exists from 0.3 on):
 | `declare()` | once, before any file | the plugin's own fact and edge kinds, or none |
 | `declarations(path, source, config)` | once per file, pass 1 | everything the file declares |
 | `usages(path, source)` | once per file, pass 2 | every name the file uses (0.2: with the file's scopes) |
-| `bodies(path, source)` | once per file, pass 3 (0.3) | the bodies of the file's members, as trees |
+| `bodies(path, source)` | once per file, pass 3 (0.3) | the bodies of the file's members, as trees (0.4: with the file's comments and the roles of its literals) |
 | `path-exists(key)` *(host import)* | any time | whether a repository path exists, so an import can be resolved |
 
 The host hands over one file's bytes at a time. A plugin never sees the repository, the graph, the disk or the network.
@@ -159,6 +162,15 @@ The host routes each pair of extension and pass to the first plugin, in preceden
 **Do not filter secrets.** Every text a plugin returns in `bodies` (literal values, condition texts, attribute arguments, tag values) is redacted by the host before it is stored, against the run's secret prefixes. The plugin does not filter and is not given the configuration: one filter, in one place.
 
 **Tags are an open set.** A tag has a `name`, an optional `value` and further `args`. The host reads the tags it knows by name and carries the rest. List the tags you can report in `manifest.emits`.
+
+## What 0.4 adds
+
+Under 0.4, `bodies` returns a `file-notes` record from the new `notes` interface: the `file-bodies` a 0.3 component returns, unchanged, and two lists beside it.
+
+- **`comments`**: every ordinary comment of the file (`//` and `/* */`, never a doc comment), with its `place`, its `text` without the comment markers, and its `kind`: `prose` for words written for a reader, `code` for code that was commented out. The component decides the kind by a fixed rule of its own.
+- **`roles`**: the general role of a literal in its language, by the index of its member body in `file-bodies.members` and the literal's id there: `key` (the key of an indexer or a dictionary, `p["BOOK"]`), `compared` (a constant a value is compared against) or `attribute-arg` (an argument of an attribute). Roles that belong to a domain, such as the name of a directive, are a domain plugin's to name, not the contract's.
+
+The host redacts the text of a comment like every other text of `bodies`: do not filter it yourself. A 0.3 component's bodies arrive with no comments and no roles. This version of the host accepts both and does not show them on any card yet.
 
 ## References by name
 

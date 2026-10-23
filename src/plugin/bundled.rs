@@ -36,36 +36,45 @@ pub const BUNDLED: [(&str, &[u8]); 8] = [
     ("xaml", include_bytes!("../../plugins/prebuilt/xaml.wasm")),
 ];
 
-/// The component that reads the bodies of C# members: contract 0.3, the
-/// `bodies` pass only, built from `plugins/treesitter` with the feature
-/// `csharp-body`. Kept out of [`BUNDLED`] on purpose: the first layer never
-/// loads it, so a run without the second layer (`--detail-level`) is exactly
-/// what it was.
-pub const CSHARP_BODY: (&str, &[u8]) = (
-    "csharp-body",
+/// The components that read the bodies of members, one per language, each
+/// serving the `bodies` pass alone (contract 0.3 and later). C# is built from
+/// `plugins/treesitter` with the feature `csharp-body`. Kept out of
+/// [`BUNDLED`] on purpose: the first layer never loads them, so a run without
+/// the second layer (`--detail-level`) is exactly what it was.
+pub const BODY_COMPONENTS: [(&str, &[u8]); 1] = [(
+    CSHARP_BODY_ID,
     include_bytes!("../../plugins/prebuilt/csharp-body.wasm"),
-);
+)];
 
-/// Load [`CSHARP_BODY`], the way [`load_one`] loads a bundled plugin.
-pub fn load_csharp_body() -> Result<Plugin, PluginError> {
-    let (id, bytes) = CSHARP_BODY;
+/// The id of the component that reads the bodies of C# members.
+pub const CSHARP_BODY_ID: &str = "csharp-body";
+
+/// Load one entry of [`BODY_COMPONENTS`], the way [`load_one`] loads a
+/// bundled plugin.
+pub fn load_body_component((id, bytes): (&str, &[u8])) -> Result<Plugin, PluginError> {
     Plugin::load(&format!("bundled:{id}"), bytes)
 }
 
-/// [`CSHARP_BODY`], loaded once per process on first use — only by a run with
-/// the second layer (`--detail-level`), so a run without it never compiles
-/// the component. A session borrows its plugin for the run, hence the
-/// `'static` borrow, as [`bundled`] hands out. A bundled component that fails
-/// to load is a broken build, so it panics with the reason, as there.
-pub fn csharp_body() -> &'static Plugin {
-    static PLUGIN: OnceLock<Plugin> = OnceLock::new();
-    PLUGIN.get_or_init(|| {
-        let plugin = load_csharp_body()
-            .unwrap_or_else(|e| panic!("bundled plugin `{}` is broken: {e}", CSHARP_BODY.0));
+/// The body component `id` of [`BODY_COMPONENTS`], loaded once per process
+/// on first use — each on its own, so a run compiles none that a declared
+/// plugin replaces, and a run without the second layer (`--detail-level`) none. A
+/// session borrows its plugin for the run, hence the `'static` borrow, as
+/// [`bundled`] hands out. An id outside the table is a caller's bug, and a
+/// bundled component that fails to load is a broken build: both panic.
+pub fn body_component(id: &str) -> &'static Plugin {
+    static PLUGINS: [OnceLock<Plugin>; BODY_COMPONENTS.len()] =
+        [const { OnceLock::new() }; BODY_COMPONENTS.len()];
+    let at = BODY_COMPONENTS
+        .iter()
+        .position(|(c, _)| *c == id)
+        .unwrap_or_else(|| panic!("no body component `{id}`"));
+    PLUGINS[at].get_or_init(|| {
+        let plugin = load_body_component(BODY_COMPONENTS[at])
+            .unwrap_or_else(|e| panic!("bundled plugin `{id}` is broken: {e}"));
         assert_eq!(
             plugin.id(),
-            CSHARP_BODY.0,
-            "the bundled body component describes itself under another id"
+            id,
+            "the bundled body component `{id}` describes itself under another id"
         );
         plugin
     })
@@ -165,8 +174,8 @@ mod tests {
     fn the_csharp_body_component_loads_as_contract_0_3_serving_bodies_only() {
         use crate::plugin::host::Contract;
         use crate::plugin::manifest::Pass;
-        let p = load_csharp_body().unwrap();
-        assert_eq!(p.id(), CSHARP_BODY.0);
+        let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
+        assert_eq!(p.id(), CSHARP_BODY_ID);
         assert_eq!(p.contract(), Contract::V0_3);
         assert_eq!(p.manifest().passes, [Pass::Bodies]);
         for kind in ["member-access", "invocation", "key-compare", "menu-item"] {
@@ -177,7 +186,7 @@ mod tests {
             );
         }
         assert_eq!(p.manifest().language_for("cs"), Some("csharp"));
-        assert!(BUNDLED.iter().all(|(id, _)| *id != CSHARP_BODY.0));
+        assert!(BUNDLED.iter().all(|(id, _)| *id != CSHARP_BODY_ID));
     }
 
     /// The bodies of a C# file, read through the sandbox: the model comes
@@ -188,11 +197,11 @@ mod tests {
         use crate::plugin::host::{BodyNodeKind, PluginError, WireConfig};
         use std::collections::HashSet;
         use std::sync::Arc;
-        let p = load_csharp_body().unwrap();
+        let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
         let mut s = p.session(Arc::new(HashSet::new())).unwrap();
 
         let src = "class EditorView {\n    void OnKeyDown(KeyEventArgs e) {\n        if (e.Key == Key.F4) Check();\n    }\n}\n";
-        let file = s.bodies("src/EditorView.cs", src.as_bytes()).unwrap();
+        let file = s.bodies("src/EditorView.cs", src.as_bytes()).unwrap().model;
         assert_eq!(file.members.len(), 1);
         let m = &file.members[0];
         assert_eq!((m.name_position.line, m.name_position.column), (2, 10));
@@ -215,7 +224,7 @@ mod tests {
             deep.push_str(" + a");
         }
         deep.push_str(";\n}\n");
-        let file = s.bodies("src/Deep.cs", deep.as_bytes()).unwrap();
+        let file = s.bodies("src/Deep.cs", deep.as_bytes()).unwrap().model;
         let arms = file.members[0]
             .nodes
             .iter()

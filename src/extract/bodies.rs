@@ -11,7 +11,7 @@
 //!
 //! 1. **Routes** each file to the first plugin, in the run's precedence
 //!    order, that claims its extension and serves `bodies`, then to the
-//!    bundled body component ([`crate::plugin::bundled::CSHARP_BODY`]) — the
+//!    bundled body components ([`crate::plugin::bundled::BODY_COMPONENTS`]) — the
 //!    component only a run with the second layer loads (KTD7), kept out of
 //!    the run's plugin set so it is in no cache fingerprint ([`BodyPass`]).
 //! 2. **Reads** the file through the plugin's sandbox, one session per worker
@@ -1353,31 +1353,34 @@ pub fn quote_comments(
 // ---- The pass ----
 
 /// What a run with the second layer reads bodies with (KTD7): the run's own
-/// plugins, then the bundled body component.
+/// plugins, then the bundled body components.
 ///
-/// The component is held here and not in the run's [`PluginSet`], which the
+/// The components are held here and not in the run's [`PluginSet`], which the
 /// cache fingerprint names plugin by plugin: switching the layer on and off
 /// must leave the first layer's records valid, and only a run with the layer
-/// loads the component at all. A declared plugin with the component's id
+/// loads the components at all. A declared plugin with a component's id
 /// replaces it, as a declared plugin replaces a bundled one.
 #[derive(Clone)]
 pub struct BodyPass {
     level: u8,
     plugins: PluginSet,
-    component: Option<&'static Plugin>,
+    components: Vec<&'static Plugin>,
 }
 
 impl BodyPass {
-    /// The pass of a run at `level` over `plugins`, loading the bundled body
-    /// component unless one of `plugins` has its id.
+    /// The pass of a run at `level` over `plugins`, with every bundled body
+    /// component none of `plugins` has the id of.
     pub fn new(level: u8, plugins: &PluginSet) -> BodyPass {
-        let id = crate::plugin::bundled::CSHARP_BODY.0;
-        let component =
-            (!plugins.iter().any(|p| p.id() == id)).then(crate::plugin::bundled::csharp_body);
+        let components = crate::plugin::bundled::BODY_COMPONENTS
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| !plugins.iter().any(|p| p.id() == *id))
+            .map(crate::plugin::bundled::body_component)
+            .collect();
         BodyPass {
             level,
             plugins: plugins.clone(),
-            component,
+            components,
         }
     }
 
@@ -1386,20 +1389,22 @@ impl BodyPass {
         self.level
     }
 
-    /// The bundled body component the run adds, when no plugin of the run
-    /// replaced it — for the manifest and the language registry.
-    pub fn component(&self) -> Option<&'static Plugin> {
-        self.component
+    /// The bundled body components the run adds, those no plugin of the run
+    /// replaced — for the manifest and the language registry.
+    pub fn components(&self) -> &[&'static Plugin] {
+        &self.components
     }
 
     /// The plugin that reads the bodies of `path`: the first of the run's
-    /// plugins that claims its extension and serves `bodies`, else the
-    /// component when it does.
+    /// plugins that claims its extension and serves `bodies`, else the first
+    /// component that does.
     fn plugin_for(&self, path: &str) -> Option<&'static Plugin> {
         let ext = path.rsplit_once('.').map(|(_, e)| e)?;
         self.plugins.for_pass(ext, Pass::Bodies).or_else(|| {
-            self.component
-                .filter(|c| c.manifest().serves_on(ext, Pass::Bodies))
+            self.components
+                .iter()
+                .copied()
+                .find(|c| c.manifest().serves_on(ext, Pass::Bodies))
         })
     }
 
@@ -1408,7 +1413,7 @@ impl BodyPass {
         self.plugins
             .iter()
             .filter(|p| p.manifest().serves(Pass::Bodies))
-            .chain(self.component)
+            .chain(self.components.iter().copied())
             .collect()
     }
 }
@@ -1496,7 +1501,8 @@ fn read_file(
     };
     match session.bodies(path, source) {
         Ok(file) => {
-            let mut model = FileBodies::from(file);
+            let crate::plugin::host::Bodies { model, .. } = file;
+            let mut model = FileBodies::from(model);
             redact_bodies(&mut model, path, source, prefixes);
             quote_comments(&mut model, path, source, prefixes);
             BodiesOutput::Read(BodiesWire {
@@ -1618,7 +1624,7 @@ fn run_with(
                     .iter()
                     .map(|l| l.name.clone())
                     .collect(),
-                component: pass.component.is_some_and(|c| c.id() == p.id()),
+                component: pass.components.iter().any(|c| c.id() == p.id()),
             })
             .collect(),
         graph,

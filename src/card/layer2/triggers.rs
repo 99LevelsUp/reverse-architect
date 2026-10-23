@@ -588,7 +588,7 @@ impl<'a, 'i, 'l> Corpus<'a, 'i, 'l> {
             }
         }
         let mut gestures: BTreeMap<NodeKey, Vec<Trigger>> = BTreeMap::new();
-        for ty in ix.csharp_types() {
+        for ty in ix.read_types() {
             for m in ix.members_of(ty) {
                 if ix.symbol(m).is_none_or(|s| s.is_type()) {
                     continue;
