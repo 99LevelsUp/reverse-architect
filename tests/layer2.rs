@@ -357,7 +357,8 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
     );
     let contracts = |c: &serde_json::Value| c["noise"]["plugins_by_contract"].clone();
     let mut more = contracts(&plain_coverage);
-    more["0.3"] = serde_json::json!(more["0.3"].as_u64().unwrap_or(0) + 1);
+    // The body component runs under contract 0.4.
+    more["0.4"] = serde_json::json!(more["0.4"].as_u64().unwrap_or(0) + 1);
     assert_eq!(contracts(&coverage), more);
     // The type cards are measured as they were written: their sizes, and
     // how many carry no keyword, are the second layer's; every other level
@@ -668,8 +669,13 @@ fn bodies_pair_by_name_position_on_a_shared_line_and_under_one_key() {
 fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
     let token = "ghp_Q7rT2mX9vB4nL6kP1sD8fH3jW5zC0aE";
     let own = "acme_Zx81Lq0Wv3Nd5Rt7Yp2Kd";
+    // Comments the body component now returns: a value beside its label, a
+    // value on the line below its label, and a token inside a block comment.
+    let password = "Wq8Tz3Lm6Rv1Np4K";
+    let below = "Hd5Kp9Xs2Bv7Mn3Q";
+    let token2 = "ghp_B8nM2kL5pQ9wX3zR7tY1vC4dF6hJ0sA";
     let src = format!(
-        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        public string Token() {{ return \"{token}\"; }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
+        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        public string Token()\n        {{\n            // password: {password}\n            // rotate monthly\n            // password:\n            // {below}\n            /* backup key {token2} */\n            return \"{token}\";\n        }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
     );
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");
@@ -694,6 +700,10 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
         record.contains("[redacted: "),
         "the literals were stored, redacted: {record}"
     );
+    assert!(
+        record.contains("rotate monthly"),
+        "the comments were stored: {record}"
+    );
     fn walk(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -709,7 +719,7 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
     assert!(files.len() > 5, "{files:?}");
     for path in files {
         let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
-        for secret in [token, own] {
+        for secret in [token, own, password, below, token2] {
             assert!(!text.contains(secret), "{} holds {secret}", path.display());
         }
     }

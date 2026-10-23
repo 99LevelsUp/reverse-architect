@@ -144,7 +144,7 @@ The host routes each pair of extension and pass to the first plugin, in preceden
 
 ## Pass 3: bodies
 
-`bodies(path, source)` returns, for one file, the syntax tree of the bodies of its members, with every node anchored to its lines. It feeds the second, optional layer of a run, enabled by `--detail-level`, which sits beside the graph. Without it the host does not call the pass, and the run is what it was under 0.2. Nothing in this pass becomes a fact of the graph. Only a 0.3 component that lists `bodies` in `passes` is asked for it, and it is not given `config`. With `--detail-level`, the host pairs the model with the first layer's declarations, analyzes it and shows it on the cards of C# types.
+`bodies(path, source)` returns, for one file, the syntax tree of the bodies of its members, with every node anchored to its lines. It feeds the second, optional layer of a run, enabled by `--detail-level`, which sits beside the graph. Without it the host does not call the pass, and the run is what it was under 0.2. Nothing in this pass becomes a fact of the graph. Only a component of 0.3 or later that lists `bodies` in `passes` is asked for it, and it is not given `config`. With `--detail-level`, the host pairs the model with the first layer's declarations, analyzes it and shows it on the cards of C# types.
 
 **Pairing with declarations.** A body is paired with a declaration of the first layer by the position of the declared name. `member-body.name-position` must be exactly the position `declarations` puts in `place.name` for that member. A body with no declaration of its own (an accessor, a local function) carries the position of the member it belongs to or is declared in. A lambda is not a body of its own: it is part of the body it is written in.
 
@@ -171,6 +171,8 @@ Under 0.4, `bodies` returns a `file-notes` record from the new `notes` interface
 - **`roles`**: the general role of a literal in its language, by the index of its member body in `file-bodies.members` and the literal's id there: `key` (the key of an indexer or a dictionary, `p["BOOK"]`), `compared` (a constant a value is compared against) or `attribute-arg` (an argument of an attribute). Roles that belong to a domain, such as the name of a directive, are a domain plugin's to name, not the contract's.
 
 The host redacts the text of a comment like every other text of `bodies`: do not filter it yourself. A 0.3 component's bodies arrive with no comments and no roles. This version of the host accepts both and does not show them on any card yet.
+
+The bundled `csharp-body` component sends `key` and `compared` but never `attribute-arg`: a role points at a literal of a member body, and the arguments of a C# attribute are not among them (they are the `attributes` of a declaration's meta).
 
 ## References by name
 

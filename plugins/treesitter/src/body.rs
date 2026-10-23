@@ -1,5 +1,6 @@
-//! The bodies of C# members: the `bodies` pass of contract 0.3, served by the
-//! `csharp-body` component (`--features csharp-body`).
+//! The bodies of C# members: the `bodies` pass of contract 0.4, served by the
+//! `csharp-body` component (`--features csharp-body`), with the file's
+//! comments and the roles of its literals beside the model ([`notes`]).
 //!
 //! One parse per file, the same [`crate::walkers::parse`] the first layer
 //! uses, and every position in the same units ([`crate::walkers::position`]:
@@ -95,6 +96,7 @@
 //! that are not text. A file that parses with syntax errors is read as far as
 //! it goes.
 
+use crate::ra::plugin::notes::FileNotes;
 use crate::ra::plugin::types::{
     AccessMode, AccessPath, Argument, Attribute, BaseType, BodyKind, BodyNode, CallKind, CompareOp,
     Condition, Constant, DeclarationKind, DeclarationMeta, Expr, FileBodies, FlowTarget, Handler,
@@ -106,6 +108,7 @@ use crate::walkers::{parse, position, Language};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tree_sitter::Node;
 
+mod notes;
 #[cfg(test)]
 mod tests;
 
@@ -203,12 +206,23 @@ const LOG_CALLS: &[&str] = &[
 ];
 
 /// The bodies of one `.cs` file, or why it cannot be read.
+#[cfg(test)]
 pub(crate) fn bodies(path: &str, source: &[u8]) -> Result<FileBodies, String> {
-    let mut out = FileBodies {
-        types: Vec::new(),
-        members: Vec::new(),
-        typed_members: Vec::new(),
-        metas: Vec::new(),
+    file_notes(path, source).map(|n| n.bodies)
+}
+
+/// The bodies of one `.cs` file with its comments and the roles of its
+/// literals (contract 0.4), or why it cannot be read.
+pub(crate) fn file_notes(path: &str, source: &[u8]) -> Result<FileNotes, String> {
+    let mut out = FileNotes {
+        bodies: FileBodies {
+            types: Vec::new(),
+            members: Vec::new(),
+            typed_members: Vec::new(),
+            metas: Vec::new(),
+        },
+        comments: Vec::new(),
+        roles: Vec::new(),
     };
     if is_generated(path, source) {
         return Ok(out);
@@ -219,10 +233,13 @@ pub(crate) fn bodies(path: &str, source: &[u8]) -> Result<FileBodies, String> {
     let Some(grammar) = Language::CSharp.grammar() else {
         return Err("the C# grammar could not be loaded".into());
     };
-    let Some(tree) = parse(source, grammar) else {
+    let Some(tree) = parse(source, grammar.clone()) else {
         return Err("the C# parser gave up on the file".into());
     };
-    read_file(tree.root_node(), source, &mut out);
+    let root = tree.root_node();
+    read_file(root, source, &mut out.bodies);
+    out.comments = notes::comments(root, source, &grammar);
+    out.roles = notes::roles(root, source, &out.bodies);
     Ok(out)
 }
 
