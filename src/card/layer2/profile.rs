@@ -58,7 +58,12 @@ const PROFILES: &[&Profile] = &[&CSHARP];
 
 /// The profile of the language `key` is a symbol of, if it has one.
 pub fn of_key(key: &NodeKey) -> Option<&'static Profile> {
-    PROFILES
+    of_key_in(PROFILES, key)
+}
+
+/// The profile among `profiles` of the language `key` is a symbol of.
+fn of_key_in(profiles: &[&'static Profile], key: &NodeKey) -> Option<&'static Profile> {
+    profiles
         .iter()
         .copied()
         .find(|p| key.as_str().starts_with(p.keys))
@@ -118,5 +123,44 @@ mod tests {
             ["Acme", "Views"]
         );
         assert_eq!(CSHARP.split(&NodeKey::new("sym:rust:crate#T")), None);
+    }
+
+    /// A second, narrower language beside C#: each key finds its own
+    /// profile, the narrower one analyzes only its own kinds and names only
+    /// its own entry points, and C# answers as it does alone.
+    #[test]
+    fn a_second_profile_reads_only_its_own_types_and_leaves_csharp_as_it_was() {
+        const NARROW: Profile = Profile {
+            keys: "sym:narrow:",
+            extension: ".nw",
+            analyzed: &["struct"],
+            separator: "::",
+            entries: &[EntryKind::PublicMethod],
+        };
+        let both: &[&Profile] = &[&CSHARP, &NARROW];
+        let narrow = NodeKey::new("sym:narrow:crate::io#Reader");
+        let csharp = NodeKey::new("sym:csharp:Acme.Views#Editor");
+        assert_eq!(of_key_in(both, &narrow), Some(&NARROW));
+        assert_eq!(of_key_in(both, &csharp), Some(&CSHARP));
+        assert_eq!(of_key_in(both, &csharp), of_key(&csharp));
+
+        assert_eq!(NARROW.split(&narrow), Some(("crate::io", "Reader")));
+        assert_eq!(
+            NARROW.container_segments("crate::io").collect::<Vec<_>>(),
+            ["crate", "io"]
+        );
+        assert_eq!(NARROW.split(&csharp), None);
+        assert!(NARROW.analyzes("struct") && !NARROW.analyzes("class"));
+        assert!(NARROW.seeds(EntryKind::PublicMethod));
+        for kind in [
+            EntryKind::Command,
+            EntryKind::Key,
+            EntryKind::MenuItem,
+            EntryKind::Handler,
+        ] {
+            assert!(!NARROW.seeds(kind), "{kind:?}");
+            assert!(CSHARP.seeds(kind), "{kind:?}");
+        }
+        assert!(CSHARP.analyzes("class") && CSHARP.analyzes("record"));
     }
 }

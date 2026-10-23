@@ -2671,4 +2671,47 @@ mod tests {
             assert_eq!(crate::render::mermaid::escape_label(&marker), marker);
         }
     }
+
+    /// A declared plugin with the id of a bundled body component replaces
+    /// it: the pass keeps no bundled component of that id, and the files
+    /// of its extension go to the declared plugin, as a declared plugin
+    /// replaces a bundled one in the first layer.
+    #[test]
+    fn a_declared_plugin_replaces_the_bundled_body_component_of_its_id() {
+        use crate::plugin::bundled::{body_component, CSHARP_BODY_ID};
+        use crate::plugin::{PluginSet, PluginSpec};
+        let spec = PluginSpec {
+            path: Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/prebuilt/csharp-body.wasm"),
+            sha256: None,
+        };
+        let set = PluginSet::with_declared(&[spec]).unwrap();
+        let pass = BodyPass::new(1, &set);
+        assert!(
+            pass.components().is_empty(),
+            "the bundled component stays out"
+        );
+        let reader = pass
+            .plugin_for("src/EditorView.cs")
+            .expect("a reader for .cs");
+        assert_eq!(reader.id(), CSHARP_BODY_ID);
+        assert!(
+            !std::ptr::eq(reader, body_component(CSHARP_BODY_ID)),
+            "the declared plugin reads, not the bundled one"
+        );
+        assert_eq!(
+            pass.readers()
+                .iter()
+                .filter(|p| p.id() == CSHARP_BODY_ID)
+                .count(),
+            1,
+            "one reader of C# bodies"
+        );
+
+        let bundled = BodyPass::new(1, &PluginSet::bundled());
+        assert_eq!(bundled.components().len(), 1);
+        assert!(std::ptr::eq(
+            bundled.plugin_for("src/EditorView.cs").unwrap(),
+            body_component(CSHARP_BODY_ID)
+        ));
+    }
 }
