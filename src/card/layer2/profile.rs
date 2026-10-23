@@ -12,7 +12,9 @@
 //!
 //! The first-layer key of a symbol is `sym:<language>:<container>#<path>`
 //! (`walkers.rs`), so the shape is shared; only the separator of the
-//! container is the language's (`Acme.Views`, `crate::extract`).
+//! container is the language's (`Acme.Views`, `crate::extract`). The type
+//! path after `#` is dotted in every language (`Outer.Inner`, `Cfg.rate`),
+//! and a full name the analyses build from a key is dotted too.
 //!
 //! Limit: the index of types by name is one over every profiled language,
 //! so a name two languages declare a type of stays ambiguous rather than
