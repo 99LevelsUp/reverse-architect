@@ -53,7 +53,7 @@ use super::{
     argument_expression, is_string_literal, named_children, range, text, unparen, FileBodies,
 };
 use crate::ra::plugin::notes::{Comment, CommentKind, LiteralRole, RoleKind};
-use crate::ra::plugin::types::{LiteralContext, MemberBody, Range, ValueRef};
+use crate::ra::plugin::types::{AccessPath, LiteralContext, MemberBody, PathRoot, Range, ValueRef};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tree_sitter::{Node, ParseOptions, ParseState, Parser, Tree};
@@ -288,27 +288,61 @@ pub(super) fn kind_of(
 /// prose is told apart without a parse, which in the sandbox costs several
 /// times more fuel for text that is not C# than for code.
 fn ends_like_code(line: &str) -> bool {
-    let code = before_comment(line).trim_end();
+    let code = without_comments(line);
+    let code = code.trim_end();
     code.ends_with(';') || code.ends_with('}')
 }
 
-/// `line` up to the `//` or `/*` that starts a comment in it, one inside a
-/// string or a character literal aside (`"http://x";`).
-fn before_comment(line: &str) -> &str {
+/// `line` without its comments — a `//` and all after it, every closed
+/// `/* */` and an unclosed `/*` with all after it — one inside a string or a
+/// character literal aside (`"http://x"`, and `@"C:\"`, where a backslash
+/// escapes nothing).
+fn without_comments(line: &str) -> String {
     let b = line.as_bytes();
-    let mut quote: Option<u8> = None;
+    let mut out = Vec::with_capacity(b.len());
+    // The quote a string or character literal is open with, and whether it
+    // is verbatim (`@"…"`: no escapes, `""` is a quote).
+    let mut open: Option<(u8, bool)> = None;
     let mut i = 0;
     while i < b.len() {
-        match (quote, b[i]) {
-            (Some(_), b'\\') => i += 1,
-            (Some(q), c) if c == q => quote = None,
-            (None, c @ (b'"' | b'\'')) => quote = Some(c),
-            (None, b'/') if matches!(b.get(i + 1), Some(b'/' | b'*')) => return &line[..i],
-            _ => {}
+        let c = b[i];
+        match open {
+            Some((q, verbatim)) => {
+                out.push(c);
+                if c == b'\\' && !verbatim {
+                    if let Some(&next) = b.get(i + 1) {
+                        out.push(next);
+                        i += 1;
+                    }
+                } else if c == q {
+                    if verbatim && b.get(i + 1) == Some(&q) {
+                        out.push(q);
+                        i += 1;
+                    } else {
+                        open = None;
+                    }
+                }
+            }
+            None if c == b'/' && b.get(i + 1) == Some(&b'/') => break,
+            None if c == b'/' && b.get(i + 1) == Some(&b'*') => match line[i + 2..].find("*/") {
+                Some(end) => {
+                    i += 2 + end + 2;
+                    continue;
+                }
+                None => break,
+            },
+            None => {
+                if c == b'"' || c == b'\'' {
+                    let verbatim = c == b'"' && (b[..i].ends_with(b"@") || b[..i].ends_with(b"@$"));
+                    open = Some((c, verbatim));
+                }
+                out.push(c);
+            }
         }
         i += 1;
     }
-    line
+    // Only ASCII delimiters were left out, so the bytes are still UTF-8.
+    String::from_utf8(out).unwrap_or_default()
 }
 
 /// The parse of `text`, or `None` when it takes more than
@@ -373,9 +407,7 @@ pub(super) fn roles(root: Node, src: &[u8], model: &FileBodies) -> Vec<LiteralRo
             };
             let keyed = KEY_METHODS.contains(&name.as_str())
                 || (DICTIONARY_METHODS.contains(&name.as_str())
-                    && segments.len() >= 2
-                    && declared_type(&segments[segments.len() - 2], member, model)
-                        .is_some_and(is_dictionary_type));
+                    && declared_dictionary(&invocation.callee, member, model));
             if !keyed {
                 continue;
             }
@@ -466,16 +498,23 @@ pub(super) fn roles(root: Node, src: &[u8], model: &FileBodies) -> Vec<LiteralRo
     roles
 }
 
-/// The type `name` is declared with: a local, a parameter or a pattern of
-/// `member`, else a field, a property or an event of the file. `None` when
-/// the file does not declare it, so a call on it gives no role.
-fn declared_type<'m>(name: &str, member: &'m MemberBody, model: &'m FileBodies) -> Option<&'m str> {
-    member
-        .typed_names
-        .iter()
-        .chain(&model.typed_members)
-        .find(|t| t.name == name)
-        .map(|t| t.type_name.as_str())
+/// Whether the receiver of a call `callee` (`map.Add`, `this.map.Add`) is
+/// declared with a dictionary type: a local, a parameter or a pattern of
+/// `member` when the path starts at one, a field, a property or an event of
+/// the file otherwise. Every declaration of that name there must be a
+/// dictionary, so a name declared twice with other types, a longer path and
+/// a name the file does not declare give no role.
+fn declared_dictionary(callee: &AccessPath, member: &MemberBody, model: &FileBodies) -> bool {
+    let [receiver, _] = callee.segments.as_slice() else {
+        return false;
+    };
+    let declared = match callee.root {
+        PathRoot::Local => &member.typed_names,
+        PathRoot::This | PathRoot::Name => &model.typed_members,
+        PathRoot::Base | PathRoot::Expression => return false,
+    };
+    let mut of_name = declared.iter().filter(|t| t.name == *receiver).peekable();
+    of_name.peek().is_some() && of_name.all(|t| is_dictionary_type(&t.type_name))
 }
 
 fn key(r: Range) -> (u32, u32, u32, u32) {
@@ -569,7 +608,9 @@ mod tests {
             "x = y + 1; // old",
             "Save();// old",
             "Save(); /* old */",
+            "Save(/* old */);",
             "var u = \"http://example.com\";",
+            "var p = @\"C:\\\"; // old",
         ];
         let prose = [
             "Vypnuto záměrně, viz ticket",
@@ -691,6 +732,10 @@ mod tests {
         assert_eq!(role_of(&notes, "THIS"), Some(RoleKind::Key));
         assert_eq!(role_of(&notes, "LOGGED"), None);
         assert_eq!(role_of(&notes, "UNKNOWN"), None);
+        // `this.map` is the list field, `map` the dictionary parameter.
+        let notes = read("class C {\n    private List<string> map;\n    void M(Dictionary<string, int> map) {\n        this.map.Add(\"FIELD\");\n        map.Add(\"PARAM\", 1);\n    }\n}\n");
+        assert_eq!(role_of(&notes, "FIELD"), None);
+        assert_eq!(role_of(&notes, "PARAM"), Some(RoleKind::Key));
     }
 
     #[test]
