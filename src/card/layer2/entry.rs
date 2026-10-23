@@ -35,6 +35,7 @@
 
 use super::binding::field_call_arity;
 use super::link::Links;
+use super::profile::{self, Profile};
 use super::resolve::{within, ByArity, Chain, Index, Scope, Unresolved};
 use crate::extract::bodies::{
     AccessMode, AccessPath, Argument, BodyKind, CallKind, Condition, FlowTarget, Handler,
@@ -879,6 +880,8 @@ struct SeedCollector<'i, 'l> {
     links: &'i Links<'i, 'l>,
     ix: &'i Index<'l>,
     ty: &'i NodeKey,
+    /// The language of `ty`: which detectors run (plan vrstva 3, KTD1).
+    profile: &'static Profile,
     /// Regions of the entry points inside a body, by (path, body index): what
     /// the member they are written in does not reach itself.
     excluded: BTreeMap<(String, usize), BTreeSet<u32>>,
@@ -892,11 +895,16 @@ struct SeedCollector<'i, 'l> {
 }
 
 impl<'i, 'l> SeedCollector<'i, 'l> {
-    fn new(links: &'i Links<'i, 'l>, ty: &'i NodeKey) -> SeedCollector<'i, 'l> {
+    fn new(
+        links: &'i Links<'i, 'l>,
+        ty: &'i NodeKey,
+        profile: &'static Profile,
+    ) -> SeedCollector<'i, 'l> {
         SeedCollector {
             links,
             ix: links.index(),
             ty,
+            profile,
             excluded: BTreeMap::new(),
             found: Vec::new(),
             dispatchers: BTreeSet::new(),
@@ -906,14 +914,25 @@ impl<'i, 'l> SeedCollector<'i, 'l> {
         }
     }
 
-    /// Every detector over one body of `m`, in the order its seeds are
-    /// found in — the order a repeated key is numbered by.
+    /// Every detector the language's profile names over one body of `m`, in
+    /// the order its seeds are found in — the order a repeated key is
+    /// numbered by.
     fn body(&mut self, m: &NodeKey, at: At<'_>) {
         self.roots(at);
-        self.key_branches(m, at);
-        let labels = self.menu_items(m, at);
-        self.subscriptions(m, at, &labels);
-        self.command_properties(m, at);
+        if self.profile.seeds(EntryKind::Key) {
+            self.key_branches(m, at);
+        }
+        let labels = if self.profile.seeds(EntryKind::MenuItem) {
+            self.menu_items(m, at)
+        } else {
+            BTreeMap::new()
+        };
+        if self.profile.seeds(EntryKind::Handler) {
+            self.subscriptions(m, at, &labels);
+        }
+        if self.profile.seeds(EntryKind::Command) {
+            self.command_properties(m, at);
+        }
     }
 
     /// The regions excluded from the body `at`.
@@ -1294,7 +1313,8 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
         .iter()
         .filter(|k| ix.symbol(k).is_some_and(|s| !s.is_type()))
         .collect();
-    let mut collector = SeedCollector::new(links, ty);
+    let profile = profile::of_key(ty).expect("the analyses read only types of a profile");
+    let mut collector = SeedCollector::new(links, ty, profile);
     for &m in &members {
         for at in bodies(ix, m) {
             collector.body(m, at);
@@ -1354,7 +1374,7 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
             EntryKind::Command
         } else if handlers.contains_key(m) {
             EntryKind::Handler
-        } else if symbol.is_method() && symbol.public {
+        } else if symbol.is_method() && symbol.public && profile.seeds(EntryKind::PublicMethod) {
             EntryKind::PublicMethod
         } else {
             continue;

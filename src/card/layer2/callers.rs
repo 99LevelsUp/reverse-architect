@@ -348,7 +348,7 @@ impl Callers {
             }
         }
 
-        for ty in ix.csharp_types() {
+        for ty in ix.read_types() {
             for m in ix.members_of(ty) {
                 if ix.symbol(m).is_none_or(|s| s.is_type()) {
                     continue;

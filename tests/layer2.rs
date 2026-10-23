@@ -1536,7 +1536,7 @@ fn a_type_in_a_file_whose_bodies_failed_keeps_a_shared_name_ambiguous() {
         Ok(NodeKey::new("sym:csharp:Acme.A#Ticker"))
     );
     // The type that was not read is not one the analyses read.
-    assert!(!ix.csharp_types().contains(&&failed_ticker));
+    assert!(!ix.read_types().contains(&&failed_ticker));
 }
 
 /// A name is declared beyond one level only when a type further up
@@ -3908,4 +3908,34 @@ fn a_layered_run_writes_the_pinned_bytes_on_one_thread_and_on_many() {
     let b = fingerprint(&many);
     assert_eq!(a, b, "the corpus depends on the thread count or the paths");
     insta::assert_snapshot!("layer2_corpus_fingerprint", a);
+}
+
+/// A type of a language with no profile gets no analysis: Rust beside C# in
+/// one run is read by the first layer only, and coverage names no plugin
+/// that reads its bodies (plan vrstva 3, KTD1).
+#[test]
+fn a_type_of_a_language_without_a_profile_gets_no_second_layer() {
+    let (generated, analysis) = analyzed(&[
+        ("src/EditorView.cs", VIEW),
+        (
+            "src/lib.rs",
+            "pub struct Ticker { n: i32 }\nimpl Ticker {\n    pub fn tick(&mut self) { self.n += 1; }\n}\n",
+        ),
+    ]);
+    let keys: Vec<&str> = analysis.types.iter().map(|t| t.key.as_str()).collect();
+    assert_eq!(keys, ["sym:csharp:Acme.Views#EditorView"]);
+    assert!(generated
+        .graph
+        .node(&NodeKey::new("sym:rust:crate#Ticker"))
+        .is_some());
+    let bodies = generated
+        .coverage
+        .bodies
+        .as_ref()
+        .expect("the second layer");
+    assert!(
+        bodies.plugins.iter().all(|p| !p.contains("rust")),
+        "no plugin reads Rust bodies: {:?}",
+        bodies.plugins
+    );
 }

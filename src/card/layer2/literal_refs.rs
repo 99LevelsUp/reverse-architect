@@ -98,10 +98,10 @@ impl Written<'_> {
     }
 }
 
-/// Read every literal argument and every `nameof` of the run's C# bodies.
+/// Read every literal argument and every `nameof` of the run's bodies the analyses read.
 pub(super) fn collect(b: &mut Builder<'_, '_, '_>) {
     let ix = b.index();
-    let csharp: BTreeSet<&NodeKey> = ix.csharp_types().into_iter().collect();
+    let read: BTreeSet<&NodeKey> = ix.read_types().into_iter().collect();
     // The templates and styles of markup by the full name of the type they
     // are for.
     let mut templates: BTreeMap<String, Vec<NodeKey>> = BTreeMap::new();
@@ -140,7 +140,7 @@ pub(super) fn collect(b: &mut Builder<'_, '_, '_>) {
                     None => continue,
                 },
             };
-            if !csharp.contains(&ty) {
+            if !read.contains(&ty) {
                 continue;
             }
             let mut line = vec![ty.clone()];

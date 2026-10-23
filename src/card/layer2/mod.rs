@@ -1,7 +1,8 @@
-//! The second layer's analyses over the model of C# bodies (plan 2a).
+//! The second layer's analyses over the model of bodies (plan 2a), of every
+//! language with a [`profile`] (plan vrstva 3, KTD1) — C# today.
 //!
-//! U5 builds the first: the **core functionalities** of every C# type the
-//! second layer read in full ([`SecondLayer::Present`]) — each with its key,
+//! U5 builds the first: the **core functionalities** of every profiled type
+//! the second layer read in full ([`SecondLayer::Present`]) — each with its key,
 //! its name and its entry points, the targets of commands and of members
 //! inherited from a generic base included. Nothing here renders; the type's
 //! card draws it (`card::layer2_render`, U6).
@@ -64,6 +65,7 @@ pub mod entry;
 pub mod flow;
 pub mod link;
 pub mod literal_refs;
+pub mod profile;
 pub mod resolve;
 pub mod triggers;
 
@@ -109,9 +111,6 @@ use crate::coverage::MarkupState;
 use crate::extract::bodies::{BodyLayer, SecondLayer};
 use crate::graph::{Graph, NodeKey};
 use serde::Serialize;
-
-/// The symbol kinds the analysis reads functionalities of.
-const ANALYZED_KINDS: &[&str] = &["class", "struct", "record"];
 
 /// The analysis of one type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -166,7 +165,8 @@ impl TypeAnalysis {
 /// The analysis of a run's second layer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Analysis {
-    /// Every C# class, struct and record with its second layer, by key.
+    /// Every type of a kind its profile analyzes (a C# class, struct and
+    /// record) with its second layer, by key.
     pub types: Vec<TypeAnalysis>,
     /// Step 2b: the registry of triggers — every trigger and functionality
     /// it leads to, by kind, key, place and functionality (R11, U5); what
@@ -217,7 +217,7 @@ impl Analysis {
     }
 }
 
-/// Analyze every C# type of `graph` whose second layer `layer` holds in full,
+/// Analyze every profiled type of `graph` whose second layer `layer` holds in full,
 /// at the default ambiguity ceiling and without the markers of step 2c.
 pub fn analyze(graph: &Graph, layer: &BodyLayer) -> Analysis {
     analyze_with(graph, layer, DEFAULT_AMBIGUITY_CEILING, &NoMarks)
@@ -281,11 +281,12 @@ fn analyze_in(
     // wherever it was written first.
     let copied = copied_comments(graph);
     let mut types: Vec<TypeAnalysis> = ix
-        .csharp_types()
+        .read_types()
         .into_iter()
         .filter(|ty| {
+            let analyzed = profile::of_key(ty).map_or(&[][..], |p| p.analyzed);
             ix.symbol(ty)
-                .is_some_and(|s| ANALYZED_KINDS.contains(&s.kind.as_str()))
+                .is_some_and(|s| analyzed.contains(&s.kind.as_str()))
                 && layer.layer_of(ty) == SecondLayer::Present
         })
         .map(|ty| {
