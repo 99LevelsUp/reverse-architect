@@ -28,6 +28,7 @@ function Build($package, $feature, $artifact) {
 
 Build "probe" $null "probe"
 Build "probe3" $null "probe3"
+Build "probe4" $null "probe4"
 # One component per language family, named after its plugin id.
 foreach ($lang in "rust", "ecmascript", "python", "csharp", "go", "java") {
   Build "treesitter" $lang $lang

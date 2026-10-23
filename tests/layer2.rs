@@ -3939,3 +3939,41 @@ fn a_type_of_a_language_without_a_profile_gets_no_second_layer() {
         bodies.plugins
     );
 }
+
+/// Two body components of two languages in one run (contract 0.3 and 0.4,
+/// plan vrstva 3, KTD2): each file's bodies go to the component that claims
+/// its extension, the bundled C# one included, and coverage lists all three.
+#[test]
+fn every_body_component_reads_the_files_of_its_own_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    common::init_repo_with_files(
+        &repo,
+        "Alice",
+        &[
+            ("widget.probe3", "x"),
+            ("a.probe4", "x"),
+            ("src/EditorView.cs", VIEW),
+        ],
+    );
+    let layered = generate(&Config {
+        plugins: vec![prebuilt("probe3.wasm"), prebuilt("probe4.wasm")],
+        ..config(&repo, &dir.path().join("out"), Some(1))
+    })
+    .unwrap();
+    let layer = layered.bodies.as_ref().unwrap();
+    let readers: BTreeMap<&str, &str> = layer
+        .files()
+        .map(|(path, file)| (path, file.plugin.as_str()))
+        .collect();
+    assert_eq!(
+        readers,
+        BTreeMap::from([
+            ("a.probe4", "probe4"),
+            ("src/EditorView.cs", "csharp-body"),
+            ("widget.probe3", "probe3"),
+        ])
+    );
+    let coverage = layered.coverage.bodies.as_ref().unwrap();
+    assert_eq!(coverage.plugins, ["probe3", "probe4", "csharp-body"]);
+}

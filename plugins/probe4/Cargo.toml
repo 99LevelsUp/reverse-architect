@@ -1,0 +1,12 @@
+[package]
+name = "probe4"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Test component for contract 0.4: the comments and literal roles beside the bodies."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.51.0"

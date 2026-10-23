@@ -69,7 +69,7 @@ jobs:
       - name: test every language family
         working-directory: plugins
         run: |
-          for lang in rust ecmascript python csharp go java; do
+          for lang in rust ecmascript python csharp go java csharp-body; do
             cargo test -p treesitter --features "$lang"
           done
       # Built outside the plugin workspace, from the published WIT alone.
