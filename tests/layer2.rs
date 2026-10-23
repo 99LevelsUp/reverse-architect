@@ -117,7 +117,7 @@ fn a_plain_run_writes_the_pinned_bytes_on_one_thread_and_on_many() {
 // ---- The second layer (plan 2a, U4) ----
 
 use reverse_architect::config::Config;
-use reverse_architect::extract::bodies::{BodyKind, PairedBy, SecondLayer};
+use reverse_architect::extract::bodies::{BodyKind, CommentKind, PairedBy, RoleKind, SecondLayer};
 use reverse_architect::graph::{FactKind, FactValue, NodeKey};
 use reverse_architect::plugin::PluginSpec;
 use reverse_architect::{generate, Generated};
@@ -3953,6 +3953,7 @@ fn every_body_component_reads_the_files_of_its_own_extension() {
         &[
             ("widget.probe3", "x"),
             ("a.probe4", "x"),
+            ("roles.probe4", "x"),
             ("src/EditorView.cs", VIEW),
         ],
     );
@@ -3970,10 +3971,32 @@ fn every_body_component_reads_the_files_of_its_own_extension() {
         readers,
         BTreeMap::from([
             ("a.probe4", "probe4"),
+            ("roles.probe4", "probe4"),
             ("src/EditorView.cs", "csharp-body"),
             ("widget.probe3", "probe3"),
         ])
     );
     let coverage = layered.coverage.bodies.as_ref().unwrap();
     assert_eq!(coverage.plugins, ["probe3", "probe4", "csharp-body"]);
+    // `roles.probe4` names a role past its model, which is dropped and counted.
+    assert_eq!(coverage.dropped_literal_roles, 1);
+
+    // What the 0.4 component said beside its model is kept with it; the
+    // 0.3 and C# files carry nothing beside theirs.
+    let notes = |path: &str| {
+        layer
+            .files()
+            .find(|(p, _)| *p == path)
+            .map(|(_, f)| f.model.notes.clone())
+            .unwrap()
+    };
+    let probe4 = notes("a.probe4");
+    let kinds: Vec<CommentKind> = probe4.comments.iter().map(|c| c.kind).collect();
+    assert_eq!(kinds, [CommentKind::Prose, CommentKind::Code]);
+    assert_eq!(probe4.roles.len(), 1);
+    assert_eq!(probe4.roles[0].role, RoleKind::Key);
+    assert_eq!(notes("roles.probe4").roles.len(), 1);
+    assert_eq!(notes("roles.probe4").dropped_roles, 1);
+    assert!(notes("widget.probe3").is_empty());
+    assert!(notes("src/EditorView.cs").is_empty());
 }

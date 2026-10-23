@@ -126,6 +126,14 @@ impl Guest for Probe4 {
             literal: 0,
             role: RoleKind::Key,
         }];
+        // A role past the model: the host keeps none of it and counts it.
+        if path == "roles.probe4" {
+            notes.roles.push(LiteralRole {
+                member: 9,
+                literal: 0,
+                role: RoleKind::Compared,
+            });
+        }
         Ok(notes)
     }
 }
