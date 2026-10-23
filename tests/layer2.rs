@@ -357,7 +357,8 @@ fn the_second_layer_leaves_every_first_layer_output_as_it_was() {
     );
     let contracts = |c: &serde_json::Value| c["noise"]["plugins_by_contract"].clone();
     let mut more = contracts(&plain_coverage);
-    more["0.3"] = serde_json::json!(more["0.3"].as_u64().unwrap_or(0) + 1);
+    // The body component runs under contract 0.4.
+    more["0.4"] = serde_json::json!(more["0.4"].as_u64().unwrap_or(0) + 1);
     assert_eq!(contracts(&coverage), more);
     // The type cards are measured as they were written: their sizes, and
     // how many carry no keyword, are the second layer's; every other level

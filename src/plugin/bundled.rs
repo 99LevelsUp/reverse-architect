@@ -168,15 +168,15 @@ mod tests {
     }
 
     /// The body component loads through the same path as every plugin, runs
-    /// under contract 0.3 and serves `bodies` alone — and is not one of the
+    /// under contract 0.4 and serves `bodies` alone — and is not one of the
     /// plugins a run loads by default.
     #[test]
-    fn the_csharp_body_component_loads_as_contract_0_3_serving_bodies_only() {
+    fn the_csharp_body_component_loads_as_contract_0_4_serving_bodies_only() {
         use crate::plugin::host::Contract;
         use crate::plugin::manifest::Pass;
         let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
         assert_eq!(p.id(), CSHARP_BODY_ID);
-        assert_eq!(p.contract(), Contract::V0_3);
+        assert_eq!(p.contract(), Contract::V0_4);
         assert_eq!(p.manifest().passes, [Pass::Bodies]);
         for kind in ["member-access", "invocation", "key-compare", "menu-item"] {
             assert!(
@@ -200,8 +200,15 @@ mod tests {
         let p = load_body_component(BODY_COMPONENTS[0]).unwrap();
         let mut s = p.session(Arc::new(HashSet::new())).unwrap();
 
-        let src = "class EditorView {\n    void OnKeyDown(KeyEventArgs e) {\n        if (e.Key == Key.F4) Check();\n    }\n}\n";
-        let file = s.bodies("src/EditorView.cs", src.as_bytes()).unwrap().model;
+        let src = "class EditorView {\n    void OnKeyDown(KeyEventArgs e) {\n        // var old = Check();\n        if (e.Key == Key.F4) Check();\n    }\n}\n";
+        let read = s.bodies("src/EditorView.cs", src.as_bytes()).unwrap();
+        assert_eq!(read.comments.len(), 1);
+        assert_eq!(read.comments[0].text, "var old = Check();");
+        assert_eq!(
+            read.comments[0].kind,
+            crate::plugin::host::CommentKind::Code
+        );
+        let file = read.model;
         assert_eq!(file.members.len(), 1);
         let m = &file.members[0];
         assert_eq!((m.name_position.line, m.name_position.column), (2, 10));

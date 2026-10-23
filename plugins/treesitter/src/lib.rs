@@ -123,15 +123,15 @@ const FALLBACK_ID: &str = "treesitter";
 #[cfg(feature = "csharp-body")]
 const FALLBACK_ID: &str = "csharp-body";
 
-// ---- `csharp-body`: contract 0.3, the `bodies` pass only ----
+// ---- `csharp-body`: contract 0.4, the `bodies` pass only ----
 //
-// The same crate built against `wit-v3` instead of `wit-v2`. It serves one
+// The same crate built against `wit-v4` instead of `wit-v2`. It serves one
 // pass, `bodies`, for `.cs` files ([`body`]); the first layer of those files
 // stays with the `csharp` component, which this feature does not change.
 
 #[cfg(feature = "csharp-body")]
 wit_bindgen::generate!({
-    path: "../../wit-v3",
+    path: "../../wit-v4",
     world: "language-plugin",
     additional_derives: [PartialEq],
 });
@@ -186,8 +186,8 @@ impl Guest for Plugin {
         })
     }
 
-    fn bodies(path: String, source: Vec<u8>) -> Result<ra::plugin::types::FileBodies, String> {
-        body::bodies(&path, &source)
+    fn bodies(path: String, source: Vec<u8>) -> Result<ra::plugin::notes::FileNotes, String> {
+        body::file_notes(&path, &source)
     }
 }
 
