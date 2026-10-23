@@ -1178,6 +1178,20 @@ impl<'p> Withheld<'p> {
         }
     }
 
+    /// Every withheld value written in `text` as a word of its own, quoted or
+    /// not, longest first — prose that repeats a secret the model withheld
+    /// (`// the password is hunter2`). For the comments of contract 0.4.
+    fn prose(&self, text: &mut String) {
+        let mut values: Vec<(&String, &&'static str)> =
+            self.values.iter().filter(|(v, _)| !v.is_empty()).collect();
+        values.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0)));
+        for (value, pattern) in values {
+            if text.contains(value.as_str()) {
+                *text = replace_word(text, value, &withheld(pattern));
+            }
+        }
+    }
+
     /// Redact one text in place: every withheld spelling in it, the text
     /// whole when it is a withheld value or its whole shape is a secret's
     /// ([`secret_pattern`]), and otherwise every line of it a secret's shape
@@ -1397,20 +1411,87 @@ pub fn redact_bodies(model: &mut FileBodies, path: &str, source: &[u8], prefixes
         }
         filter.tags(&mut meta.tags);
     }
-    // A comment's text is cut like a quoted comment ([`quote_comments`]): a
-    // key-shaped word withholds it whole.
-    // A text the block filter leaves alone stays as written, its line breaks
-    // too.
+    // Adjacent one-line comments are filtered as one block first, as the first
+    // layer reads its comment anchors: a value on the line below its label
+    // (`// password:` then `// hunter2`) and a key written as `//` lines are
+    // read whole.
+    filter_comment_runs(&mut model.notes.comments, prefixes);
+    // Then each text like any other, a withheld value it repeats in prose
+    // too, and like a quoted comment ([`quote_comments`]): a key-shaped word
+    // withholds it whole.
     for comment in &mut model.notes.comments {
-        let (blocked, changed) = redact_secret_block(&comment.text, prefixes);
-        if changed {
-            comment.text = blocked;
-        }
         filter.text(&mut comment.text);
+        filter.prose(&mut comment.text);
         if without_long_tokens(&comment.text).1 {
             comment.text = withheld("long token");
         }
     }
+}
+
+/// Filter every run of adjacent one-line comments — each starting on the
+/// line after the one before it ends — as one text ([`redact_secret_block`]),
+/// so its rule for a value on the line below its label sees both lines. The
+/// filter keeps one line per line, so a comment it changed gets its own line
+/// back and the others stay as they were.
+fn filter_comment_runs(comments: &mut [Comment], prefixes: &SecretPrefixes) {
+    let one_line = |c: &Comment| {
+        c.place.start.line == c.place.end.line
+            && !c.text.is_empty()
+            && !c.text.contains(['\n', '\r'])
+    };
+    let mut order: Vec<usize> = (0..comments.len()).collect();
+    order.sort_by_key(|&i| (comments[i].place, i));
+    let mut i = 0;
+    while i < order.len() {
+        let mut j = i + 1;
+        if one_line(&comments[order[i]]) {
+            while j < order.len()
+                && one_line(&comments[order[j]])
+                && comments[order[j]].place.start.line == comments[order[j - 1]].place.end.line + 1
+            {
+                j += 1;
+            }
+        }
+        if j - i > 1 {
+            let block = order[i..j]
+                .iter()
+                .map(|&k| comments[k].text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (filtered, changed) = redact_secret_block(&block, prefixes);
+            if changed {
+                for (&k, line) in order[i..j].iter().zip(filtered.split('\n')) {
+                    if line != comments[k].text {
+                        comments[k].text = line.to_string();
+                    }
+                }
+            }
+        }
+        i = j;
+    }
+}
+
+/// `text` with every whole-word occurrence of `word` replaced by `with`: one
+/// not glued to a letter, a digit or `_` on either side.
+fn replace_word(text: &str, word: &str, with: &str) -> String {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in text.match_indices(word) {
+        if at < last {
+            continue;
+        }
+        let glued = text[..at].chars().next_back().is_some_and(is_word)
+            || text[at + word.len()..].chars().next().is_some_and(is_word);
+        if glued {
+            continue;
+        }
+        out.push_str(&text[last..at]);
+        out.push_str(with);
+        last = at + word.len();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// The comment written right after each call argument of a model, attached
@@ -2895,5 +2976,111 @@ mod tests {
         assert_eq!(notes.comments[0].kind, CommentKind::Code);
         assert_eq!(notes.comments[0].place, Range::from([4, 5, 4, 22]));
         assert!(Notes::default().is_empty() && !notes.is_empty());
+    }
+
+    /// One comment of contract 0.4 on `line`.
+    fn comment_on(line: u32, text: &str) -> Comment {
+        Comment {
+            place: Range::from([line, 1, line, 40]),
+            text: text.into(),
+            kind: CommentKind::Prose,
+        }
+    }
+
+    /// A value on the line below its label is two comments of 0.4; the pair
+    /// is filtered as one block, so the value goes and the label's marker
+    /// stays where it was. A comment on a line further away is its own.
+    #[test]
+    fn a_secret_on_the_comment_below_its_label_is_withheld() {
+        let mut model = FileBodies {
+            notes: Notes {
+                comments: vec![
+                    comment_on(2, "hunter2"),
+                    comment_on(1, "password:"),
+                    comment_on(4, "hunter3 is fine here"),
+                ],
+                ..Notes::default()
+            },
+            ..FileBodies::default()
+        };
+        redact_bodies(&mut model, "src/View.cs", b"", &prefixes());
+        let texts: Vec<&str> = model
+            .notes
+            .comments
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            texts[0].starts_with(ra_redact::REDACTION_MARKER),
+            "{texts:?}"
+        );
+        assert!(texts.iter().all(|t| !t.contains("hunter2")), "{texts:?}");
+        assert_eq!(texts[2], "hunter3 is fine here");
+    }
+
+    /// A literal withheld by the name it is written to is withheld in a
+    /// comment's prose too, quoted or not, as a word of its own; a longer
+    /// word that only contains it stays.
+    #[test]
+    fn a_withheld_literal_repeated_in_a_comment_is_withheld_there() {
+        let mut model = FileBodies {
+            members: vec![MemberBody {
+                name_position: Position { line: 1, column: 1 },
+                kind: BodyKind::Method,
+                root: 0,
+                nodes: Vec::new(),
+                accesses: Vec::new(),
+                invocations: Vec::new(),
+                lambdas: Vec::new(),
+                subscriptions: Vec::new(),
+                literals: vec![StringLiteral {
+                    id: 0,
+                    value: "N4kP9rT2".into(),
+                    context: LiteralContext::Assigned(AccessPath {
+                        root: PathRoot::Name,
+                        segments: vec!["password".into()],
+                    }),
+                    place: range(),
+                    node: None,
+                    comment: None,
+                }],
+                name_ofs: Vec::new(),
+                typed_names: Vec::new(),
+                tags: Vec::new(),
+            }],
+            notes: Notes {
+                comments: vec![comment_on(3, "use N4kP9rT2 for the test db, not N4kP9rT2x")],
+                ..Notes::default()
+            },
+            ..FileBodies::default()
+        };
+        redact_bodies(&mut model, "src/View.cs", b"", &prefixes());
+        let text = &model.notes.comments[0].text;
+        assert!(text.starts_with("use [redacted: "), "{text}");
+        assert!(!text.contains("N4kP9rT2 "), "{text}");
+        assert!(text.ends_with("not N4kP9rT2x"), "{text}");
+        assert!(model.members[0].literals[0]
+            .value
+            .starts_with(ra_redact::REDACTION_MARKER));
+    }
+
+    /// A role whose index finds a literal of another id is dropped too: ids
+    /// equal their index in the contract, so the model is not what the role
+    /// was written for.
+    #[test]
+    fn a_literal_role_whose_literal_has_another_id_is_dropped() {
+        let mut model = model_with("x");
+        model.members[0].literals[0].id = 5;
+        let notes = notes_of(
+            Vec::new(),
+            vec![w::LiteralRole {
+                member: 0,
+                literal: 0,
+                role: w::LiteralRoleKind::Compared,
+            }],
+            &model,
+        );
+        assert!(notes.roles.is_empty());
+        assert_eq!(notes.dropped_roles, 1);
     }
 }
