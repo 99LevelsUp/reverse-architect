@@ -553,6 +553,26 @@ impl Pre {
     }
 }
 
+/// `$call` on the `extractor` export of a 0.3 or a 0.4 instance, bound to
+/// `$e`. 0.4's types are 0.3's (`mod v4`), so every pass but `bodies` is the
+/// same call on either and is written once; the bindings are two types, so
+/// the call is expanded once per contract.
+macro_rules! on_v3_or_v4 {
+    ($instance:expr, |$e:ident| $call:expr) => {
+        match $instance {
+            Instance::V3(i) => {
+                let $e = i.ra_plugin_extractor();
+                $call
+            }
+            Instance::V4(i) => {
+                let $e = i.ra_plugin_extractor();
+                $call
+            }
+            Instance::V1(_) | Instance::V2(_) => unreachable!("a 0.3 or 0.4 instance"),
+        }
+    };
+}
+
 /// A live instance, under the same contract as the [`Pre`] it came from.
 enum Instance {
     V1(v1::LanguagePlugin),
@@ -632,14 +652,9 @@ impl Plugin {
                     .call_describe(s)
                     .map(|m| manifest_of(lift::manifest(m))),
                 Instance::V2(i) => i.ra_plugin_extractor().call_describe(s).map(manifest_of),
-                Instance::V3(i) => i
-                    .ra_plugin_extractor()
-                    .call_describe(s)
-                    .map(lower::manifest),
-                Instance::V4(i) => i
-                    .ra_plugin_extractor()
-                    .call_describe(s)
-                    .map(lower::manifest),
+                i @ (Instance::V3(_) | Instance::V4(_)) => {
+                    on_v3_or_v4!(i, |e| e.call_describe(s).map(lower::manifest))
+                }
             })
             .map_err(|e| e.named(what))?
             .check()
@@ -654,14 +669,9 @@ impl Plugin {
                     .call_declare(s)
                     .map(|v| v.map(lift::vocabulary)),
                 Instance::V2(i) => i.ra_plugin_extractor().call_declare(s),
-                Instance::V3(i) => i
-                    .ra_plugin_extractor()
-                    .call_declare(s)
-                    .map(|v| v.map(lower::vocabulary)),
-                Instance::V4(i) => i
-                    .ra_plugin_extractor()
-                    .call_declare(s)
-                    .map(|v| v.map(lower::vocabulary)),
+                i @ (Instance::V3(_) | Instance::V4(_)) => {
+                    on_v3_or_v4!(i, |e| e.call_declare(s).map(|v| v.map(lower::vocabulary)))
+                }
             })
             .map_err(|e| e.named(what))?;
         drop(probe);
@@ -938,21 +948,13 @@ impl<'p> Session<'p> {
                         ..FileDeclarations::default()
                     })
                 }),
-            Instance::V3(i) => {
+            i @ (Instance::V3(_) | Instance::V4(_)) => {
                 let config = v3::ra::plugin::types::Config {
                     secret_prefixes: config.secret_prefixes.clone(),
                 };
-                i.ra_plugin_extractor()
+                on_v3_or_v4!(i, |e| e
                     .call_declarations(s, path, source, &config)
-                    .map(|r| r.map(lower::declarations))
-            }
-            Instance::V4(i) => {
-                let config = v3::ra::plugin::types::Config {
-                    secret_prefixes: config.secret_prefixes.clone(),
-                };
-                i.ra_plugin_extractor()
-                    .call_declarations(s, path, source, &config)
-                    .map(|r| r.map(lower::declarations))
+                    .map(|r| r.map(lower::declarations)))
             }
         })?;
         self.accepted(Pass::Declarations, path, returned)
@@ -968,14 +970,11 @@ impl<'p> Session<'p> {
                 .call_usages(s, path, source)
                 .map(|u| Ok(lift::usages(u))),
             Instance::V2(i) => i.ra_plugin_extractor().call_usages(s, path, source).map(Ok),
-            Instance::V3(i) => i
-                .ra_plugin_extractor()
-                .call_usages(s, path, source)
-                .map(|r| r.map(lower::usages)),
-            Instance::V4(i) => i
-                .ra_plugin_extractor()
-                .call_usages(s, path, source)
-                .map(|r| r.map(lower::usages)),
+            i @ (Instance::V3(_) | Instance::V4(_)) => {
+                on_v3_or_v4!(i, |e| e
+                    .call_usages(s, path, source)
+                    .map(|r| r.map(lower::usages)))
+            }
         })?;
         self.accepted(Pass::Usages, path, returned)
     }
