@@ -257,7 +257,12 @@ pub(crate) use treesitter::NamesHandoff;
 /// (`smtpPassword: string = "…"`) is assigned to the name, so its literal is
 /// withheld in the anchors and in the signature alike. A v13 record of such a
 /// file holds the value.
-pub(crate) const CACHE_VERSION: u32 = 14;
+///
+/// v15: a value a literal withholds for the name it is assigned to is cut out
+/// of every comment and message anchor of the same file that repeats it
+/// (`password = "…";` then `// rotate … monthly`), leaving an `AnchorSkipped`.
+/// A v14 record of such a file holds the value in its anchor.
+pub(crate) const CACHE_VERSION: u32 = 15;
 
 /// Errors an extractor can raise. All readable; never a panic.
 #[derive(Debug, thiserror::Error)]

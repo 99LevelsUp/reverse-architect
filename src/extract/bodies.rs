@@ -1487,7 +1487,7 @@ fn filter_comment_runs(comments: &mut [Comment], prefixes: &SecretPrefixes) {
 
 /// `text` with every whole-word occurrence of `word` replaced by `with`: one
 /// not glued to a letter, a digit or `_` on either side.
-fn replace_word(text: &str, word: &str, with: &str) -> String {
+pub(super) fn replace_word(text: &str, word: &str, with: &str) -> String {
     let is_word = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(text.len());
     let mut last = 0;

@@ -87,8 +87,9 @@
 //! accesses owned by the file. The secret filter runs on all of it first
 //! (KTD11): a comment block goes through [`redact_secret_block`] with adjacent
 //! line comments joined, a literal is read with the code on its line, a
-//! key-shaped token is never an anchor, and what is withheld leaves its place
-//! and reason, never its text. A C# raw literal (`"""…"""`) is read whole and
+//! key-shaped token is never an anchor, a value a literal of the file withholds
+//! is cut out of every other anchor text that repeats it, and what is withheld
+//! leaves its place and reason, never its text. A C# raw literal (`"""…"""`) is read whole and
 //! an interpolated one by its text with the holes blanked, for anchors and SQL
 //! alike. Anchors never reach the manifest; their only projection is the
 //! detail.
@@ -3052,17 +3053,61 @@ fn comment_lines<'s>(src: &'s str, seg: &Segment) -> Vec<(usize, &'s str)> {
     out
 }
 
+/// The values the file's literals withhold ([`literal_secrets`]), trimmed,
+/// longest first, each once — what a text of the same file must not repeat.
+/// An empty literal holds no value.
+fn withheld_values<'s>(
+    src: &'s str,
+    segs: &[Segment],
+    secrets: &[Option<&'static str>],
+) -> Vec<(&'s str, &'static str)> {
+    let mut values: Vec<(&str, &'static str)> = segs
+        .iter()
+        .zip(secrets)
+        .filter_map(|(seg, pattern)| Some((src[seg.start..seg.end].trim(), (*pattern)?)))
+        .filter(|(value, _)| !value.is_empty())
+        .collect();
+    values.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.cmp(b)));
+    values.dedup_by(|a, b| a.0 == b.0);
+    values
+}
+
+/// `text` with every withheld value written in it as a word of its own cut
+/// out, and the pattern of the longest one cut — a comment or a message that
+/// repeats a value the file withholds for the name it is assigned to
+/// (`// rotate N4kP9rT2 monthly`), which no shape gives away. The second
+/// layer cuts the same words out of its comments (`Withheld::prose`).
+fn without_withheld<'t>(
+    text: &'t str,
+    values: &[(&str, &'static str)],
+) -> (std::borrow::Cow<'t, str>, Option<&'static str>) {
+    let mut out = std::borrow::Cow::Borrowed(text);
+    let mut cut = None;
+    for (value, pattern) in values {
+        if out.contains(value) {
+            let rest = super::bodies::replace_word(&out, value, " ");
+            if rest != *out {
+                cut.get_or_insert(*pattern);
+                out = std::borrow::Cow::Owned(rest);
+            }
+        }
+    }
+    (out, cut)
+}
+
 /// Every ordinary comment of the file read for anchors, after the secret
 /// filter (plan B, KTD11 rule 1): adjacent line comments are joined into one
 /// logical block first, so a value on the line below its label (`// password:`
 /// then `// hunter2`) and a key block written as `//` lines are read whole.
-/// A line the filter replaced leaves its place and the reason; a long token
-/// inside a kept line is cut out of it (rule 3).
+/// A line the filter replaced leaves its place and the reason; a value the
+/// file's literals withhold and a long token inside a kept line are cut out
+/// of it (rule 3), each cut leaving its reason.
 fn comment_anchors(
     lang: Lang,
     src: &str,
     segs: &[Segment],
     prefixes: &SecretPrefixes,
+    withheld: &[(&str, &'static str)],
     hits: &mut Vec<AnchorHit>,
     skips: &mut Vec<(usize, String)>,
 ) {
@@ -3099,6 +3144,10 @@ fn comment_anchors(
                     .trim_end_matches(']');
                 skips.push((*offset, reason.to_string()));
                 continue;
+            }
+            let (line, cut) = without_withheld(line, withheld);
+            if let Some(pattern) = cut {
+                skips.push((*offset, pattern.to_string()));
             }
             let mut long = false;
             let kept: Vec<&str> = line
@@ -3962,6 +4011,7 @@ fn emit_file(
 
     // ---- String literals ----
     let secrets = literal_secrets(src, &segs, &lines, prefixes);
+    let withheld = withheld_values(src, &segs, &secrets);
     // Set by a literal that opens a key block and does not close it: a key
     // written one literal per line (`"-----BEGIN … PRIVATE KEY-----\n" +`,
     // then `"MIIE…\n" +` …) has its material in literals no rule names
@@ -4020,7 +4070,11 @@ fn emit_file(
         // a word of a message as well as a whole literal (`"Bearer 9f2b…"`),
         // as `comment_anchors` drops one from a comment line.
         if !(lang == Lang::Python && is_python_docstring(src, &segs, i)) {
-            let (kept, long) = without_long_tokens(&text);
+            let (unwithheld, cut) = without_withheld(&text, &withheld);
+            if let Some(pattern) = cut {
+                skips.push((seg.start, pattern.to_string()));
+            }
+            let (kept, long) = without_long_tokens(&unwithheld);
             if long {
                 skips.push((seg.start, "long token".to_string()));
             }
@@ -4071,7 +4125,15 @@ fn emit_file(
     }
 
     // ---- Comments ----
-    comment_anchors(lang, src, &segs, prefixes, &mut anchor_hits, &mut skips);
+    comment_anchors(
+        lang,
+        src,
+        &segs,
+        prefixes,
+        &withheld,
+        &mut anchor_hits,
+        &mut skips,
+    );
 
     // ---- Decisions by an enum's value (plan B, U5) — C# first (R13) ----
     if lang == Lang::CSharp {

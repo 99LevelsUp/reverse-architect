@@ -2798,6 +2798,43 @@ fn a_long_token_inside_a_multi_word_literal_is_cut_out_of_its_anchor() {
     );
 }
 
+/// A value withheld for the name it is assigned to is withheld where the file
+/// repeats it, too: in a comment and inside a message. Each loses the value as
+/// a word of its own and keeps its other words as an anchor, with the reason
+/// of the cut on its line — while a word that only contains the value stays.
+#[test]
+fn a_withheld_value_repeated_in_a_comment_or_a_message_is_cut_out_of_its_anchor() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = "namespace N;\n\npublic class Rep\n{\n    public void Run()\n    {\n        password = \"N4kP9rT2\";\n        // rotate N4kP9rT2 monthly\n        Log(\"old value 'N4kP9rT2' expired\");\n        Log(\"keep xN4kP9rT2x here\");\n    }\n}\n";
+    init_repo_with_files(tmp.path(), "Alice", &[("Rep.cs", src)]);
+    let g = graph_over(tmp.path());
+    let run = format!("{REP}.Run()");
+    let texts = anchor_texts(&g);
+    for (text, needle) in [
+        ("rotate monthly", "rotate"),
+        ("old value ' ' expired", "old value"),
+        ("keep xN4kP9rT2x here", "keep"),
+    ] {
+        assert!(
+            texts.contains(&(run.clone(), text.to_string(), line_of(src, needle))),
+            "{text} must be an anchor: {texts:#?}"
+        );
+    }
+    for (_, text, _) in &texts {
+        assert!(
+            text == "keep xN4kP9rT2x here" || !text.contains("N4kP9rT2"),
+            "the withheld value reached an anchor: {text}"
+        );
+    }
+    assert_eq!(
+        skipped(&g),
+        vec![
+            (run.clone(), "password".to_string(), line_of(src, "rotate")),
+            (run, "password".to_string(), line_of(src, "old value")),
+        ]
+    );
+}
+
 /// AE5 (R10): a connection string with a password and a `// password=…`
 /// comment leave no value anywhere, while the message a support desk searches for
 /// — with the word "heslo" in it — stays an anchor.

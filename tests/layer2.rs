@@ -707,9 +707,8 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
         record.contains("rotate monthly"),
         "the comments were stored: {record}"
     );
-    // The quoted comment and the 0.4 comment both lose the assigned value.
-    // The first layer's comment anchor still quotes it (a gap of the first
-    // layer, outside this pass), so the walk below leaves it out.
+    // The quoted comment and the 0.4 comment both lose the assigned value,
+    // and so does the first layer's anchor of that comment (the walk below).
     assert!(!record.contains(assigned), "{record}");
     fn walk(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -726,7 +725,7 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
     assert!(files.len() > 5, "{files:?}");
     for path in files {
         let text = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
-        for secret in [token, own, password, below, token2] {
+        for secret in [token, own, password, below, token2, assigned] {
             assert!(!text.contains(secret), "{} holds {secret}", path.display());
         }
     }
