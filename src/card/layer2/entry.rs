@@ -786,20 +786,25 @@ pub(crate) struct Seeds {
     pub dominant: BTreeSet<NodeKey>,
 }
 
-/// How many of the type's members `m` reaches through its own members
-/// (`full_uses`), itself not counted.
-fn reach(full_uses: &BTreeMap<NodeKey, BTreeSet<NodeKey>>, m: &NodeKey) -> usize {
+/// Whether `m` reaches at least `need` of the type's members through its own
+/// members (`full_uses`), itself not counted. The walk stops as soon as it
+/// has.
+fn reaches(full_uses: &BTreeMap<NodeKey, BTreeSet<NodeKey>>, m: &NodeKey, need: usize) -> bool {
     let mut seen: BTreeSet<&NodeKey> = BTreeSet::new();
     let mut queue: Vec<&NodeKey> = full_uses[m].iter().collect();
     while let Some(x) = queue.pop() {
-        if x == m || !seen.insert(x) {
+        let Some(next) = full_uses.get(x).filter(|_| x != m) else {
+            continue;
+        };
+        if !seen.insert(x) {
             continue;
         }
-        if let Some(next) = full_uses.get(x) {
-            queue.extend(next.iter());
+        if seen.len() >= need {
+            return true;
         }
+        queue.extend(next.iter());
     }
-    seen.iter().filter(|x| full_uses.contains_key(**x)).count()
+    false
 }
 
 /// The driving methods of a type (see the module docs): every method but a
@@ -812,13 +817,15 @@ fn driving_methods(
     dispatchers: &BTreeSet<NodeKey>,
 ) -> BTreeSet<NodeKey> {
     let total = full_uses.len();
+    let need = DOMINANT_MEMBERS.max((total * DOMINANT_SHARE.0).div_ceil(DOMINANT_SHARE.1));
+    // A method reaches at most the other members.
+    if need >= total {
+        return BTreeSet::new();
+    }
     members
         .iter()
         .filter(|m| !dispatchers.contains(**m) && ix.symbol(m).is_some_and(|s| s.is_method()))
-        .filter(|m| {
-            let r = reach(full_uses, m);
-            r >= DOMINANT_MEMBERS && r * DOMINANT_SHARE.1 >= total * DOMINANT_SHARE.0
-        })
+        .filter(|m| reaches(full_uses, m, need))
         .map(|m| (*m).clone())
         .collect()
 }
@@ -1507,13 +1514,6 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
             .sort_by(|a, b| (&a.place, &a.event).cmp(&(&b.place, &b.event)));
     }
     unbound.sort_by(|a, b| (&a.place, &a.member).cmp(&(&b.place, &b.member)));
-    // Only the members of a seed of their own drive the type.
-    let dominant = seeds
-        .iter()
-        .filter_map(|s| s.identity.as_ref())
-        .filter(|id| dominant.contains(*id))
-        .cloned()
-        .collect();
     Seeds {
         seeds,
         member_uses,

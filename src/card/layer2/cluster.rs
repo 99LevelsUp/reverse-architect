@@ -17,11 +17,11 @@
 //!    each other count as one here, or a command and the method it executes
 //!    would make the method's helpers hubs.
 //! 5. A **driving method** ([`Seeds::dominant`]) is a functionality of its
-//!    own. Other seeds stop at it as at a hub; a seed that leads into it — a
-//!    command executing it, a public method calling it — is another way into
-//!    its functionality, but a member shared with another seed joins nothing,
-//!    and it takes only what no other seed reached: a loop that calls
-//!    `Dispose` on its way out leaves `Dispose` the functionality it was.
+//!    own. Other seeds stop at it as at a hub. A seed that leads into it — a
+//!    command executing it, a public method calling it — joins it. A member
+//!    shared by it and another seed merges neither, and it takes only what no
+//!    other seed reached: a loop that calls `Dispose` on its way out leaves
+//!    `Dispose` the functionality it was.
 //!
 //! The representative of a cluster is its entry point of the first kind in
 //! [`super::entry::EntryKind::rank`], and among those of one kind the one with the least key
@@ -307,21 +307,24 @@ pub(crate) fn cluster(
         ancestors: ix.ancestors(ty),
     };
     let hubs = hubs(&ctx, &seeds, &full_uses);
-    // Step 5: a driving method bounds every closure but its own.
     let driving: Vec<bool> = seeds
         .iter()
         .map(|s| s.identity.as_ref().is_some_and(|id| dominant.contains(id)))
         .collect();
     let bounds: BTreeSet<NodeKey> = hubs.iter().chain(&dominant).cloned().collect();
 
-    // Steps 2 and 3: seeds whose clusters share a member are one — but a
-    // driving method joins none.
+    // Steps 2 and 3: seeds whose clusters share a member are one — unless
+    // one of them is a driving method's.
     let mut sets = Sets::new(seeds.len());
     let mut owner_of: BTreeMap<NodeKey, usize> = BTreeMap::new();
+    let share = |sets: &mut Sets, i: usize, j: usize| {
+        if !driving[i] && !driving[j] {
+            sets.union(i, j);
+        }
+    };
     let claim = |sets: &mut Sets, owner_of: &mut BTreeMap<NodeKey, usize>, x: NodeKey, i: usize| {
         match owner_of.get(&x) {
-            Some(&j) if !driving[i] && !driving[j] => sets.union(i, j),
-            Some(_) => {}
+            Some(&j) => share(sets, i, j),
             None => {
                 owner_of.insert(x, i);
             }
@@ -344,16 +347,16 @@ pub(crate) fn cluster(
     for i in order {
         let (from, keep) = start(&seeds[i]);
         let reached = ctx.closure(from.iter().cloned(), &keep, &bounds);
-        let led_into = from.iter().chain(
-            reached
-                .iter()
-                .filter(|x| ctx.own(x))
-                .filter_map(|x| member_uses.get(x))
-                .flatten(),
-        );
-        for d in led_into {
-            if let Some(&j) = driver_of.get(d) {
-                if j != i {
+        if !driver_of.is_empty() {
+            let led_into = from.iter().chain(
+                reached
+                    .iter()
+                    .filter(|x| ctx.own(x))
+                    .filter_map(|x| member_uses.get(x))
+                    .flatten(),
+            );
+            for d in led_into {
+                if let Some(&j) = driver_of.get(d) {
                     sets.union(i, j);
                 }
             }
@@ -364,8 +367,7 @@ pub(crate) fn cluster(
     }
     // Shared state: a member no cluster reaches joins the cluster whose
     // field or property it reads or writes, and brings what it reaches —
-    // the first other seed's cluster when there is one, never two clusters
-    // of which one is a driving method's.
+    // preferably a cluster that is no driving method's.
     loop {
         let mut changed = false;
         for (m, used) in &member_uses {
@@ -386,9 +388,7 @@ pub(crate) fn cluster(
                 continue;
             };
             for &other in &state {
-                if other != first && !driving[first] && !driving[other] {
-                    sets.union(first, other);
-                }
+                share(&mut sets, first, other);
             }
             let reach = ctx.closure(std::iter::once(m.clone()), &BTreeSet::new(), &bounds);
             for x in reach {
