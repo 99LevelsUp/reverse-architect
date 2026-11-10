@@ -52,6 +52,7 @@ pub const CSHARP: Profile = Profile {
         EntryKind::MenuItem,
         EntryKind::Handler,
         EntryKind::PublicMethod,
+        EntryKind::Driving,
     ],
 };
 

@@ -1702,8 +1702,137 @@ fn hubs_join_nothing_and_keys_survive_new_members() {
     assert_eq!(three.functionalities.len(), 4);
 }
 
+const DOMINANT: &str = r#"namespace Acme.Dominant
+{
+    public class AcmeQueue
+    {
+        private int a;
+        private int b;
+        private int c;
+        private int d;
+        private bool stopped;
+        private System.Threading.Thread worker;
+        public AcmeQueue() { worker = new System.Threading.Thread(Loop); }
+        public void Start() { worker.Start(); }
+        public void Dispose() { stopped = true; }
+        private void Loop()
+        {
+            while (!stopped)
+            {
+                StepA();
+                StepB();
+                StepC();
+                StepD();
+            }
+            Dispose();
+        }
+        private void StepA() { a = 1; }
+        private void StepB() { b = 1; }
+        private void StepC() { c = 1; }
+        private void StepD() { d = 1; }
+    }
+
+    public class AcmePump
+    {
+        private int a;
+        private int b;
+        private int c;
+        private int d;
+        private bool closed;
+        public void Run()
+        {
+            if (closed) { return; }
+            FillA();
+            FillB();
+            FillC();
+            FillD();
+            Close();
+        }
+        public void Close() { closed = true; }
+        private void FillA() { a = 1; }
+        private void FillB() { b = 1; }
+        private void FillC() { c = 1; }
+        private void FillD() { d = 1; }
+    }
+
+    public class AcmeRunner
+    {
+        private int a;
+        private int b;
+        private int c;
+        private int d;
+        public void Go() { Work(); }
+        private void Work() { StepA(); StepB(); StepC(); StepD(); }
+        private void StepA() { a = 1; }
+        private void StepB() { b = 1; }
+        private void StepC() { c = 1; }
+        private void StepD() { d = 1; }
+    }
+}
+"#;
+
+const DOMINANT_NS: &str = "sym:csharp:Acme.Dominant#";
+
+/// A member most of the type's steps go out from is a functionality of its
+/// own: a private loop run on a thread becomes one, and the method it calls
+/// on its way out stays the functionality it was. A public method that is
+/// already an entry point is not seeded twice and no longer swallows the
+/// public method it calls. A public method that leads into a driving method
+/// is a way into the driving method's functionality, not a second one.
+#[test]
+fn a_member_most_steps_go_out_from_is_a_functionality_of_its_own() {
+    let (_, analysis) = analyzed(&[("src/Dominant.cs", DOMINANT)]);
+
+    let queue = type_of(&analysis, &key(DOMINANT_NS, "AcmeQueue"));
+    let loop_key = format!("{DOMINANT_NS}AcmeQueue.Loop()");
+    let dispose_key = format!("{DOMINANT_NS}AcmeQueue.Dispose()");
+    let start_key = format!("{DOMINANT_NS}AcmeQueue.Start()");
+    assert_eq!(
+        functionality_keys(queue),
+        [dispose_key.as_str(), loop_key.as_str(), start_key.as_str()]
+    );
+    let main = queue
+        .functionality(&loop_key)
+        .expect("the loop's functionality");
+    assert_eq!(main.entry_points.len(), 1);
+    assert_eq!(main.representative().kind, EntryKind::Driving);
+    for step in ["StepA()", "StepB()", "StepC()", "StepD()", "a", "d"] {
+        assert!(
+            main.members
+                .contains(&key(DOMINANT_NS, &format!("AcmeQueue.{step}"))),
+            "{step} belongs to the loop: {:?}",
+            main.members
+        );
+    }
+    let dispose = queue.functionality(&dispose_key).expect("Dispose stays");
+    assert_eq!(dispose.entry_points.len(), 1);
+    assert!(!dispose
+        .members
+        .contains(&key(DOMINANT_NS, "AcmeQueue.Loop()")));
+
+    let pump = type_of(&analysis, &key(DOMINANT_NS, "AcmePump"));
+    let run_key = format!("{DOMINANT_NS}AcmePump.Run()");
+    let close_key = format!("{DOMINANT_NS}AcmePump.Close()");
+    assert_eq!(
+        functionality_keys(pump),
+        [close_key.as_str(), run_key.as_str()]
+    );
+    let run = pump.functionality(&run_key).expect("Run's functionality");
+    assert_eq!(run.entry_points.len(), 1, "Run is seeded once");
+    assert_eq!(run.representative().kind, EntryKind::PublicMethod);
+    assert!(run.members.contains(&key(DOMINANT_NS, "AcmePump.FillA()")));
+
+    let runner = type_of(&analysis, &key(DOMINANT_NS, "AcmeRunner"));
+    let go_key = format!("{DOMINANT_NS}AcmeRunner.Go()");
+    assert_eq!(functionality_keys(runner), [go_key.as_str()]);
+    let go = runner.functionality(&go_key).expect("Go's functionality");
+    let ways: Vec<EntryKind> = go.entry_points.iter().map(|e| e.kind).collect();
+    assert_eq!(ways, [EntryKind::PublicMethod, EntryKind::Driving]);
+}
+
 /// R3: two analyses of one input, on one worker thread and on eight, give
-/// the same bytes.
+/// the same bytes — the editor's, and those of types with a member most
+/// steps go out from.
 #[test]
 fn the_analysis_is_the_same_bytes_on_one_thread_and_on_many() {
     let run = |threads: usize| -> Vec<u8> {
@@ -1713,7 +1842,10 @@ fn the_analysis_is_the_same_bytes_on_one_thread_and_on_many() {
             .unwrap()
             .install(|| {
                 let (_, analysis) = editor();
-                serde_json::to_vec(&analysis).unwrap()
+                let mut bytes = serde_json::to_vec(&analysis).unwrap();
+                let (_, dominant) = analyzed(&[("src/Dominant.cs", DOMINANT)]);
+                bytes.extend(serde_json::to_vec(&dominant).unwrap());
+                bytes
             })
     };
     let one = run(1);
@@ -3891,6 +4023,11 @@ fn layered_reference_files() -> Vec<(&'static str, &'static str)> {
 /// What a run with the second layer writes is pinned: the analyses become
 /// language profiles (plan vrstva 3, KTD1) without a byte of the C# output
 /// moving, and a unit that means to move it re-pins this on purpose.
+///
+/// Re-pinned when a driving method became a functionality of its own: the
+/// flow fixture's `RelayCommand.Execute` reaches half of the type and no
+/// longer hides inside `CanExecute`, so its card, the trigger registry,
+/// the coverage and the manifest moved — no other card.
 #[test]
 fn a_layered_run_writes_the_pinned_bytes_on_one_thread_and_on_many() {
     let first = tempfile::tempdir().unwrap();

@@ -17,7 +17,14 @@
 //!   same handler is the same subscription), or a lambda subscribed so, told
 //!   apart by the event (`#Loaded`); a handler whose body dispatches keys or
 //!   menu items is no entry point of its own, its branches are;
-//! - a **public method**.
+//! - a **public method**;
+//! - a **driving method** — a method, public or not, from which at least
+//!   half of the type's members are reached through its own members, and at
+//!   least [`DOMINANT_MEMBERS`] of them: a loop run on a thread. A constructor
+//!   never is one (it assigns every field), nor a dispatcher (its branches
+//!   are). A public method that drives the type stays a public method; it is
+//!   only marked as driving ([`Seeds::dominant`]), and the clustering keeps
+//!   every driving method a functionality of its own.
 //!
 //! A branch reaches what its own arm reaches and a menu item what its command
 //! and click handler do: the member they are written in is not part of them,
@@ -48,6 +55,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// How deeply constructor initializers are followed.
 const MAX_INITIALIZERS: usize = 8;
 
+/// A method that reaches at least this share of the type's members drives
+/// the type.
+const DOMINANT_SHARE: (usize, usize) = (1, 2);
+
+/// …and at least this many of them, so a small type is not driven by a
+/// method that merely calls a helper.
+const DOMINANT_MEMBERS: usize = 4;
+
 /// What starts a functionality, in the order a representative is chosen in
 /// (KTD11) — see [`EntryKind::rank`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -58,18 +73,20 @@ pub enum EntryKind {
     MenuItem,
     Handler,
     PublicMethod,
+    Driving,
 }
 
 impl EntryKind {
     /// The rank of the kind among representatives (KTD11): a command
     /// property, then a key branch or a menu item, then an event handler,
-    /// then a public method.
+    /// then a public method, then a driving method that is none of these.
     pub fn rank(self) -> u8 {
         match self {
             EntryKind::Command => 0,
             EntryKind::Key | EntryKind::MenuItem => 1,
             EntryKind::Handler => 2,
             EntryKind::PublicMethod => 3,
+            EntryKind::Driving => 4,
         }
     }
 }
@@ -764,6 +781,46 @@ pub(crate) struct Seeds {
     pub full_uses: BTreeMap<NodeKey, BTreeSet<NodeKey>>,
     /// Commands whose binding cannot be told, by place.
     pub unbound: Vec<UnboundCommand>,
+    /// The driving methods: the members of the seeds that are a
+    /// functionality of their own whatever else they reach.
+    pub dominant: BTreeSet<NodeKey>,
+}
+
+/// How many of the type's members `m` reaches through its own members
+/// (`full_uses`), itself not counted.
+fn reach(full_uses: &BTreeMap<NodeKey, BTreeSet<NodeKey>>, m: &NodeKey) -> usize {
+    let mut seen: BTreeSet<&NodeKey> = BTreeSet::new();
+    let mut queue: Vec<&NodeKey> = full_uses[m].iter().collect();
+    while let Some(x) = queue.pop() {
+        if x == m || !seen.insert(x) {
+            continue;
+        }
+        if let Some(next) = full_uses.get(x) {
+            queue.extend(next.iter());
+        }
+    }
+    seen.iter().filter(|x| full_uses.contains_key(**x)).count()
+}
+
+/// The driving methods of a type (see the module docs): every method but a
+/// dispatcher reaching at least [`DOMINANT_SHARE`] of the members and at
+/// least [`DOMINANT_MEMBERS`] of them.
+fn driving_methods(
+    ix: &Index<'_>,
+    members: &[&NodeKey],
+    full_uses: &BTreeMap<NodeKey, BTreeSet<NodeKey>>,
+    dispatchers: &BTreeSet<NodeKey>,
+) -> BTreeSet<NodeKey> {
+    let total = full_uses.len();
+    members
+        .iter()
+        .filter(|m| !dispatchers.contains(**m) && ix.symbol(m).is_some_and(|s| s.is_method()))
+        .filter(|m| {
+            let r = reach(full_uses, m);
+            r >= DOMINANT_MEMBERS && r * DOMINANT_SHARE.1 >= total * DOMINANT_SHARE.0
+        })
+        .map(|m| (*m).clone())
+        .collect()
 }
 
 fn local_root(p: &AccessPath) -> Option<&str> {
@@ -1364,7 +1421,13 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
         all.remove(m);
     }
 
-    // Member-level entry points: commands, handlers, public methods.
+    // Member-level entry points: commands, handlers, public methods and
+    // driving methods.
+    let dominant = if profile.seeds(EntryKind::Driving) {
+        driving_methods(ix, &members, &full_uses, &dispatchers)
+    } else {
+        BTreeSet::new()
+    };
     for &m in &members {
         if dispatchers.contains(m) {
             continue;
@@ -1376,6 +1439,8 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
             EntryKind::Handler
         } else if symbol.is_method() && symbol.public && profile.seeds(EntryKind::PublicMethod) {
             EntryKind::PublicMethod
+        } else if dominant.contains(m) {
+            EntryKind::Driving
         } else {
             continue;
         };
@@ -1442,11 +1507,19 @@ pub(crate) fn seeds(links: &Links<'_, '_>, ty: &NodeKey) -> Seeds {
             .sort_by(|a, b| (&a.place, &a.event).cmp(&(&b.place, &b.event)));
     }
     unbound.sort_by(|a, b| (&a.place, &a.member).cmp(&(&b.place, &b.member)));
+    // Only the members of a seed of their own drive the type.
+    let dominant = seeds
+        .iter()
+        .filter_map(|s| s.identity.as_ref())
+        .filter(|id| dominant.contains(*id))
+        .cloned()
+        .collect();
     Seeds {
         seeds,
         member_uses,
         full_uses,
         unbound,
+        dominant,
     }
 }
 

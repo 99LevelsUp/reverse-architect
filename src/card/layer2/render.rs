@@ -589,6 +589,16 @@ fn entry_line(cx: &Cx<'_>, e: &EntryPoint) -> String {
         EntryKind::PublicMethod => {
             let _ = write!(s, "{} {member}", cx.t("Public method", "Veřejná metoda"));
         }
+        EntryKind::Driving => {
+            let _ = write!(
+                s,
+                "{} {member}",
+                cx.t(
+                    "Method most of the type goes out from",
+                    "Metoda, ze které vychází většina typu"
+                )
+            );
+        }
     }
     if e.kind != EntryKind::Command {
         let targets = targets_text(cx, &e.targets, true);

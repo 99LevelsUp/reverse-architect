@@ -16,6 +16,12 @@
 //!    use, or that the clusters of three or more seeds reach. Seeds that call
 //!    each other count as one here, or a command and the method it executes
 //!    would make the method's helpers hubs.
+//! 5. A **driving method** ([`Seeds::dominant`]) is a functionality of its
+//!    own. Other seeds stop at it as at a hub; a seed that leads into it — a
+//!    command executing it, a public method calling it — is another way into
+//!    its functionality, but a member shared with another seed joins nothing,
+//!    and it takes only what no other seed reached: a loop that calls
+//!    `Dispose` on its way out leaves `Dispose` the functionality it was.
 //!
 //! The representative of a cluster is its entry point of the first kind in
 //! [`super::entry::EntryKind::rank`], and among those of one kind the one with the least key
@@ -291,6 +297,7 @@ pub(crate) fn cluster(
         seeds,
         member_uses,
         full_uses,
+        dominant,
         ..
     } = seeds;
     let ctx = Ctx {
@@ -300,26 +307,65 @@ pub(crate) fn cluster(
         ancestors: ix.ancestors(ty),
     };
     let hubs = hubs(&ctx, &seeds, &full_uses);
+    // Step 5: a driving method bounds every closure but its own.
+    let driving: Vec<bool> = seeds
+        .iter()
+        .map(|s| s.identity.as_ref().is_some_and(|id| dominant.contains(id)))
+        .collect();
+    let bounds: BTreeSet<NodeKey> = hubs.iter().chain(&dominant).cloned().collect();
 
-    // Steps 2 and 3: seeds whose clusters share a member are one.
+    // Steps 2 and 3: seeds whose clusters share a member are one — but a
+    // driving method joins none.
     let mut sets = Sets::new(seeds.len());
     let mut owner_of: BTreeMap<NodeKey, usize> = BTreeMap::new();
     let claim = |sets: &mut Sets, owner_of: &mut BTreeMap<NodeKey, usize>, x: NodeKey, i: usize| {
         match owner_of.get(&x) {
-            Some(&j) => sets.union(i, j),
+            Some(&j) if !driving[i] && !driving[j] => sets.union(i, j),
+            Some(_) => {}
             None => {
                 owner_of.insert(x, i);
             }
         }
     };
-    for (i, seed) in seeds.iter().enumerate() {
-        let (from, keep) = start(seed);
-        for x in ctx.closure(from, &keep, &hubs) {
+    // A seed that leads into a driving method — a command executing it, a
+    // public method calling it — is a way into the driving method's
+    // functionality and joins it; what the driving method itself calls
+    // never joins it that way.
+    let driver_of: BTreeMap<&NodeKey, usize> = seeds
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| driving[*i])
+        .filter_map(|(i, s)| s.identity.as_ref().map(|id| (id, i)))
+        .collect();
+    // The other seeds first, so a driving method takes only what is left.
+    let order = (0..seeds.len())
+        .filter(|&i| !driving[i])
+        .chain((0..seeds.len()).filter(|&i| driving[i]));
+    for i in order {
+        let (from, keep) = start(&seeds[i]);
+        let reached = ctx.closure(from.iter().cloned(), &keep, &bounds);
+        let led_into = from.iter().chain(
+            reached
+                .iter()
+                .filter(|x| ctx.own(x))
+                .filter_map(|x| member_uses.get(x))
+                .flatten(),
+        );
+        for d in led_into {
+            if let Some(&j) = driver_of.get(d) {
+                if j != i {
+                    sets.union(i, j);
+                }
+            }
+        }
+        for x in reached {
             claim(&mut sets, &mut owner_of, x, i);
         }
     }
     // Shared state: a member no cluster reaches joins the cluster whose
-    // field or property it reads or writes, and brings what it reaches.
+    // field or property it reads or writes, and brings what it reaches —
+    // the first other seed's cluster when there is one, never two clusters
+    // of which one is a driving method's.
     loop {
         let mut changed = false;
         for (m, used) in &member_uses {
@@ -331,13 +377,20 @@ pub(crate) fn cluster(
                 .filter(|x| ctx.own(x) && ix.symbol(x).is_some_and(|s| s.is_value()))
                 .filter_map(|x| owner_of.get(x).copied())
                 .collect();
-            let Some(&first) = state.first() else {
+            let Some(first) = state
+                .iter()
+                .copied()
+                .find(|&i| !driving[i])
+                .or_else(|| state.first().copied())
+            else {
                 continue;
             };
-            for &other in &state[1..] {
-                sets.union(first, other);
+            for &other in &state {
+                if other != first && !driving[first] && !driving[other] {
+                    sets.union(first, other);
+                }
             }
-            let reach = ctx.closure(std::iter::once(m.clone()), &BTreeSet::new(), &hubs);
+            let reach = ctx.closure(std::iter::once(m.clone()), &BTreeSet::new(), &bounds);
             for x in reach {
                 claim(&mut sets, &mut owner_of, x, first);
             }
