@@ -1768,6 +1768,22 @@ const DOMINANT: &str = r#"namespace Acme.Dominant
         private void StepC() { c = 1; }
         private void StepD() { d = 1; }
     }
+
+    public class AcmeRest
+    {
+        private int a;
+        private int b;
+        private int c;
+        private int d;
+        public void Get() { Send(); }
+        public void Post() { Send(); }
+        public void Put() { Send(); }
+        private void Send() { SendA(); SendB(); SendC(); SendD(); }
+        private void SendA() { a = 1; }
+        private void SendB() { b = 1; }
+        private void SendC() { c = 1; }
+        private void SendD() { d = 1; }
+    }
 }
 "#;
 
@@ -1828,6 +1844,28 @@ fn a_member_most_steps_go_out_from_is_a_functionality_of_its_own() {
     let go = runner.functionality(&go_key).expect("Go's functionality");
     let ways: Vec<EntryKind> = go.entry_points.iter().map(|e| e.kind).collect();
     assert_eq!(ways, [EntryKind::PublicMethod, EntryKind::Driving]);
+
+    // Three public methods leading into one driving method — a hub by the
+    // count of seeds reaching it — are three ways into one functionality.
+    let rest = type_of(&analysis, &key(DOMINANT_NS, "AcmeRest"));
+    let get_key = format!("{DOMINANT_NS}AcmeRest.Get()");
+    assert_eq!(functionality_keys(rest), [get_key.as_str()]);
+    let ways: Vec<&str> = rest
+        .functionality(&get_key)
+        .expect("one functionality")
+        .entry_points
+        .iter()
+        .map(|e| e.key.as_str())
+        .collect();
+    assert_eq!(
+        ways,
+        [
+            get_key.as_str(),
+            &format!("{DOMINANT_NS}AcmeRest.Post()"),
+            &format!("{DOMINANT_NS}AcmeRest.Put()"),
+            &format!("{DOMINANT_NS}AcmeRest.Send()"),
+        ]
+    );
 }
 
 /// R3: two analyses of one input, on one worker thread and on eight, give
