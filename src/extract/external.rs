@@ -3053,9 +3053,19 @@ fn comment_lines<'s>(src: &'s str, seg: &Segment) -> Vec<(usize, &'s str)> {
     out
 }
 
+/// Whether a withheld value is the one word that names its kind of secret
+/// (`password = "password"`, `heslo = "Heslo"`): a placeholder, which a text
+/// using that word does not repeat — it names the secret. Such a value stays
+/// withheld as a literal and is never cut out of prose, so `Invalid password`
+/// and `Chybné heslo` stay searchable (plan B stop condition).
+pub(super) fn names_its_secret(value: &str) -> bool {
+    name_words(value).len() == 1 && secret_name(value).is_some()
+}
+
 /// The values the file's literals withhold ([`literal_secrets`]), trimmed,
 /// longest first, each once — what a text of the same file must not repeat.
-/// An empty literal holds no value.
+/// An empty literal holds no value, and a placeholder
+/// ([`names_its_secret`]) none a text could repeat.
 fn withheld_values<'s>(
     src: &'s str,
     segs: &[Segment],
@@ -3065,7 +3075,7 @@ fn withheld_values<'s>(
         .iter()
         .zip(secrets)
         .filter_map(|(seg, pattern)| Some((src[seg.start..seg.end].trim(), (*pattern)?)))
-        .filter(|(value, _)| !value.is_empty())
+        .filter(|(value, _)| !value.is_empty() && !names_its_secret(value))
         .collect();
     values.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.cmp(b)));
     values.dedup_by(|a, b| a.0 == b.0);
@@ -3077,13 +3087,14 @@ fn withheld_values<'s>(
 /// repeats a value the file withholds for the name it is assigned to
 /// (`// rotate N4kP9rT2 monthly`), which no shape gives away. The second
 /// layer cuts the same words out of its comments (`Withheld::prose`).
-fn without_withheld<'t>(
+fn without_withheld<'t, V: AsRef<str>>(
     text: &'t str,
-    values: &[(&str, &'static str)],
+    values: &[(V, &'static str)],
 ) -> (std::borrow::Cow<'t, str>, Option<&'static str>) {
     let mut out = std::borrow::Cow::Borrowed(text);
     let mut cut = None;
     for (value, pattern) in values {
+        let value = value.as_ref();
         if out.contains(value) {
             let rest = super::bodies::replace_word(&out, value, " ");
             if rest != *out {
@@ -3093,6 +3104,58 @@ fn without_withheld<'t>(
         }
     }
     (out, cut)
+}
+
+/// [`withheld_values`] of a whole source file, owned — for a text of the
+/// file the host does not lex itself: a doc comment a plugin hands it. Empty
+/// for a language the host has no lexer for.
+pub(super) fn file_withheld_values(
+    path: &str,
+    src: &str,
+    prefixes: &SecretPrefixes,
+) -> Vec<(String, &'static str)> {
+    let Some(lang) = Lang::from_path(path) else {
+        return Vec::new();
+    };
+    let segs = segments(lang, src);
+    let secrets = literal_secrets(src, &segs, &LineIndex::new(src), prefixes);
+    withheld_values(src, &segs, &secrets)
+        .into_iter()
+        .map(|(value, pattern)| (value.to_string(), pattern))
+        .collect()
+}
+
+/// [`without_withheld`] on every line of a `DocComment` fact in place, and
+/// the skips it leaves: one `AnchorSkipped(pattern)` per line that lost a
+/// value, at that line — a doc comment repeating what the file's literals
+/// withhold (`/// default N4kP9rT2`). A changed line has its whitespace
+/// collapsed. Empty, and the fact untouched, for every other fact.
+pub(super) fn cut_doc_withheld(fact: &mut Fact, values: &[(String, &'static str)]) -> Vec<Fact> {
+    if fact.kind != FactKind::DocComment || values.is_empty() {
+        return Vec::new();
+    }
+    let FactValue::Text(text) = &fact.value else {
+        return Vec::new();
+    };
+    let mut cut: Vec<(usize, &'static str)> = Vec::new();
+    let lines: Vec<String> = text
+        .split('\n')
+        .enumerate()
+        .map(|(n, line)| match without_withheld(line, values) {
+            (kept, Some(pattern)) => {
+                cut.push((n, pattern));
+                kept.split_whitespace().collect::<Vec<_>>().join(" ")
+            }
+            (_, None) => line.to_string(),
+        })
+        .collect();
+    if cut.is_empty() {
+        return Vec::new();
+    }
+    fact.value = FactValue::Text(lines.join("\n"));
+    cut.into_iter()
+        .map(|(n, pattern)| super::body_secrets::doc_skip(fact, n, pattern))
+        .collect()
 }
 
 /// Every ordinary comment of the file read for anchors, after the secret

@@ -259,9 +259,11 @@ pub(crate) use treesitter::NamesHandoff;
 /// file holds the value.
 ///
 /// v15: a value a literal withholds for the name it is assigned to is cut out
-/// of every comment and message anchor of the same file that repeats it
-/// (`password = "…";` then `// rotate … monthly`), leaving an `AnchorSkipped`.
-/// A v14 record of such a file holds the value in its anchor.
+/// of every comment and message anchor and every doc comment of the same file
+/// that repeats it (`password = "…";` then `// rotate … monthly`), leaving an
+/// `AnchorSkipped` — unless the value is the word naming its secret
+/// (`password = "password"`). A v14 record of such a file holds the value in
+/// its anchor or its `languages-declarations` doc comment.
 pub(crate) const CACHE_VERSION: u32 = 15;
 
 /// Errors an extractor can raise. All readable; never a panic.

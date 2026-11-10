@@ -2835,6 +2835,31 @@ fn a_withheld_value_repeated_in_a_comment_or_a_message_is_cut_out_of_its_anchor(
     );
 }
 
+/// A placeholder value that is itself the word naming the secret
+/// (`password = "password"`) stays withheld as a literal, but is not cut out
+/// of the file's messages and comments: `Invalid password` and `Chybné heslo`
+/// are what a support desk searches for (plan B stop condition).
+#[test]
+fn a_placeholder_named_like_its_secret_is_not_cut_out_of_messages() {
+    let tmp = tempfile::tempdir().unwrap();
+    let src = "namespace N;\n\npublic class Rep\n{\n    public void Run()\n    {\n        password = \"password\";\n        heslo = \"Heslo\";\n        // reset the password monthly\n        Show(\"Invalid password\");\n        Show(\"Chybné heslo\");\n    }\n}\n";
+    init_repo_with_files(tmp.path(), "Alice", &[("Rep.cs", src)]);
+    let g = graph_over(tmp.path());
+    let run = format!("{REP}.Run()");
+    let texts = anchor_texts(&g);
+    for (text, needle) in [
+        ("reset the password monthly", "reset"),
+        ("Invalid password", "Invalid"),
+        ("Chybné heslo", "Chybné"),
+    ] {
+        assert!(
+            texts.contains(&(run.clone(), text.to_string(), line_of(src, needle))),
+            "{text} must stay an anchor: {texts:#?}"
+        );
+    }
+    assert!(skipped(&g).is_empty(), "{:#?}", skipped(&g));
+}
+
 /// AE5 (R10): a connection string with a password and a `// password=…`
 /// comment leave no value anywhere, while the message a support desk searches for
 /// — with the word "heslo" in it — stays an anchor.

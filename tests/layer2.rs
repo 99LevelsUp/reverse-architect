@@ -678,7 +678,7 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
     // repeated in the comment quoted after a call argument.
     let assigned = "N4kP9rT2";
     let src = format!(
-        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        public string Token()\n        {{\n            // password: {password}\n            // rotate monthly\n            // password:\n            // {below}\n            /* backup key {token2} */\n            password = \"{assigned}\";\n            Use(\"ok\") /* {assigned} */;\n            return \"{token}\";\n        }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
+        "namespace Acme.Views\n{{\n    public class Vault\n    {{\n        /// default {assigned}\n        public string Token()\n        {{\n            // password: {password}\n            // rotate monthly\n            // password:\n            // {below}\n            /* backup key {token2} */\n            password = \"{assigned}\";\n            Use(\"ok\") /* {assigned} */;\n            return \"{token}\";\n        }}\n        public bool Is(string t) {{ if (t == \"{own}\") {{ return true; }} return false; }}\n    }}\n}}\n"
     );
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path().join("repo");

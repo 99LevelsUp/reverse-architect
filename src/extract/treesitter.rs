@@ -389,6 +389,7 @@ impl Extractor for Languages {
                             match session.declarations(key, src, &config) {
                                 Ok(declarations) => output_from_ops(
                                     key,
+                                    src,
                                     &ids[plugin.id()],
                                     declarations,
                                     &vocabulary,
@@ -590,6 +591,7 @@ fn node_kind_named(word: &str, vocabulary: &Vocabulary) -> Option<NodeKindId> {
 /// so no plugin can carry a credential into the graph through a key (KTD16).
 fn output_from_ops(
     file: &str,
+    source: &[u8],
     plugin: &ExtractorId,
     declarations: FileDeclarations,
     vocabulary: &Vocabulary,
@@ -624,7 +626,9 @@ fn output_from_ops(
         ..FileOutput::default()
     };
     let mut extras = extras.into_iter().peekable();
-    // The fact, and the skips cutting a doc comment's long tokens left.
+    let withheld: std::cell::OnceCell<Vec<(String, &'static str)>> = std::cell::OnceCell::new();
+    // The fact, and the skips cutting a doc comment's long tokens and
+    // withheld values left.
     let fact_of = |f: crate::plugin::host::WireFact| -> Option<(Fact, Vec<Fact>)> {
         let kind = crate::graph::fact_kind_from_word(&f.kind, vocabulary).or_else(|| {
             eprintln!(
@@ -661,7 +665,19 @@ fn output_from_ops(
                 }
             }
         }
-        let skips = super::external::cut_doc_long_tokens(&mut fact);
+        let mut skips = super::external::cut_doc_long_tokens(&mut fact);
+        // A doc comment repeating a value the file's literals withhold
+        // (`/// default …` above `password = "…"`) loses it too, as the
+        // file's ordinary comments do. Lexed once per file, and only for a
+        // file with a doc comment.
+        if fact.kind == FactKind::DocComment {
+            let values = withheld.get_or_init(|| {
+                std::str::from_utf8(source)
+                    .map(|src| super::external::file_withheld_values(file, src, prefixes))
+                    .unwrap_or_default()
+            });
+            skips.extend(super::external::cut_doc_withheld(&mut fact, values));
+        }
         Some((fact, skips))
     };
     let edge_of = |e: crate::plugin::host::WireEdge| -> Option<(NodeKey, NodeKey, Edge)> {
@@ -1836,7 +1852,14 @@ mod tests {
             .declarations(file, src, &config)
             .expect("a bundled plugin reads a test fixture");
         let id = ExtractorId::from(plugin.id());
-        let produced = output_from_ops(file, &id, declarations, &Vocabulary::default(), prefixes);
+        let produced = output_from_ops(
+            file,
+            src,
+            &id,
+            declarations,
+            &Vocabulary::default(),
+            prefixes,
+        );
         out.ops.0.extend(produced.ops.0);
         out.relations.extend(produced.relations);
         out.names.extend(produced.names);

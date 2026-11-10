@@ -416,24 +416,27 @@ pub(crate) fn cut_doc_long_tokens(fact: &mut Fact) -> Vec<Fact> {
         return Vec::new();
     };
     fact.value = FactValue::Text(kept);
-    let (first, last) = (fact.provenance.span.start(), fact.provenance.span.end());
     cut.into_iter()
-        .map(|n| {
-            // A doc comment's text holds one line per source line; where the
-            // two disagree the skip stays inside the comment's own range.
-            let line = first.map(|f| {
-                let at = f.saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
-                last.map_or(at, |l| at.min(l))
-            });
-            let mut prov = fact.provenance.clone();
-            prov.span = crate::graph::Span::at(line);
-            Fact::new(
-                FactKind::AnchorSkipped,
-                FactValue::Text("long token".to_string()),
-                prov,
-            )
-        })
+        .map(|n| doc_skip(fact, n, "long token"))
         .collect()
+}
+
+/// The `AnchorSkipped(reason)` a cut in line `n` (from 0) of a `DocComment`
+/// fact leaves, at that line. A doc comment's text holds one line per source
+/// line; where the two disagree the skip stays inside the comment's own range.
+pub(crate) fn doc_skip(fact: &Fact, n: usize, reason: &str) -> Fact {
+    let (first, last) = (fact.provenance.span.start(), fact.provenance.span.end());
+    let line = first.map(|f| {
+        let at = f.saturating_add(u32::try_from(n).unwrap_or(u32::MAX));
+        last.map_or(at, |l| at.min(l))
+    });
+    let mut prov = fact.provenance.clone();
+    prov.span = crate::graph::Span::at(line);
+    Fact::new(
+        FactKind::AnchorSkipped,
+        FactValue::Text(reason.to_string()),
+        prov,
+    )
 }
 
 /// `word` without the escape sequences a key's line is written with in a

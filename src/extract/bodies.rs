@@ -59,8 +59,8 @@
 
 use super::cache::CacheStore;
 use super::external::{
-    comments_after_literals, is_long_token, named_secret, redact_secret_block, secret_pattern,
-    without_long_tokens, SecretPrefixes, SourceSecrets, REDACTION_MARKER,
+    comments_after_literals, is_long_token, named_secret, names_its_secret, redact_secret_block,
+    secret_pattern, without_long_tokens, SecretPrefixes, SourceSecrets, REDACTION_MARKER,
 };
 use super::resolve::table::NamePositions;
 use super::treesitter::{Lease, PathKeys, Pool};
@@ -81,7 +81,9 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// [`redact_bodies`]. Part of every `languages-bodies` record's tag
 /// ([`CacheStore::derived`]), so raising it misses every stored model and
 /// nothing of the first layer. Any change to the redaction or to the
-/// conversion of a model raises it: 9 filters a quoted comment by the recipe
+/// conversion of a model raises it: 10 leaves a placeholder named like its
+/// secret (`password = "password"`) in a comment's prose
+/// ([`super::external::names_its_secret`]), 9 filters a quoted comment by the recipe
 /// of a 0.4 comment ([`Withheld::comment`]) — the withheld values and their
 /// spellings too, not only the shapes of a secret — 8 keeps what a 0.4
 /// component says beside
@@ -96,7 +98,7 @@ pub const PHASE_BODIES: &str = "languages-bodies";
 /// comment and out of a literal no lexed one pairs with, 3 adds the comments
 /// after call arguments ([`quote_comments`], U7), 2 is the literal-aware
 /// filter (U8, KTD16), 1 the first layer's filter alone.
-pub const BODY_REDACTION_VERSION: u32 = 9;
+pub const BODY_REDACTION_VERSION: u32 = 10;
 
 /// The digits a key-shaped markup handler needs before it is taken for a
 /// token ([`key_shaped_handler`]).
@@ -1183,10 +1185,15 @@ impl<'p> Withheld<'p> {
 
     /// Every withheld value written in `text` as a word of its own, quoted or
     /// not, longest first — prose that repeats a secret the model withheld
-    /// (`// the password is hunter2`). For the comments of contract 0.4.
+    /// (`// the password is hunter2`). For the comments of contract 0.4. A
+    /// placeholder named like its secret is no value prose could repeat
+    /// ([`names_its_secret`]).
     fn prose(&self, text: &mut String) {
-        let mut values: Vec<(&String, &&'static str)> =
-            self.values.iter().filter(|(v, _)| !v.is_empty()).collect();
+        let mut values: Vec<(&String, &&'static str)> = self
+            .values
+            .iter()
+            .filter(|(v, _)| !v.is_empty() && !names_its_secret(v))
+            .collect();
         values.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(b.0)));
         for (value, pattern) in values {
             if text.contains(value.as_str()) {
@@ -3018,6 +3025,50 @@ mod tests {
         );
         assert!(texts.iter().all(|t| !t.contains("hunter2")), "{texts:?}");
         assert_eq!(texts[2], "hunter3 is fine here");
+    }
+
+    /// A placeholder that is the very word naming its secret
+    /// (`password = "password"`) stays withheld as a literal, but a comment
+    /// that only uses the word keeps it: the comment names the secret, it
+    /// does not repeat a value.
+    #[test]
+    fn a_placeholder_named_like_its_secret_stays_in_a_comment() {
+        let mut model = FileBodies {
+            members: vec![MemberBody {
+                name_position: Position { line: 1, column: 1 },
+                kind: BodyKind::Method,
+                root: 0,
+                nodes: Vec::new(),
+                accesses: Vec::new(),
+                invocations: Vec::new(),
+                lambdas: Vec::new(),
+                subscriptions: Vec::new(),
+                literals: vec![StringLiteral {
+                    id: 0,
+                    value: "password".into(),
+                    context: LiteralContext::Assigned(AccessPath {
+                        root: PathRoot::Name,
+                        segments: vec!["password".into()],
+                    }),
+                    place: range(),
+                    node: None,
+                    comment: None,
+                }],
+                name_ofs: Vec::new(),
+                typed_names: Vec::new(),
+                tags: Vec::new(),
+            }],
+            notes: Notes {
+                comments: vec![comment_on(3, "reset the password monthly")],
+                ..Notes::default()
+            },
+            ..FileBodies::default()
+        };
+        redact_bodies(&mut model, "src/View.cs", b"", &prefixes());
+        assert_eq!(model.notes.comments[0].text, "reset the password monthly");
+        assert!(model.members[0].literals[0]
+            .value
+            .starts_with("[redacted: "));
     }
 
     /// A literal withheld by the name it is written to is withheld in a
