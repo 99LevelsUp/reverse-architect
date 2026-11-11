@@ -137,7 +137,9 @@ use std::collections::BTreeMap;
 /// detail's card, a map's module card, a type card's map when its module has
 /// one, and nothing on any other card; `embed: false` on every detail and
 /// on nothing else — the owner's decision that details are not imported
-/// into a vector index (an absent `embed` means a document may be embedded);
+/// into a vector index (an absent `embed` means a document may be embedded;
+/// the documents of flows of plan vrstva 3, U5 — kind `card:flows`, level
+/// `detail` — carry it too);
 /// and `header`, the full context header of the entity the document is
 /// about: `path` (the source file, or a module's directory), `module` (the
 /// module it lives in — the project of R4, as this corpus groups code),
@@ -370,9 +372,11 @@ pub struct ManifestCardKind {
 pub struct ManifestDoc {
     pub id: String,
     /// `card:type`, `card:file`, `card:module`, `card:<declared kind>`,
-    /// `card:detail`, `map`, `triggers` or `page`; absent on a view (v8,
-    /// v10). `triggers` is the registry of triggers of a run with the second
-    /// layer (plan 2b, U7: KTD10), id `triggers:index`.
+    /// `card:detail`, `card:flows`, `map`, `triggers` or `page`; absent on a
+    /// view (v8, v10). `triggers` is the registry of triggers of a run with
+    /// the second layer (plan 2b, U7: KTD10), id `triggers:index`;
+    /// `card:flows` a type's document of flows (plan vrstva 3, U5), id
+    /// `flows:<card identity>`, level `detail`, parent the card.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     /// Which level of the card corpus the document is (plan B, U11): `map`,
@@ -387,7 +391,8 @@ pub struct ManifestDoc {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// `false` on a document a vector index should leave out — every detail
-    /// (plan B, KTD9) and nothing else; absent means it may be embedded.
+    /// (plan B, KTD9) and every document of flows (plan vrstva 3, U5);
+    /// absent means it may be embedded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embed: Option<bool>,
     /// The context header of the entity a card, a detail or a map is about
