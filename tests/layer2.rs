@@ -1957,6 +1957,20 @@ const SERVICE: &str = r#"namespace Acme.Service
         public void A() { Get(); a = 1; }
         public void B() { Get(); b = 1; }
     }
+
+    public class AcmeKeys
+    {
+        private TextEditor editor;
+        private int saved;
+        public AcmeKeys() { editor.PreviewKeyDown += Editor_PreviewKeyDown; }
+        public void Save() { saved = 1; }
+        void Editor_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F1) { Save(); }
+            else if (e.Key == Key.F2) { Save(); }
+            else if (e.Key == Key.F3) { Save(); }
+        }
+    }
 }
 "#;
 
@@ -1987,6 +2001,17 @@ fn a_public_method_three_others_call_is_a_service_they_do_not_join_through() {
     let two = type_of(&analysis, &key(SERVICE_NS, "AcmeTwoRows"));
     assert_eq!(two.functionalities.len(), 1);
     assert_eq!(two.functionalities[0].entry_points.len(), 3);
+
+    // Three keys running one public method are no callers of a service:
+    // they stay one functionality with the method they run.
+    let keys = type_of(&analysis, &key(SERVICE_NS, "AcmeKeys"));
+    assert_eq!(
+        keys.functionalities.len(),
+        1,
+        "{:?}",
+        functionality_keys(keys)
+    );
+    assert_eq!(keys.functionalities[0].entry_points.len(), 4);
 }
 
 /// A store of twenty public methods: six over each of three dictionaries,
@@ -2096,16 +2121,53 @@ fn a_large_type_groups_its_functionalities_by_shared_state_and_by_name() {
         }
     }
 
-    // At the threshold: no groups.
-    let fewer = LARGE
-        .lines()
-        .filter(|l| !l.contains("User(") && !l.contains("Users("))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let (_, small) = analyzed(&[("src/Large.cs", fewer.as_str())]);
+    // A method sharing two states with the same count joins the one of the
+    // lesser key; one more method over that state tips it to the other —
+    // the one way an added method moves a functionality of another group
+    // (owner, 11.11.2026). The groups sharing no state with it stay.
+    let sync = "public void Sync(int id) { touched = true; items[id] = orders[id]; }\n        public void ExportAll()";
+    let shared = LARGE.replace("public void ExportAll()", sync);
+    let (_, tied) = analyzed(&[("src/Large.cs", shared.as_str())]);
+    let tied_store = type_of(&tied, &key(LARGE_NS, "AcmeStore"));
+    let group_of = |t: &TypeAnalysis, f: &str| -> GroupBasis {
+        t.groups
+            .iter()
+            .find(|g| g.functionalities.contains(&k(f)))
+            .map(|g| g.basis.clone())
+            .expect("in a group")
+    };
+    assert_eq!(group_of(tied_store, "Sync(int)"), state("items"));
+    let tipped = shared.replace(
+        "public void ExportAll()",
+        "public string FindItem(int id) { touched = true; return items[id]; }\n        public void ExportAll()",
+    );
+    let (_, tipped) = analyzed(&[("src/Large.cs", tipped.as_str())]);
+    let tipped_store = type_of(&tipped, &key(LARGE_NS, "AcmeStore"));
+    assert_eq!(group_of(tipped_store, "Sync(int)"), state("orders"));
+    for g in [&add_user, &export_all] {
+        let find = |t: &TypeAnalysis| t.groups.iter().find(|x| &x.key == g).cloned();
+        assert_eq!(find(tied_store), find(tipped_store), "{g} shares no state");
+    }
+
+    // At the threshold no groups, one above it groups.
+    let without = |cut: &[&str]| -> String {
+        LARGE
+            .lines()
+            .filter(|l| !cut.iter().any(|c| l.contains(c)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let at = without(&["User(int", "CountUsers"]);
+    let (_, small) = analyzed(&[("src/Large.cs", at.as_str())]);
     let small_store = type_of(&small, &key(LARGE_NS, "AcmeStore"));
-    assert_eq!(small_store.functionalities.len(), 14);
+    assert_eq!(small_store.functionalities.len(), 15);
     assert!(small_store.groups.is_empty());
+    // Three methods over `users` keep it a hub, so none of them merges.
+    let above = without(&["GetUser", "HasUser", "AddUser", "ExportSome"]);
+    let (_, sixteen) = analyzed(&[("src/Large.cs", above.as_str())]);
+    let sixteen_store = type_of(&sixteen, &key(LARGE_NS, "AcmeStore"));
+    assert_eq!(sixteen_store.functionalities.len(), 16);
+    assert!(!sixteen_store.groups.is_empty());
 }
 
 /// U4: the card of a large type lists its groups in `## Groups`, in English

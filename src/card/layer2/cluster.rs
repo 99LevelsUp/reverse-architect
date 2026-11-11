@@ -20,10 +20,11 @@
 //!    a collaborator they share, not one thing they do — and stays among the
 //!    targets of each; entry points of the user interface leading to one
 //!    member of another type stay one functionality by what they run. A seed
-//!    of the type that three or more other seeds call directly is a hub as
-//!    well — a service they share: it stays a functionality of its own and
-//!    its callers do not join through it, while one or two callers still
-//!    join the seed they call, as a command joins the method it executes.
+//!    of the type that three or more of its public methods call directly is
+//!    a hub as well — a service they share: it stays a functionality of its
+//!    own and its callers do not join through it, while one or two callers
+//!    still join the seed they call, and so do the commands, keys and menu
+//!    items that run it.
 //! 5. A **driving method** ([`Seeds::dominant`]) is a functionality of its
 //!    own. Other seeds stop at it as at a hub. A seed that leads into it — a
 //!    command executing it, a public method calling it — joins it. A member
@@ -199,14 +200,19 @@ fn shared_collaborators(ctx: &Ctx<'_>, seeds: &[Seed]) -> Vec<NodeKey> {
 }
 
 /// The members of the type that are a seed and that [`HUB_SEEDS`] or more
-/// other seeds call directly (step 4 of the module docs): a service they
-/// share. Each stays a functionality of its own, and its callers do not join
-/// through it; one or two callers still join the seed they call, as a command
-/// joins the method it executes.
+/// of its public methods call directly (step 4 of the module docs): a service
+/// they share. Each stays a functionality of its own, and its callers do not
+/// join through it; one or two callers still join the seed they call. Entry
+/// points of the user interface are left out, as for a shared collaborator:
+/// the commands, keys and menu items that run one method stay one
+/// functionality with it.
 fn shared_services(seeds: &[Seed]) -> Vec<NodeKey> {
     let identities: BTreeSet<&NodeKey> = seeds.iter().filter_map(|s| s.identity.as_ref()).collect();
     let mut callers: BTreeMap<&NodeKey, usize> = BTreeMap::new();
-    for seed in seeds {
+    for seed in seeds
+        .iter()
+        .filter(|s| matches!(s.entry.kind, EntryKind::PublicMethod | EntryKind::Driving))
+    {
         for x in seed.uses.iter().filter(|x| identities.contains(x)) {
             if seed.identity.as_ref() != Some(x) {
                 *callers.entry(x).or_default() += 1;
@@ -382,8 +388,12 @@ pub struct Group {
 
 /// The groups of a type's functionalities, by key; none for a type with
 /// [`GROUPS_FROM`] functionalities or fewer. Each functionality joins one
-/// group by what it alone uses or is named, so a functionality added to one
-/// group moves no other.
+/// group by what it uses or is named, and no group decides another's. A
+/// functionality added to one group moves another only through a state the
+/// two share: when it tips which of that other's states the fewest
+/// functionalities use, or lifts a state over the backbone's share (owner,
+/// 11.11.2026: the most telling state is worth that). A group keeps its key
+/// while its least functionality stays in it.
 fn group(functionalities: &[(Functionality, BTreeSet<NodeKey>)]) -> Vec<Group> {
     let n = functionalities.len();
     if n <= GROUPS_FROM {
