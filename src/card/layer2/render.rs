@@ -263,7 +263,7 @@ pub fn flows_document(
             .of(&f.key)
             .filter(|c| c.flows.len() > FLOWS_SHOWN)
         {
-            for block in flow_blocks(&cx, c) {
+            for block in flow_blocks(&cx, c, usize::MAX) {
                 units.push((f.key.as_str(), block));
             }
         }

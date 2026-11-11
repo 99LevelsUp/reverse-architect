@@ -150,7 +150,7 @@ pub(super) fn functionality_context(
         }
     }
     let total = c.flows.len();
-    for b in flow_blocks(cx, c).into_iter().take(super::FLOWS_SHOWN) {
+    for b in flow_blocks(cx, c, super::FLOWS_SHOWN) {
         if !s.ends_with("\n\n") {
             s.push('\n');
         }
@@ -194,8 +194,10 @@ fn kind_rank(kind: TriggerKind) -> u8 {
 /// first, in the one order of the card and the document of flows (plan
 /// vrstva 3, U5): the kind of the trigger, how many hops lead to the
 /// functionality, the trigger's key. The part a flow shares with an earlier
-/// one is written once, under the first, and referred to (R1).
-pub(super) fn flow_blocks(cx: &Cx<'_>, c: &FunctionalityContext) -> Vec<String> {
+/// one is written once, under the first, and referred to (R1). Only the
+/// first `limit` are rendered: a block refers only to earlier ones, so the
+/// card's ten are the document of flows' first ten byte for byte.
+pub(super) fn flow_blocks(cx: &Cx<'_>, c: &FunctionalityContext, limit: usize) -> Vec<String> {
     let mut order: Vec<&TriggerFlow> = c.flows.iter().collect();
     order.sort_by(|a, b| {
         (kind_rank(a.trigger.kind), a.path.len(), &a.trigger.key).cmp(&(
@@ -206,8 +208,8 @@ pub(super) fn flow_blocks(cx: &Cx<'_>, c: &FunctionalityContext) -> Vec<String> 
     });
     // The heading of the flow each shared part was written under.
     let mut written_at: BTreeMap<usize, String> = BTreeMap::new();
-    let mut blocks: Vec<String> = Vec::with_capacity(order.len());
-    for flow in order {
+    let mut blocks: Vec<String> = Vec::with_capacity(order.len().min(limit));
+    for flow in order.into_iter().take(limit) {
         let mut s = String::new();
         let s = &mut s;
         let heading = flow_heading(&flow.trigger);

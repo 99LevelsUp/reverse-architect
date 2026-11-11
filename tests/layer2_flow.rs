@@ -4118,6 +4118,31 @@ fn a_card_shows_ten_flows_and_the_document_of_flows_has_every_one() {
     assert_eq!(doc.contents.matches("\n#### Key: ").count(), 12);
     assert!(doc.contents.contains("#### Key: Key.F8 "));
 
+    // Every link resolves: the card's to the document of flows, and the
+    // document's — written one directory deeper — to the card and to the
+    // files of the run.
+    let card_doc = card_path(&g, &vm);
+    let sentence = context
+        .lines()
+        .find(|l| l.starts_with("Shown 10 of 12 flows"))
+        .expect("the sentence");
+    assert_eq!(
+        link_targets(&card_doc, sentence),
+        std::slice::from_ref(&flows_path)
+    );
+    let written: Vec<&str> = g
+        .cards
+        .iter()
+        .chain(&g.flows)
+        .chain(&g.triggers)
+        .map(|f| f.path.as_str())
+        .collect();
+    let targets = link_targets(&flows_path, &doc.contents);
+    assert!(targets.contains(&card_doc), "{targets:?}");
+    for t in &targets {
+        assert!(written.contains(&t.as_str()), "{t} is no file of the run");
+    }
+
     let manifest = serde_json::to_value(&g.manifest).unwrap();
     let entry = manifest["documents"]
         .as_array()
@@ -4126,8 +4151,10 @@ fn a_card_shows_ten_flows_and_the_document_of_flows_has_every_one() {
         .find(|d| d["id"] == format!("flows:{}", vm.as_str()))
         .expect("the document of flows is in the manifest");
     assert_eq!(entry["kind"], "card:flows");
+    assert_eq!(entry["level"], "detail");
     assert_eq!(entry["parent"], vm.as_str());
     assert_eq!(entry["embed"], false);
+    assert!(entry["header"].is_object(), "{entry}");
 
     let cs = layered(&[("src/Many.cs", TWELVE_KEYS)], 2, "cs");
     let context = contexts(card_text(&cs, &vm)).concat();
@@ -4135,4 +4162,33 @@ fn a_card_shows_ten_flows_and_the_document_of_flows_has_every_one() {
         context.contains("Zobrazeno 10 z 12 toků; všechny jsou v dokumentu toků "),
         "{context}"
     );
+}
+
+/// The corpus paths every portable link `[label](relative)` of `text` written
+/// in the document at `from` leads to, in order.
+fn link_targets(from: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("](") {
+        let tail = &rest[at + 2..];
+        let Some(end) = tail.find(')') else { break };
+        let target = &tail[..end];
+        rest = &tail[end..];
+        if target.contains("://") || target.starts_with('#') {
+            continue;
+        }
+        let mut parts: Vec<&str> = from.split('/').collect();
+        parts.pop();
+        for seg in target.split('/') {
+            match seg {
+                ".." => {
+                    parts.pop();
+                }
+                "." | "" => {}
+                s => parts.push(s),
+            }
+        }
+        out.push(parts.join("/"));
+    }
+    out
 }
