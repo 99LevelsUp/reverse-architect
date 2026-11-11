@@ -1934,6 +1934,61 @@ fn a_member_of_another_type_three_public_methods_call_joins_nothing() {
     assert_eq!(pair.functionalities[0].entry_points.len(), 2);
 }
 
+const SERVICE: &str = r#"namespace Acme.Service
+{
+    public class AcmeRows
+    {
+        private int row;
+        private int a;
+        private int b;
+        private int c;
+        public int Get() { return row; }
+        public void A() { Get(); a = 1; }
+        public void B() { Get(); b = 1; }
+        public void C() { Get(); c = 1; }
+    }
+
+    public class AcmeTwoRows
+    {
+        private int row;
+        private int a;
+        private int b;
+        public int Get() { return row; }
+        public void A() { Get(); a = 1; }
+        public void B() { Get(); b = 1; }
+    }
+}
+"#;
+
+const SERVICE_NS: &str = "sym:csharp:Acme.Service#";
+
+/// U4: a public method three others call is a service they share — it stays
+/// a functionality of its own and they do not join through it; a public
+/// method two others call still joins them, as a command joins the method it
+/// executes.
+#[test]
+fn a_public_method_three_others_call_is_a_service_they_do_not_join_through() {
+    let (_, analysis) = analyzed(&[("src/Service.cs", SERVICE)]);
+
+    let rows = type_of(&analysis, &key(SERVICE_NS, "AcmeRows"));
+    let k = |m: &str| format!("{SERVICE_NS}AcmeRows.{m}");
+    assert_eq!(
+        functionality_keys(rows),
+        [
+            k("A()").as_str(),
+            k("B()").as_str(),
+            k("C()").as_str(),
+            k("Get()").as_str()
+        ]
+    );
+    let get = rows.functionality(&k("Get()")).expect("Get stays");
+    assert!(get.members.contains(&key(SERVICE_NS, "AcmeRows.row")));
+
+    let two = type_of(&analysis, &key(SERVICE_NS, "AcmeTwoRows"));
+    assert_eq!(two.functionalities.len(), 1);
+    assert_eq!(two.functionalities[0].entry_points.len(), 3);
+}
+
 /// A store of twenty public methods: six over each of three dictionaries,
 /// two exporting nothing in particular, and a flag fourteen of them set —
 /// more than half, so it is the store's backbone and groups nothing.

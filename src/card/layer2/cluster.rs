@@ -19,7 +19,11 @@
 //!    three or more of the type's public methods use directly is a hub too —
 //!    a collaborator they share, not one thing they do — and stays among the
 //!    targets of each; entry points of the user interface leading to one
-//!    member of another type stay one functionality by what they run.
+//!    member of another type stay one functionality by what they run. A seed
+//!    of the type that three or more other seeds call directly is a hub as
+//!    well — a service they share: it stays a functionality of its own and
+//!    its callers do not join through it, while one or two callers still
+//!    join the seed they call, as a command joins the method it executes.
 //! 5. A **driving method** ([`Seeds::dominant`]) is a functionality of its
 //!    own. Other seeds stop at it as at a hub. A seed that leads into it — a
 //!    command executing it, a public method calling it — joins it. A member
@@ -194,6 +198,28 @@ fn shared_collaborators(ctx: &Ctx<'_>, seeds: &[Seed]) -> Vec<NodeKey> {
         .collect()
 }
 
+/// The members of the type that are a seed and that [`HUB_SEEDS`] or more
+/// other seeds call directly (step 4 of the module docs): a service they
+/// share. Each stays a functionality of its own, and its callers do not join
+/// through it; one or two callers still join the seed they call, as a command
+/// joins the method it executes.
+fn shared_services(seeds: &[Seed]) -> Vec<NodeKey> {
+    let identities: BTreeSet<&NodeKey> = seeds.iter().filter_map(|s| s.identity.as_ref()).collect();
+    let mut callers: BTreeMap<&NodeKey, usize> = BTreeMap::new();
+    for seed in seeds {
+        for x in seed.uses.iter().filter(|x| identities.contains(x)) {
+            if seed.identity.as_ref() != Some(x) {
+                *callers.entry(x).or_default() += 1;
+            }
+        }
+    }
+    callers
+        .into_iter()
+        .filter(|(_, n)| *n >= HUB_SEEDS)
+        .map(|(x, _)| x.clone())
+        .collect()
+}
+
 /// The hubs of a type (step 4 of the module docs).
 fn hubs(
     ctx: &Ctx<'_>,
@@ -213,6 +239,7 @@ fn hubs(
         .map(|(x, _)| x.clone())
         .collect();
     hubs.extend(shared_collaborators(ctx, seeds));
+    hubs.extend(shared_services(seeds));
 
     // Seeds that call each other, or lead to the same member of another
     // type, count as one.
