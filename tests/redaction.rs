@@ -565,7 +565,7 @@ fn the_first_layer_is_the_same_bytes_with_the_second_layer_and_without() {
                 front,
                 format!(
                     "{}\ndetail_level: 2\nlayer2: {word}",
-                    plain_front.replace("schema: 6\n", "schema: 7\n")
+                    plain_front.replace("schema: 6\n", "schema: 8\n")
                 ),
                 "{name}: {}",
                 p.path

@@ -1796,6 +1796,42 @@ pub fn render_card_files_layered(
         .collect()
 }
 
+/// The documents of flows of the run (plan vrstva 3, U5: R3): one for every
+/// analyzed type whose card cut the flows of a functionality
+/// ([`layer2_render::flows_document`]), in card order, at
+/// [`layer2_render::flows_path`] of its card. Empty without the second layer.
+pub fn render_flow_files(
+    cards: &[Card],
+    index: &links::CardIndex,
+    lang: render::Lang,
+    style: crate::cli::LinkStyle,
+    run: Option<&Layer2Run<'_>>,
+) -> Vec<crate::render::RenderedFile> {
+    use rayon::prelude::*;
+    let Some(run) = run else {
+        return Vec::new();
+    };
+    cards
+        .par_iter()
+        .filter(|card| card.kind == CardKind::Type)
+        .filter_map(|card| {
+            let layer2 = run.of(card)?;
+            let analysis = layer2.analysis?;
+            Some(crate::render::RenderedFile {
+                path: layer2_render::flows_path(&card.path),
+                contents: layer2_render::flows_document(
+                    card,
+                    lang,
+                    layer2.level,
+                    analysis,
+                    index,
+                    style,
+                )?,
+            })
+        })
+        .collect()
+}
+
 /// The keywords of every analyzed type's card with the words its second
 /// layer brings (plan 2a, U6: KTD9 point 4), weighed by the first layer's
 /// document frequencies; every other card keeps its keywords. Read from the

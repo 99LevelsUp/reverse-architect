@@ -62,6 +62,11 @@ pub struct Generated {
     /// like the maps' (KTD9): it pairs with no card, and its one document in
     /// the manifest is `triggers:index`.
     pub triggers: Option<render::RenderedFile>,
+    /// The documents of flows (plan vrstva 3, U5: R3), `cards/flows/…`: every
+    /// flow of a functionality whose type card shows only the first ones, for
+    /// a run with `--detail-level`; empty otherwise. A list of its own beside
+    /// the details', which stay the first layer's (KTD9 of plan 2a).
+    pub flows: Vec<render::RenderedFile>,
     /// What the corpus may claim, and over which files (U7/R6/R20). A separate
     /// artifact rather than a sentence in a view, so a consumer deciding whether
     /// an absence claim is licensed reads a file instead of parsing prose.
@@ -299,6 +304,7 @@ pub fn generate_reporting(
             .map(|(a, m)| (&a.dynamic, m.state)),
         lang,
     );
+    let flows = card::render_flow_files(&card_set, &card_index, lang, config.links, run.as_ref());
     let details = card::detail::render_detail_files(&card_set, &card_index, lang, config.links);
     let maps = card::map::render_map_files(&card_set, &card_index, lang, config.links);
     // The registry of triggers (plan 2b, U7): with the second layer only,
@@ -362,6 +368,9 @@ pub fn generate_reporting(
             .documents
             .push(card::documents::triggers_document(file));
     }
+    manifest
+        .documents
+        .extend(card::documents::flows_documents(&card_set, &flows, lang));
     card::index::prepend_start_here(
         &mut corpus,
         &[
@@ -434,6 +443,7 @@ pub fn generate_reporting(
         details,
         maps,
         triggers,
+        flows,
         coverage,
         bodies,
     })

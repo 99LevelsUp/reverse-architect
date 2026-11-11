@@ -53,6 +53,7 @@ fn run_generate(cli: &Cli) -> Result<String, Box<dyn std::error::Error>> {
         + generated.cards.len()
         + generated.details.len()
         + generated.maps.len()
+        + generated.flows.len()
         + usize::from(generated.triggers.is_some());
     progress.phase("write corpus", Some(written));
     write_corpus(&config.corpus_dir, &generated, config.sites)?;
@@ -526,6 +527,7 @@ fn write_corpus(
         .iter()
         .chain(&generated.details)
         .chain(&generated.maps)
+        .chain(&generated.flows)
         .chain(&generated.triggers)
         .map(|f| dir.join(&f.path))
         .collect();
@@ -561,6 +563,7 @@ fn write_corpus(
     write_files(dir, &generated.cards)?;
     write_files(dir, &generated.details)?;
     write_files(dir, &generated.maps)?;
+    write_files(dir, &generated.flows)?;
     if let Some(triggers) = &generated.triggers {
         write_files(dir, std::slice::from_ref(triggers))?;
     }

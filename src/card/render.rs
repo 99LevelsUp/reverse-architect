@@ -149,7 +149,17 @@ pub const CARD_SCHEMA_VERSION: u32 = 6;
 /// of XAML coverage. A type card with `layer2: none` or `failed` is
 /// otherwise the card of a run without the second layer. The version is
 /// unreleased, so step 2c did not move it.
-pub const CARD_SCHEMA_VERSION_LAYER2: u32 = 7;
+///
+/// v8 (plan vrstva 3, phase B, U3–U5): a method most of the type goes out
+/// from is a functionality of its own (an entry point of kind driving method),
+/// a member of another type three public methods use and a seed three others
+/// call join nothing; a type with more than 15 functionalities lists them in
+/// `## Groups` first and names each functionality's group (`- Group:`); a
+/// functionality's `### Context` shows its first 10 flows — by the kind of
+/// trigger, the hops to it, the key — and says how many it left out, and the
+/// new document of flows `cards/flows/…` (`kind: flows`, at this version) has
+/// every one, cut into `## Part N`.
+pub const CARD_SCHEMA_VERSION_LAYER2: u32 = 8;
 
 /// The languages the deterministic prose is authored in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

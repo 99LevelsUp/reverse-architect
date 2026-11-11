@@ -196,7 +196,7 @@ fn first_layer_sections(body: &str) -> String {
 /// right above E9 (plan 2b, U8: KTD12) — and so is every card but a type's.
 /// The registry of triggers (plan 2b, U7) is a file of its own beside them.
 /// A type's card says
-/// `schema: 7`, the level and its `layer2:` word in its front matter; with
+/// `schema: 8`, the level and its `layer2:` word in its front matter; with
 /// its analysis (`present`) it rewrites its purpose and keywords and adds its
 /// functionalities and states, every other part as it was, and without one
 /// (`failed`, `none`) the rest of it is the plain run's byte for byte.
@@ -227,7 +227,7 @@ fn assert_same_first_layer(plain: &Generated, layered: &Generated) {
             front,
             format!(
                 "{}\ndetail_level: {level}\nlayer2: {word}",
-                plain_front.replace("schema: 6\n", "schema: 7\n")
+                plain_front.replace("schema: 6\n", "schema: 8\n")
             ),
             "{}",
             p.path
@@ -3461,7 +3461,7 @@ fn the_view_card_has_one_check_with_the_key_and_the_menu_item() {
     let view = key(VIEWS_NS, "EditorView");
     let card = rendered(&with, &view);
     let (front, _) = front_matter(card);
-    assert!(front.starts_with("schema: 7\n"), "{front}");
+    assert!(front.starts_with("schema: 8\n"), "{front}");
     assert!(
         front.ends_with("\ndetail_level: 2\nlayer2: present"),
         "{front}"
@@ -4360,6 +4360,12 @@ fn layered_reference_files() -> Vec<(&'static str, &'static str)> {
 /// flow fixture's `RelayCommand.Execute` reaches half of the type and no
 /// longer hides inside `CanExecute`, so its card, the trigger registry,
 /// the coverage and the manifest moved — no other card.
+///
+/// Units that moved it (plan vrstva 3, phase B): U3 (above); U4 did not —
+/// no fixture has more than 15 functionalities, a shared collaborator or a
+/// shared service; U5 re-pinned every type card and the trigger registry
+/// for `schema: 8` — no fixture has more than 10 flows at a functionality,
+/// so no document of flows is written.
 #[test]
 fn a_layered_run_writes_the_pinned_bytes_on_one_thread_and_on_many() {
     let first = tempfile::tempdir().unwrap();

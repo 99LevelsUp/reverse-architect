@@ -82,7 +82,7 @@ mod render_context;
 pub use dynamic_render::{
     dynamic_access, grade_word, markup_document_sentence, markup_sentence, DYNAMIC_ACCESS,
 };
-use render_context::{functionality_context, state_context};
+use render_context::{flow_blocks, functionality_context, state_context};
 
 /// The second layer of one type card: the run's level, whether the type has
 /// its second layer, and the analysis when it was analyzed.
@@ -176,12 +176,14 @@ pub fn sections(
 ) -> String {
     let cx = Cx {
         card,
+        from: &card.path,
         lang,
         level,
         ty: short(analysis.key.as_str()),
         index,
         links,
     };
+    let flows = cuts_flows(analysis).then(|| flows_path(&card.path));
     let mut s = String::new();
     groups(&cx, &mut s, &analysis.groups);
     for f in &analysis.functionalities {
@@ -191,7 +193,7 @@ pub fn sections(
             .find(|g| g.functionalities.binary_search(&f.key).is_ok());
         functionality(&cx, &mut s, f, group, analysis.flow_of(&f.key));
         if let Some(c) = analysis.context.of(&f.key) {
-            functionality_context(&cx, &mut s, c);
+            functionality_context(&cx, &mut s, c, flows.as_deref());
         }
     }
     for st in &analysis.flow.states {
@@ -203,8 +205,121 @@ pub fn sections(
     s
 }
 
+/// How many flows of one functionality its card shows (plan vrstva 3, U5:
+/// R3, KTD3); the document of flows ([`flows_document`]) has every one.
+pub const FLOWS_SHOWN: usize = 10;
+
+/// Whether the card of the type cuts the flows of a functionality, and so
+/// has a document of flows.
+fn cuts_flows(analysis: &TypeAnalysis) -> bool {
+    analysis
+        .functionalities
+        .iter()
+        .filter_map(|f| analysis.context.of(&f.key))
+        .any(|c| c.flows.len() > FLOWS_SHOWN)
+}
+
+/// The path of a type card's document of flows: `cards/flows/…` beside
+/// `cards/type/…`.
+pub fn flows_path(card_path: &str) -> String {
+    match card_path.strip_prefix("cards/") {
+        Some(rest) => format!("cards/flows/{rest}"),
+        None => format!("flows/{card_path}"),
+    }
+}
+
+/// The document of flows of an analyzed type whose card cut the flows of a
+/// functionality (plan vrstva 3, U5: R3; owner 11.11.2026), `None` for every
+/// other type: every flow of every such functionality, in the card's order,
+/// under the functionality it leads to, cut into `## Part N` by the detail's
+/// packing so that no part is one giant chunk. A detail stays the first
+/// layer's alone (KTD9 of plan 2a).
+pub fn flows_document(
+    card: &Card,
+    lang: Lang,
+    level: u8,
+    analysis: &TypeAnalysis,
+    index: &CardIndex,
+    links: LinkStyle,
+) -> Option<String> {
+    if !cuts_flows(analysis) {
+        return None;
+    }
+    let path = flows_path(&card.path);
+    let cx = Cx {
+        card,
+        from: &path,
+        lang,
+        level,
+        ty: short(analysis.key.as_str()),
+        index,
+        links,
+    };
+    // One unit per flow, labelled with its functionality.
+    let mut units: Vec<(&str, String)> = Vec::new();
+    for f in &analysis.functionalities {
+        if let Some(c) = analysis
+            .context
+            .of(&f.key)
+            .filter(|c| c.flows.len() > FLOWS_SHOWN)
+        {
+            for block in flow_blocks(&cx, c) {
+                units.push((f.key.as_str(), block));
+            }
+        }
+    }
+    let mut s = format!(
+        "---\nschema: {}\ntool: reverse-architect\nkind: flows\nof: {}\ndetail_level: {level}\n---\n\n# {}\n\n",
+        super::render::CARD_SCHEMA_VERSION_LAYER2,
+        card.kind_word,
+        card.title
+    );
+    let _ = writeln!(
+        s,
+        "{}: {}",
+        cx.t("card", "karta"),
+        crate::card::links::link(&path, &card.path, &card.title, links)
+    );
+    let parts = crate::render::split::fixed_partition(
+        units.iter(),
+        super::detail::DETAIL_PART_BYTES,
+        &mut FlowBytes(0),
+    );
+    for (i, part) in parts.iter().enumerate() {
+        let _ = write!(s, "\n## Part {}\n", i + 1);
+        let mut current: Option<&str> = None;
+        for (key, block) in part {
+            if current != Some(*key) {
+                let _ = write!(s, "\n### Functionality: {}\n", short(key));
+                current = Some(*key);
+            }
+            s.push('\n');
+            s.push_str(block);
+        }
+    }
+    Some(s)
+}
+
+/// The bytes of the flows in the current part of the document of flows.
+struct FlowBytes(usize);
+
+impl crate::render::split::ChunkWeight<&(&str, String)> for FlowBytes {
+    fn peek(&self, unit: &&(&str, String)) -> usize {
+        self.0 + unit.1.len()
+    }
+    fn add(&mut self, unit: &&(&str, String)) {
+        self.0 += unit.1.len();
+    }
+    fn reset(&mut self) {
+        self.0 = 0;
+    }
+}
+
 struct Cx<'a> {
     card: &'a Card,
+    /// The path the links are written from: the card's, or its document of
+    /// flows'.
+    from: &'a str,
     lang: Lang,
     level: u8,
     /// The type's key without its `sym:` prefix (`EditorView`).
@@ -270,7 +385,7 @@ impl Cx<'_> {
     /// A link to the card of the type `ty`, named by its short name; the name
     /// in code when the type has no card.
     fn card_of(&self, ty: &str) -> String {
-        mention(&self.card.path, ty, short(ty), self.links, self.index)
+        mention(self.from, ty, short(ty), self.links, self.index)
     }
 }
 

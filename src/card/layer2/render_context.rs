@@ -77,12 +77,19 @@ fn anchor_of(place: Option<&Place>) -> String {
 
 /// The `### Context` of a functionality (KTD8): the functionalities its own
 /// triggers' flows are drawn at (R9), the command class's one flow (AE9),
-/// and a flow under `#### <kind>: <key>` for every trigger that leads to it.
-/// The part a flow shares with an earlier one is written once, under the
-/// first, and referred to (R1). Level 1 has the triggers, their state, the
+/// and a flow under `#### <kind>: <key>` for each of the first
+/// [`super::FLOWS_SHOWN`] triggers that lead to it ([`flow_blocks`]), with a
+/// sentence of how many it left out and a link to the document of flows
+/// (`flows`, plan vrstva 3, U5: R3). The part a flow shares with an earlier
+/// one is written once, under the first, and referred to (R1). Level 1 has the triggers, their state, the
 /// preconditions and the results; levels 2 and 3 add the steps and a
 /// sequence diagram (R16).
-pub(super) fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &FunctionalityContext) {
+pub(super) fn functionality_context(
+    cx: &Cx<'_>,
+    s: &mut String,
+    c: &FunctionalityContext,
+    flows: Option<&str>,
+) {
     if c.flows.is_empty()
         && c.command_class.is_none()
         && c.refers.is_empty()
@@ -142,16 +149,75 @@ pub(super) fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &Functionali
             }
         }
     }
+    let total = c.flows.len();
+    for b in flow_blocks(cx, c).into_iter().take(super::FLOWS_SHOWN) {
+        if !s.ends_with("\n\n") {
+            s.push('\n');
+        }
+        s.push_str(&b);
+    }
+    if total > super::FLOWS_SHOWN {
+        let rest = match flows {
+            Some(path) => crate::card::links::link(cx.from, path, path, cx.links),
+            None => String::new(),
+        };
+        let _ = if cx.cs() {
+            writeln!(
+                s,
+                "\nZobrazeno {} z {} toků; všechny jsou v dokumentu toků {rest}.",
+                super::FLOWS_SHOWN,
+                total
+            )
+        } else {
+            writeln!(
+                s,
+                "\nShown {} of {} flows; the document of flows {rest} has every one.",
+                super::FLOWS_SHOWN,
+                total
+            )
+        };
+    }
+}
+
+/// The rank of a kind of trigger in the order of flows: the user's own
+/// triggers first, then events, then entries from another component.
+fn kind_rank(kind: TriggerKind) -> u8 {
+    match kind {
+        TriggerKind::Key => 0,
+        TriggerKind::MenuItem => 1,
+        TriggerKind::Event => 2,
+        TriggerKind::External => 3,
+    }
+}
+
+/// Every flow of a functionality as a block of its own, `#### <kind>: <key>`
+/// first, in the one order of the card and the document of flows (plan
+/// vrstva 3, U5): the kind of the trigger, how many hops lead to the
+/// functionality, the trigger's key. The part a flow shares with an earlier
+/// one is written once, under the first, and referred to (R1).
+pub(super) fn flow_blocks(cx: &Cx<'_>, c: &FunctionalityContext) -> Vec<String> {
+    let mut order: Vec<&TriggerFlow> = c.flows.iter().collect();
+    order.sort_by(|a, b| {
+        (kind_rank(a.trigger.kind), a.path.len(), &a.trigger.key).cmp(&(
+            kind_rank(b.trigger.kind),
+            b.path.len(),
+            &b.trigger.key,
+        ))
+    });
     // The heading of the flow each shared part was written under.
     let mut written_at: BTreeMap<usize, String> = BTreeMap::new();
-    for flow in &c.flows {
+    let mut blocks: Vec<String> = Vec::with_capacity(order.len());
+    for flow in order {
+        let mut s = String::new();
+        let s = &mut s;
         let heading = flow_heading(&flow.trigger);
-        block(s, &heading);
+        let _ = write!(s, "#### {heading}\n\n");
         let _ = writeln!(s, "{}", trigger_line(cx, flow));
         if let Some(line) = path_line(cx, flow) {
             let _ = writeln!(s, "{line}");
         }
         let Some(common) = c.common.get(flow.common) else {
+            blocks.push(std::mem::take(s));
             continue;
         };
         if cx.level >= 2 {
@@ -194,7 +260,9 @@ pub(super) fn functionality_context(cx: &Cx<'_>, s: &mut String, c: &Functionali
                 let _ = write!(s, "\n{d}");
             }
         }
+        blocks.push(std::mem::take(s));
     }
+    blocks
 }
 
 /// Where the walk back from a functionality stopped when the run kept only
@@ -238,7 +306,7 @@ const REGISTRY: &str = crate::card::triggers::REGISTRY_PATH;
 impl Cx<'_> {
     /// The link to the registry of triggers from the card, named by its path.
     fn registry(&self) -> String {
-        crate::card::links::link(&self.card.path, REGISTRY, REGISTRY, self.links)
+        crate::card::links::link(self.from, REGISTRY, REGISTRY, self.links)
     }
 }
 

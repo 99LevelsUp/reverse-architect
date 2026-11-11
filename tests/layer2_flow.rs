@@ -3143,7 +3143,7 @@ fn the_registry_without_a_xaml_component_says_xaml_is_not_covered_above_its_rows
         let g = layered(&editor_fixture::files(), 1, lang);
         let text = registry(&g);
         assert!(
-            text.starts_with("---\nschema: 7\ntool: reverse-architect\nkind: triggers\n---\n"),
+            text.starts_with("---\nschema: 8\ntool: reverse-architect\nkind: triggers\n---\n"),
             "{lang}: {text}"
         );
         assert_eq!(text.matches(line).count(), 1, "{lang}: {text}");
@@ -4033,4 +4033,106 @@ fn a_registry_of_ten_times_its_triggers_stays_transitive() {
         .cards
         .iter()
         .all(|c| !c.contents.contains("walk back stops")));
+}
+
+// ---- Plan vrstva 3, U5: the flows a card shows, and the document of flows ----
+
+/// A view whose twelve keys run one command of its view model: twelve flows
+/// lead to the view model's `Save`.
+const TWELVE_KEYS: &str = r#"namespace Acme.Many
+{
+    public class ManyBase<T>
+    {
+        protected T viewModel;
+    }
+
+    public class ManyViewModel
+    {
+        private int saved;
+        public void Save() { saved = 1; }
+    }
+
+    public class ManyView : ManyBase<ManyViewModel>
+    {
+        private TextEditor editor;
+        public ManyView() { editor.PreviewKeyDown += Editor_PreviewKeyDown; }
+        void Editor_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.F1) { viewModel.Save(); }
+            else if (e.Key == Key.F2) { viewModel.Save(); }
+            else if (e.Key == Key.F3) { viewModel.Save(); }
+            else if (e.Key == Key.F4) { viewModel.Save(); }
+            else if (e.Key == Key.F5) { viewModel.Save(); }
+            else if (e.Key == Key.F6) { viewModel.Save(); }
+            else if (e.Key == Key.F7) { viewModel.Save(); }
+            else if (e.Key == Key.F8) { viewModel.Save(); }
+            else if (e.Key == Key.F9) { viewModel.Save(); }
+            else if (e.Key == Key.F10) { viewModel.Save(); }
+            else if (e.Key == Key.F11) { viewModel.Save(); }
+            else if (e.Key == Key.F12) { viewModel.Save(); }
+        }
+    }
+}
+"#;
+
+const TWELVE_NS: &str = "sym:csharp:Acme.Many#";
+
+/// R3 (plan vrstva 3, U5): a functionality's card shows its first ten flows —
+/// by the kind of trigger, the hops, the key — and says how many it left out,
+/// in English and in Czech, linking the document of flows; that document has
+/// all twelve under the functionality, is in the manifest a level below the
+/// card, and a type whose flows fit has none.
+#[test]
+fn a_card_shows_ten_flows_and_the_document_of_flows_has_every_one() {
+    let vm = key(TWELVE_NS, "ManyViewModel");
+    let g = layered(&[("src/Many.cs", TWELVE_KEYS)], 2, "en");
+    let card = card_text(&g, &vm);
+    let context = contexts(card).concat();
+    assert_eq!(context.matches("\n#### Key: ").count(), 10, "{context}");
+    for shown in ["Key.F1 ", "Key.F10 ", "Key.F12 ", "Key.F7 "] {
+        assert!(context.contains(&format!("#### Key: {shown}")), "{shown}");
+    }
+    assert!(!context.contains("#### Key: Key.F8 "), "{context}");
+    let flows_path = reverse_architect::card::layer2_render::flows_path(&card_path(&g, &vm));
+    assert!(flows_path.starts_with("cards/flows/"), "{flows_path}");
+    assert!(
+        context.contains("Shown 10 of 12 flows; the document of flows ")
+            && context.contains("has every one."),
+        "{context}"
+    );
+    assert!(card.starts_with("---\nschema: 8\n"), "{card}");
+
+    assert_eq!(g.flows.len(), 1, "only the view model cut its flows");
+    let doc = &g.flows[0];
+    assert_eq!(doc.path, flows_path);
+    assert!(
+        doc.contents
+            .starts_with("---\nschema: 8\ntool: reverse-architect\nkind: flows\n"),
+        "{}",
+        doc.contents
+    );
+    assert!(doc.contents.contains("\n## Part 1\n"));
+    assert!(doc
+        .contents
+        .contains("\n### Functionality: ManyViewModel.Save()\n"));
+    assert_eq!(doc.contents.matches("\n#### Key: ").count(), 12);
+    assert!(doc.contents.contains("#### Key: Key.F8 "));
+
+    let manifest = serde_json::to_value(&g.manifest).unwrap();
+    let entry = manifest["documents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == format!("flows:{}", vm.as_str()))
+        .expect("the document of flows is in the manifest");
+    assert_eq!(entry["kind"], "card:flows");
+    assert_eq!(entry["parent"], vm.as_str());
+    assert_eq!(entry["embed"], false);
+
+    let cs = layered(&[("src/Many.cs", TWELVE_KEYS)], 2, "cs");
+    let context = contexts(card_text(&cs, &vm)).concat();
+    assert!(
+        context.contains("Zobrazeno 10 z 12 toků; všechny jsou v dokumentu toků "),
+        "{context}"
+    );
 }

@@ -153,6 +153,47 @@ pub fn triggers_document(file: &RenderedFile) -> ManifestDoc {
     doc
 }
 
+/// The document kind of a document of flows: a type card's level below it,
+/// like a detail.
+pub const FLOWS_KIND: &str = "card:flows";
+
+/// A document of flows' id: `flows:<card identity>`.
+pub fn flows_id(identity: &str) -> String {
+    format!("flows:{identity}")
+}
+
+/// The documents of the run's documents of flows (plan vrstva 3, U5: R3), in
+/// card order: each a level below its type card, like a detail — `parent`
+/// the card, no vectors (`embed: false`, as a detail: thousands of flows
+/// would flood the vectors of the cards), the card's context header.
+pub fn flows_documents(cards: &[Card], flows: &[RenderedFile], lang: Lang) -> Vec<ManifestDoc> {
+    let by_path: HashMap<&str, &RenderedFile> =
+        flows.iter().map(|f| (f.path.as_str(), f)).collect();
+    let mut out = Vec::with_capacity(flows.len());
+    for card in cards.iter().filter(|c| c.kind == CardKind::Type) {
+        let Some(file) = by_path.get(super::layer2_render::flows_path(&card.path).as_str()) else {
+            continue;
+        };
+        let mut doc = rendered_document(
+            &flows_id(&card.identity),
+            FLOWS_KIND,
+            &format!("Flows of {}", card.title),
+            &format!(
+                "How does each trigger lead to the functionalities of `{}`?",
+                card.title
+            ),
+            &file.path,
+            &file.contents,
+        );
+        doc.level = Some(LEVEL_DETAIL.into());
+        doc.parent = Some(card.identity.clone());
+        doc.embed = Some(false);
+        doc.header = Some(header(card, lang));
+        out.push(doc);
+    }
+    out
+}
+
 /// A card's document kind and guiding question (v8).
 fn card_kind_and_question(card: &Card) -> (String, String) {
     match card.kind {
