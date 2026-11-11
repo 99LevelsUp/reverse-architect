@@ -737,8 +737,8 @@ fn no_secret_from_a_body_reaches_the_cache_or_the_corpus() {
 // ---- The analysis of the second layer (plan 2a, U5) ----
 
 use reverse_architect::card::layer2::{
-    self, bind_construction, Analysis, EntryKind, EntryPoint, Functionality, Index, Label,
-    TypeAnalysis, Unresolved,
+    self, bind_construction, Analysis, EntryKind, EntryPoint, Functionality, GroupBasis, Index,
+    Label, TypeAnalysis, Unresolved,
 };
 use reverse_architect::extract::bodies::{AccessPath, PathRoot, ValueRef};
 
@@ -1879,9 +1879,235 @@ fn a_member_most_steps_go_out_from_is_a_functionality_of_its_own() {
     );
 }
 
+const SHARED: &str = r#"namespace Acme.Shared
+{
+    public class AcmeLog { public void Write(string s) { } }
+
+    public class AcmeTasks
+    {
+        private int a;
+        private int b;
+        private int c;
+        public void DoA(AcmeLog log) { log.Write("a"); a = 1; }
+        public void DoB(AcmeLog log) { log.Write("b"); b = 1; }
+        public void DoC(AcmeLog log) { log.Write("c"); c = 1; }
+    }
+
+    public class AcmePair
+    {
+        private int a;
+        private int b;
+        public void DoA(AcmeLog log) { log.Write("a"); a = 1; }
+        public void DoB(AcmeLog log) { log.Write("b"); b = 1; }
+    }
+}
+"#;
+
+const SHARED_NS: &str = "sym:csharp:Acme.Shared#";
+
+/// U4: a member of another type that three public methods call is a
+/// collaborator they share, not one thing they do — they stay three
+/// functionalities, each still leading to it; two public methods calling it
+/// are one functionality as before.
+#[test]
+fn a_member_of_another_type_three_public_methods_call_joins_nothing() {
+    let (_, analysis) = analyzed(&[("src/Shared.cs", SHARED)]);
+    let write = key(SHARED_NS, "AcmeLog.Write(string)");
+
+    let tasks = type_of(&analysis, &key(SHARED_NS, "AcmeTasks"));
+    let k = |m: &str| format!("{SHARED_NS}AcmeTasks.{m}");
+    assert_eq!(
+        functionality_keys(tasks),
+        [
+            k("DoA(AcmeLog)").as_str(),
+            k("DoB(AcmeLog)").as_str(),
+            k("DoC(AcmeLog)").as_str()
+        ]
+    );
+    assert!(tasks.hubs.contains(&write), "{:?}", tasks.hubs);
+    for f in &tasks.functionalities {
+        assert!(f.targets.contains(&write), "{} leads to Write", f.key);
+    }
+
+    let pair = type_of(&analysis, &key(SHARED_NS, "AcmePair"));
+    assert_eq!(pair.functionalities.len(), 1);
+    assert_eq!(pair.functionalities[0].entry_points.len(), 2);
+}
+
+/// A store of twenty public methods: six over each of three dictionaries,
+/// two exporting nothing in particular, and a flag fourteen of them set —
+/// more than half, so it is the store's backbone and groups nothing.
+const LARGE: &str = r#"namespace Acme.Large
+{
+    public class AcmeStore
+    {
+        private string[] orders;
+        private string[] items;
+        private string[] users;
+        private bool touched;
+        public string GetOrder(int id) { touched = true; return orders[id]; }
+        public bool HasOrder(int id) { touched = true; return orders[id] != null; }
+        public void AddOrder(int id) { touched = true; orders[id] = "o"; }
+        public void RemoveOrder(int id) { touched = true; orders[id] = null; }
+        public int CountOrders() { touched = true; return orders.Length; }
+        public void ClearOrders() { touched = true; orders = null; }
+        public string GetItem(int id) { touched = true; return items[id]; }
+        public bool HasItem(int id) { touched = true; return items[id] != null; }
+        public void AddItem(int id) { touched = true; items[id] = "i"; }
+        public void RemoveItem(int id) { touched = true; items[id] = null; }
+        public int CountItems() { touched = true; return items.Length; }
+        public void ClearItems() { touched = true; items = null; }
+        public string GetUser(int id) { return users[id]; }
+        public bool HasUser(int id) { return users[id] != null; }
+        public void AddUser(int id) { users[id] = "u"; }
+        public void RemoveUser(int id) { users[id] = null; }
+        public int CountUsers() { return users.Length; }
+        public void ClearUsers() { users = null; }
+        public void ExportAll() { touched = true; }
+        public void ExportSome(int count) { touched = true; }
+    }
+}
+"#;
+
+const LARGE_NS: &str = "sym:csharp:Acme.Large#";
+
+/// The groups of a type, each as (key, basis, functionality keys).
+fn groups_of(t: &TypeAnalysis) -> Vec<(&str, &GroupBasis, Vec<&str>)> {
+    t.groups
+        .iter()
+        .map(|g| {
+            (
+                g.key.as_str(),
+                &g.basis,
+                g.functionalities.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect()
+}
+
+/// R2, R13 (plan vrstva 3, U4): a type with more functionalities than
+/// [`GROUPS_FROM`] groups them by the least used state each shares, else by
+/// the first word of its name; a group is keyed by its least functionality,
+/// a method added to one group moves no other, and a smaller type has none.
+#[test]
+fn a_large_type_groups_its_functionalities_by_shared_state_and_by_name() {
+    let (_, analysis) = analyzed(&[("src/Large.cs", LARGE)]);
+    let store = type_of(&analysis, &key(LARGE_NS, "AcmeStore"));
+    assert_eq!(store.functionalities.len(), 20, "{:?}", store.hubs);
+    let k = |m: &str| format!("{LARGE_NS}AcmeStore.{m}");
+    let state = |f: &str| GroupBasis::State(key(LARGE_NS, &format!("AcmeStore.{f}")));
+    let name = |w: &str| GroupBasis::Name(w.to_string());
+    let (add_item, add_order, add_user) =
+        (k("AddItem(int)"), k("AddOrder(int)"), k("AddUser(int)"));
+    let export_all = k("ExportAll()");
+    assert_eq!(
+        store
+            .groups
+            .iter()
+            .map(|g| (g.key.as_str(), &g.basis, g.functionalities.len()))
+            .collect::<Vec<_>>(),
+        [
+            (add_item.as_str(), &state("items"), 6),
+            (add_order.as_str(), &state("orders"), 6),
+            (add_user.as_str(), &state("users"), 6),
+            (export_all.as_str(), &name("export"), 2),
+        ]
+    );
+    let orders = &store.groups[1];
+    for m in [
+        "GetOrder(int)",
+        "HasOrder(int)",
+        "ClearOrders()",
+        "CountOrders()",
+    ] {
+        assert!(orders.functionalities.contains(&k(m)), "{m} shares orders");
+    }
+
+    // A method added to the orders: the other groups stay as they were.
+    let more = LARGE.replace(
+        "public void ExportAll()",
+        "public string FindOrder(int id) { touched = true; return orders[id]; }\n        public void ExportAll()",
+    );
+    let (_, grown) = analyzed(&[("src/Large.cs", more.as_str())]);
+    let grown_store = type_of(&grown, &key(LARGE_NS, "AcmeStore"));
+    let (before, after) = (groups_of(store), groups_of(grown_store));
+    assert_eq!(after.len(), before.len());
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        if i == 1 {
+            assert_eq!((a.0, a.1), (b.0, b.1), "the orders keep key and basis");
+            assert!(a.2.contains(&k("FindOrder(int)").as_str()));
+        } else {
+            assert_eq!(a, b);
+        }
+    }
+
+    // At the threshold: no groups.
+    let fewer = LARGE
+        .lines()
+        .filter(|l| !l.contains("User(") && !l.contains("Users("))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (_, small) = analyzed(&[("src/Large.cs", fewer.as_str())]);
+    let small_store = type_of(&small, &key(LARGE_NS, "AcmeStore"));
+    assert_eq!(small_store.functionalities.len(), 14);
+    assert!(small_store.groups.is_empty());
+}
+
+/// U4: the card of a large type lists its groups in `## Groups`, in English
+/// and in Czech, and every functionality names its group; a small type's
+/// card has neither.
+#[test]
+fn the_card_of_a_large_type_lists_its_groups() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = key(LARGE_NS, "AcmeStore");
+    let files = [("src/Large.cs", LARGE), ("src/Dominant.cs", DOMINANT)];
+    let en = layered_run(dir.path(), "en", &files, Some(2), "en");
+    let card = rendered(&en, &store);
+    let groups = section(card, "## Groups");
+    assert!(
+        groups.contains(
+            "20 functionalities in 4 groups by the state they share, else by the first word of their name."
+        ),
+        "{groups}"
+    );
+    assert!(
+        groups.contains(
+            "- `AddOrder(int)` — shared state `orders` (6): `AddOrder(int)`, `ClearOrders()`, \
+             `CountOrders()`, `GetOrder(int)`, `HasOrder(int)`, `RemoveOrder(int)`"
+        ),
+        "{groups}"
+    );
+    assert!(
+        groups.contains(
+            "- `ExportAll()` — name starts with `export` (2): `ExportAll()`, `ExportSome(int)`"
+        ),
+        "{groups}"
+    );
+    let get_order = section(card, "## Functionality: AcmeStore.GetOrder(int)");
+    assert!(
+        get_order.contains("- Group: `AddOrder(int)`\n"),
+        "{get_order}"
+    );
+
+    let cs = layered_run(dir.path(), "cs", &files, Some(2), "cs");
+    let groups = section(rendered(&cs, &store), "## Groups");
+    assert!(
+        groups.contains(
+            "20 funkčností tvoří 4 skupiny podle sdíleného stavu, jinak podle prvního slova jména."
+        ),
+        "{groups}"
+    );
+    assert!(groups.contains("— sdílený stav `orders` (6):"), "{groups}");
+    assert!(groups.contains("— jméno začíná `export` (2):"), "{groups}");
+
+    let queue = rendered(&en, &key(DOMINANT_NS, "AcmeQueue"));
+    assert!(!queue.contains("\n## Groups\n"));
+    assert!(!queue.contains("- Group:"));
+}
+
 /// R3: two analyses of one input, on one worker thread and on eight, give
 /// the same bytes — the editor's, and those of types with a member most
-/// steps go out from.
+/// steps go out from or with groups.
 #[test]
 fn the_analysis_is_the_same_bytes_on_one_thread_and_on_many() {
     let run = |threads: usize| -> Vec<u8> {
@@ -1894,6 +2120,8 @@ fn the_analysis_is_the_same_bytes_on_one_thread_and_on_many() {
                 let mut bytes = serde_json::to_vec(&analysis).unwrap();
                 let (_, dominant) = analyzed(&[("src/Dominant.cs", DOMINANT)]);
                 bytes.extend(serde_json::to_vec(&dominant).unwrap());
+                let (_, large) = analyzed(&[("src/Large.cs", LARGE)]);
+                bytes.extend(serde_json::to_vec(&large).unwrap());
                 bytes
             })
     };

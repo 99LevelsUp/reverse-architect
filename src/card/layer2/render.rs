@@ -4,8 +4,12 @@
 //! What [`super::layer2::analyze`] read of a type becomes sections of its
 //! card, after `## Keywords` and before the notes:
 //!
+//! - `## Groups` of a type with groups (plan vrstva 3, U4): one sentence of
+//!   how many, then a line per group — its key, what its functionalities
+//!   share and all of them by name;
 //! - `## Functionality: <the representative's key without its `sym:` prefix>`
-//!   with `- Key:` (the whole key) and `- Words:` (R16), one sentence of what
+//!   with `- Key:` (the whole key), `- Group:` when the type has groups,
+//!   and `- Words:` (R16), one sentence of what
 //!   it is from the code, and `### Entry points`, `### Preconditions`,
 //!   `### Dead paths`, `### Steps`, `### Flowchart` and `### Members`;
 //! - `## State: <the member>` with `### Values`, `### Read in conditions`,
@@ -59,8 +63,8 @@ use super::keywords::UnitWords;
 use super::layer2::{
     flow::{constant_text, written, Cond, Op},
     AdmittedPrecondition, ArmStep, DeadKind, DeadPath, EffectKind, EntryKind, EntryPoint,
-    Functionality, FunctionalityFlow, Gap, Guarding, Label, PathState, Place, Precondition, Source,
-    State, Step, StepKind, Target, TypeAnalysis, Unresolved, Written,
+    Functionality, FunctionalityFlow, Gap, Group, GroupBasis, Guarding, Label, PathState, Place,
+    Precondition, Source, State, Step, StepKind, Target, TypeAnalysis, Unresolved, Written,
 };
 use super::links::{mention, CardIndex};
 use super::render::Lang;
@@ -179,8 +183,13 @@ pub fn sections(
         links,
     };
     let mut s = String::new();
+    groups(&cx, &mut s, &analysis.groups);
     for f in &analysis.functionalities {
-        functionality(&cx, &mut s, f, analysis.flow_of(&f.key));
+        let group = analysis
+            .groups
+            .iter()
+            .find(|g| g.functionalities.binary_search(&f.key).is_ok());
+        functionality(&cx, &mut s, f, group, analysis.flow_of(&f.key));
         if let Some(c) = analysis.context.of(&f.key) {
             functionality_context(&cx, &mut s, c);
         }
@@ -350,11 +359,63 @@ fn plain(text: &str) -> String {
     text.to_string()
 }
 
+// ---- The groups ----
+
+/// `## Groups` of a large type (plan vrstva 3, U4: R2, R13): one line per
+/// group, by key — what its functionalities share and all of them by name.
+fn groups(cx: &Cx<'_>, s: &mut String, groups: &[Group]) {
+    if groups.is_empty() {
+        return;
+    }
+    let total: usize = groups.iter().map(|g| g.functionalities.len()).sum();
+    s.push_str("\n## Groups\n\n");
+    let lead = if cx.cs() {
+        format!(
+            "{} tvoří {} podle sdíleného stavu, jinak podle prvního slova jména.",
+            cs_n(total, ("funkčnost", "funkčnosti", "funkčností")),
+            cs_n(groups.len(), ("skupinu", "skupiny", "skupin")),
+        )
+    } else {
+        format!(
+            "{} in {} by the state they share, else by the first word of their name.",
+            plural(total, "functionality", "functionalities"),
+            plural(groups.len(), "group", "groups"),
+        )
+    };
+    let _ = writeln!(s, "{lead}\n");
+    for g in groups {
+        let basis = match (&g.basis, cx.cs()) {
+            (GroupBasis::State(x), false) => format!("shared state {}", code(cx.name(x.as_str()))),
+            (GroupBasis::State(x), true) => format!("sdílený stav {}", code(cx.name(x.as_str()))),
+            (GroupBasis::Name(w), false) => format!("name starts with {}", code(w)),
+            (GroupBasis::Name(w), true) => format!("jméno začíná {}", code(w)),
+        };
+        let names: Vec<String> = g.functionalities.iter().map(|k| code(cx.name(k))).collect();
+        let _ = writeln!(
+            s,
+            "- {} — {} ({}): {}",
+            code(cx.name(&g.key)),
+            basis,
+            g.functionalities.len(),
+            names.join(", ")
+        );
+    }
+}
+
 // ---- A functionality ----
 
-fn functionality(cx: &Cx<'_>, s: &mut String, f: &Functionality, flow: Option<&FunctionalityFlow>) {
+fn functionality(
+    cx: &Cx<'_>,
+    s: &mut String,
+    f: &Functionality,
+    group: Option<&Group>,
+    flow: Option<&FunctionalityFlow>,
+) {
     let _ = write!(s, "\n## Functionality: {}\n\n", short(&f.key));
     let _ = writeln!(s, "- Key: `{}`", f.key);
+    if let Some(g) = group {
+        let _ = writeln!(s, "- Group: {}", code(cx.name(&g.key)));
+    }
     if !f.name.words.is_empty() {
         let _ = writeln!(s, "- Words: {}", f.name.words.join(", "));
     }

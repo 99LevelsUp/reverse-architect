@@ -93,7 +93,7 @@ pub use triggers::{
     TriggerRow, WalkCounts, NEAREST_RATIO,
 };
 
-pub use cluster::{Functionality, FunctionalityName};
+pub use cluster::{Functionality, FunctionalityName, Group, GroupBasis, GROUPS_FROM};
 pub use entry::{
     bind_construction, Binding, BoundDelegate, CommandSite, EntryKind, EntryPoint, Label,
     MenuEntry, Place, Region, Slot, SubMenu, SubscriptionSite, Target, UnboundCommand,
@@ -118,6 +118,9 @@ pub struct TypeAnalysis {
     pub key: NodeKey,
     /// By key.
     pub functionalities: Vec<Functionality>,
+    /// The groups of a type with more than [`GROUPS_FROM`] functionalities,
+    /// by key (plan vrstva 3, U4: R2, R13); empty for a smaller type.
+    pub groups: Vec<Group>,
     /// The members no cluster is joined through (KTD12 step 4), by key.
     pub hubs: Vec<NodeKey>,
     /// Constructions that would be commands but whose binding cannot be
@@ -291,12 +294,13 @@ fn analyze_in(
         .map(|ty| {
             let mut seeds = entry::seeds(links, ty);
             let unbound_commands = std::mem::take(&mut seeds.unbound);
-            let (functionalities, hubs) = cluster::cluster(ix, ty, seeds);
+            let (functionalities, hubs, groups) = cluster::cluster(ix, ty, seeds);
             let flow = flow::analyze(ix, ty, &functionalities);
             let purpose = CodePurpose::of(&functionalities, &flow.states, copied.contains(ty));
             TypeAnalysis {
                 key: ty.clone(),
                 functionalities,
+                groups,
                 hubs,
                 unbound_commands,
                 flow,

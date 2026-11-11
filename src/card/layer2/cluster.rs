@@ -15,13 +15,24 @@
 //!    that more than a quarter of the type's members — and at least four —
 //!    use, or that the clusters of three or more seeds reach. Seeds that call
 //!    each other count as one here, or a command and the method it executes
-//!    would make the method's helpers hubs.
+//!    would make the method's helpers hubs. A member of another type that
+//!    three or more of the type's public methods use directly is a hub too —
+//!    a collaborator they share, not one thing they do — and stays among the
+//!    targets of each; entry points of the user interface leading to one
+//!    member of another type stay one functionality by what they run.
 //! 5. A **driving method** ([`Seeds::dominant`]) is a functionality of its
 //!    own. Other seeds stop at it as at a hub. A seed that leads into it — a
 //!    command executing it, a public method calling it — joins it. A member
 //!    shared by it and another seed merges neither, and it takes only what no
 //!    other seed reached: a loop that calls `Dispose` on its way out leaves
 //!    `Dispose` the functionality it was.
+//! 6. A type with more than [`GROUPS_FROM`] functionalities **groups** them
+//!    ([`Group`]): each joins the group of the field or property of the type
+//!    it shares with others — a hub — that the fewest of the type's
+//!    functionalities use, state more than half of them use being the type's
+//!    backbone; one that shares none joins the group of the first word of its
+//!    name. A group is no functionality: the functionalities, their keys and
+//!    all that hangs on them stay.
 //!
 //! The representative of a cluster is its entry point of the first kind in
 //! [`super::entry::EntryKind::rank`], and among those of one kind the one with the least key
@@ -30,7 +41,7 @@
 //! member of the type the first layer gives it (`HasMember`), nested types
 //! left out.
 
-use super::entry::{EntryPoint, Seed, Seeds};
+use super::entry::{EntryKind, EntryPoint, Seed, Seeds};
 use super::resolve::Index;
 use crate::card::keywords::split_identifier;
 use crate::graph::NodeKey;
@@ -161,6 +172,28 @@ fn start(seed: &Seed) -> (BTreeSet<NodeKey>, BTreeSet<NodeKey>) {
     (from, keep)
 }
 
+/// The members of other types that [`HUB_SEEDS`] or more of the type's public
+/// methods use directly (step 4 of the module docs): a collaborator they
+/// share, not one thing they do. Entry points of the user interface are left
+/// out — the key and the menu item that run one command are one
+/// functionality by what they run.
+fn shared_collaborators(ctx: &Ctx<'_>, seeds: &[Seed]) -> Vec<NodeKey> {
+    let mut callers: BTreeMap<&NodeKey, usize> = BTreeMap::new();
+    for seed in seeds
+        .iter()
+        .filter(|s| matches!(s.entry.kind, EntryKind::PublicMethod | EntryKind::Driving))
+    {
+        for x in seed.uses.iter().filter(|x| !ctx.local(x)) {
+            *callers.entry(x).or_default() += 1;
+        }
+    }
+    callers
+        .into_iter()
+        .filter(|(_, n)| *n >= HUB_SEEDS)
+        .map(|(x, _)| x.clone())
+        .collect()
+}
+
 /// The hubs of a type (step 4 of the module docs).
 fn hubs(
     ctx: &Ctx<'_>,
@@ -179,6 +212,7 @@ fn hubs(
         .filter(|(x, n)| ctx.local(x) && *n >= HUB_MEMBERS && n * HUB_SHARE.1 > total * HUB_SHARE.0)
         .map(|(x, _)| x.clone())
         .collect();
+    hubs.extend(shared_collaborators(ctx, seeds));
 
     // Seeds that call each other, or lead to the same member of another
     // type, count as one.
@@ -186,7 +220,7 @@ fn hubs(
     let mut reaching: BTreeMap<&NodeKey, Vec<usize>> = BTreeMap::new();
     for (i, seed) in seeds.iter().enumerate() {
         for x in &seed.uses {
-            if !ctx.local(x) {
+            if !ctx.local(x) && !hubs.contains(x) {
                 reaching.entry(x).or_default().push(i);
             }
         }
@@ -287,12 +321,99 @@ fn words(ix: &Index<'_>, nodes: &BTreeSet<&NodeKey>) -> Vec<String> {
         .collect()
 }
 
-/// The functionalities of `ty` from its seeds, and its hubs.
+/// A type with more functionalities than this has groups (step 6 of the
+/// module docs). A threshold, not a cap: a type has as many groups as its
+/// functionalities fall into.
+pub const GROUPS_FROM: usize = 15;
+
+/// State used by more than this share of a type's functionalities is the
+/// type's own backbone and groups nothing.
+const BACKBONE_SHARE: (usize, usize) = (1, 2);
+
+/// What the functionalities of a group have in common.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub enum GroupBasis {
+    /// A field or a property of the type, a hub, that each of them uses and
+    /// that the fewest of the type's functionalities use.
+    State(NodeKey),
+    /// The first word of their representatives' names, lower-cased, for
+    /// those that share no state.
+    Name(String),
+}
+
+/// Functionalities of a large type that share state or a name (R2, R13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Group {
+    /// The key of its first functionality by the representative's rule:
+    /// the first kind in [`super::entry::EntryKind::rank`], then the least
+    /// key — so a functionality added to it never renames it.
+    pub key: String,
+    pub basis: GroupBasis,
+    /// The keys of its functionalities, by key.
+    pub functionalities: Vec<String>,
+}
+
+/// The groups of a type's functionalities, by key; none for a type with
+/// [`GROUPS_FROM`] functionalities or fewer. Each functionality joins one
+/// group by what it alone uses or is named, so a functionality added to one
+/// group moves no other.
+fn group(functionalities: &[(Functionality, BTreeSet<NodeKey>)]) -> Vec<Group> {
+    let n = functionalities.len();
+    if n <= GROUPS_FROM {
+        return Vec::new();
+    }
+    let mut users: BTreeMap<&NodeKey, usize> = BTreeMap::new();
+    for (_, state) in functionalities {
+        for x in state {
+            *users.entry(x).or_default() += 1;
+        }
+    }
+    let mut by_basis: BTreeMap<GroupBasis, Vec<&Functionality>> = BTreeMap::new();
+    for (f, state) in functionalities {
+        let basis = state
+            .iter()
+            .filter(|x| users[x] * BACKBONE_SHARE.1 <= n * BACKBONE_SHARE.0)
+            .min_by_key(|x| (users[x], *x))
+            .map(|x| GroupBasis::State(x.clone()))
+            .unwrap_or_else(|| {
+                let name = f.name.representative.split('#').next().unwrap_or_default();
+                GroupBasis::Name(
+                    split_identifier(name)
+                        .into_iter()
+                        .next()
+                        .unwrap_or_default(),
+                )
+            });
+        by_basis.entry(basis).or_default().push(f);
+    }
+    let mut groups: Vec<Group> = by_basis
+        .into_iter()
+        .map(|(basis, list)| {
+            let first = list
+                .iter()
+                .min_by(|a, b| {
+                    (a.representative().kind.rank(), &a.key)
+                        .cmp(&(b.representative().kind.rank(), &b.key))
+                })
+                .expect("a group has a functionality");
+            Group {
+                key: first.key.clone(),
+                basis,
+                functionalities: list.iter().map(|f| f.key.clone()).collect(),
+            }
+        })
+        .collect();
+    groups.sort_by(|a, b| a.key.cmp(&b.key));
+    groups
+}
+
+/// The functionalities of `ty` from its seeds, its hubs and the groups of its
+/// functionalities.
 pub(crate) fn cluster(
     ix: &Index<'_>,
     ty: &NodeKey,
     seeds: Seeds,
-) -> (Vec<Functionality>, Vec<NodeKey>) {
+) -> (Vec<Functionality>, Vec<NodeKey>, Vec<Group>) {
     let Seeds {
         seeds,
         member_uses,
@@ -409,13 +530,30 @@ pub(crate) fn cluster(
     for (x, &i) in &owner_of {
         nodes.entry(sets.find(i)).or_default().insert(x);
     }
-    let mut out: Vec<Functionality> = entries
+    // The hubs a functionality's seeds and members use directly: the shared
+    // state among them groups it, and a shared collaborator is still a member
+    // of another type it leads to.
+    let hubs_used = |list: &[&Seed], held: &BTreeSet<&NodeKey>| -> BTreeSet<NodeKey> {
+        list.iter()
+            .map(|s| &s.uses)
+            .chain(held.iter().filter_map(|x| member_uses.get(*x)))
+            .flatten()
+            .filter(|x| hubs.contains(*x))
+            .cloned()
+            .collect()
+    };
+    let mut out: Vec<(Functionality, BTreeSet<NodeKey>)> = entries
         .into_iter()
         .map(|(root, mut list)| {
             list.sort_by(|a, b| {
                 (a.entry.kind.rank(), &a.entry.key).cmp(&(b.entry.kind.rank(), &b.entry.key))
             });
             let held = nodes.remove(&root).unwrap_or_default();
+            let (state, collaborators): (BTreeSet<NodeKey>, BTreeSet<NodeKey>) =
+                hubs_used(&list, &held)
+                    .into_iter()
+                    .filter(|x| !ctx.local(x) || ix.symbol(x).is_some_and(|s| s.is_value()))
+                    .partition(|x| ctx.local(x));
             let members: Vec<NodeKey> = held
                 .iter()
                 .filter(|x| ctx.own(x))
@@ -425,13 +563,16 @@ pub(crate) fn cluster(
                 .iter()
                 .filter(|x| !ctx.own(x))
                 .map(|x| (*x).clone())
+                .chain(collaborators)
+                .collect::<BTreeSet<NodeKey>>()
+                .into_iter()
                 .collect();
             let first = &list[0].entry;
             let mut representative = ix.name_of(&first.member).to_string();
             if let Some(d) = &first.discriminator {
                 representative = format!("{representative}#{d}");
             }
-            Functionality {
+            let f = Functionality {
                 key: first.key.clone(),
                 name: FunctionalityName {
                     representative,
@@ -440,11 +581,14 @@ pub(crate) fn cluster(
                 entry_points: list.into_iter().map(|s| s.entry.clone()).collect(),
                 members,
                 targets,
-            }
+            };
+            (f, state)
         })
         .collect();
-    out.sort_by(|a, b| a.key.cmp(&b.key));
-    (out, hubs.into_iter().collect())
+    out.sort_by(|a, b| a.0.key.cmp(&b.0.key));
+    let groups = group(&out);
+    let out: Vec<Functionality> = out.into_iter().map(|(f, _)| f).collect();
+    (out, hubs.into_iter().collect(), groups)
 }
 
 #[cfg(test)]
