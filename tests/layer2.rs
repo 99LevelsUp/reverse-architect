@@ -1825,6 +1825,17 @@ fn a_member_most_steps_go_out_from_is_a_functionality_of_its_own() {
     assert!(!dispose
         .members
         .contains(&key(DOMINANT_NS, "AcmeQueue.Loop()")));
+    // Other seeds claim first: the loop reaches Dispose and the flag too, but
+    // takes only what no other seed reached.
+    for own in ["Dispose()", "stopped"] {
+        assert!(
+            dispose
+                .members
+                .contains(&key(DOMINANT_NS, &format!("AcmeQueue.{own}"))),
+            "{own} stays with Dispose: {:?}",
+            dispose.members
+        );
+    }
 
     let pump = type_of(&analysis, &key(DOMINANT_NS, "AcmePump"));
     let run_key = format!("{DOMINANT_NS}AcmePump.Run()");
